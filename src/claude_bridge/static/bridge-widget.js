@@ -10,11 +10,11 @@ function defaultMarkdown(text) {
 }
 
 const CONTEXT_WINDOWS = { default: 200000 };
-function contextWindow(model, table) {
-  if (!model) return table.default;
-  if (/\[1m\]/i.test(model)) return 1_000_000;
-  for (const [k, v] of Object.entries(table)) if (k !== 'default' && model.includes(k)) return v;
-  return table.default;
+function contextWindow(model, table, used = 0) {
+  if (model && /\[1m\]/i.test(model)) return 1_000_000;
+  if (model) for (const [k, v] of Object.entries(table)) if (k !== 'default' && model.includes(k)) return v;
+  // 窗口大小 CLI 不报；已用量超过 200k 说明这个模型是 1M 窗口
+  return used > table.default ? 1_000_000 : table.default;
 }
 
 export function describeTool(ev) {
@@ -51,17 +51,20 @@ export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS } = 
     if (usage.num_turns != null) parts.push({ label: `${usage.num_turns} 轮` });
     if (usage.context_tokens) {
       // 当前会话上下文占用（最后一次请求的 input + cache），不是多轮累计
-      const win = contextWindow(model, contextWindows);
+      const win = contextWindow(model, contextWindows, usage.context_tokens);
       const pct = Math.min(100, Math.round(usage.context_tokens / win * 100));
-      parts.push({ label: `上下文 ${fmtTokens(usage.context_tokens)} · ${pct}%`, bar: pct, title: `窗口 ${fmtTokens(win)}` });
+      parts.push({ label: `上下文 ${fmtTokens(usage.context_tokens)}/${fmtTokens(win)}`, bar: pct, title: `本会话已占用模型窗口的 ${pct}%，满了会自动压缩；新开对话可清零` });
     }
-    if (usage.output_tokens != null) parts.push({ label: `↓${fmtTokens(usage.output_tokens)}`, title: '本轮输出 tokens' });
-    if (usage.total_cost_usd != null) parts.push({ label: `$${usage.total_cost_usd.toFixed(3)}`, title: '本轮费用估算' });
+    if (usage.output_tokens != null) parts.push({ label: `本轮输出 ${fmtTokens(usage.output_tokens)}`, title: '上一条回答生成的 tokens' });
+    if (usage.total_cost_usd != null) parts.push({ label: `本轮 $${usage.total_cost_usd.toFixed(2)}`, title: '上一条回答的费用估算（按 API 价折算，订阅用户仅供参考）' });
   }
-  if (rate?.five_hour?.utilization != null) {
-    const pct = Math.round(rate.five_hour.utilization * 100);
-    parts.push({ label: `5h 额度 ${pct}%`, bar: pct, title: `重置 ${fmtReset(rate.five_hour.resets_at)}${rate.seven_day ? ` · 7 天 ${Math.round(rate.seven_day.utilization * 100)}%` : ''}` });
-  }
+  const win = (w, name, key) => {
+    if (w?.utilization == null) return;
+    const pct = Math.round(w.utilization * 100);
+    parts.push({ label: `${name} ${pct}%`, bar: pct, title: `${name}额度已用 ${pct}%，${fmtReset(w.resets_at)} 重置` });
+  };
+  win(rate?.five_hour, '5h 额度');
+  win(rate?.seven_day, '7d 额度');
   return { model, usage, rate, parts };
 }
 

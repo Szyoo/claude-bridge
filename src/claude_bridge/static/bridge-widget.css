@@ -50,9 +50,9 @@
 .bridge-session .bar i { display: block; height: 100%; background: var(--bridge-accent); }
 .bridge-session .bar.hot i { background: var(--bridge-err); }
 
-.bridge-list { overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.bridge-list { overflow-y: auto; overflow-x: hidden; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 .bridge-empty { color: var(--bridge-muted); font-size: 13px; text-align: center; margin-top: 40px; }
-.bridge-bubble { max-width: 92%; padding: 10px 14px; border-radius: var(--bridge-radius); font-size: 14px; line-height: 1.55; word-break: break-word; }
+.bridge-bubble { max-width: 92%; min-width: 0; padding: 10px 14px; border-radius: var(--bridge-radius); font-size: 14px; line-height: 1.55; word-break: break-word; overflow-wrap: anywhere; }
 .bridge-bubble.user { align-self: flex-end; background: var(--bridge-user); white-space: pre-wrap; }
 .bridge-bubble.assistant { align-self: flex-start; background: var(--bridge-panel); border: 1px solid var(--bridge-border); }
 .bridge-bubble.assistant.pending, .bridge-bubble.assistant.streaming { border-color: var(--bridge-accent); }
