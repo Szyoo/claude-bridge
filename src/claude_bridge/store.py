@@ -225,7 +225,7 @@ class BridgeStore:
                  WHERE m.thread=t.id AND m.role IN ('user','assistant') ORDER BY m.id DESC LIMIT 1) AS preview,
               (SELECT m.content FROM bridge_messages m WHERE m.thread=t.id AND m.role='user' ORDER BY m.id LIMIT 1) AS first_user
             FROM bridge_threads t {where}
-            ORDER BY t.pinned DESC, t.updated_at DESC, t.created_at DESC
+            ORDER BY t.pinned DESC, t.updated_at DESC, t.created_at DESC, t.rowid DESC
             """,
             params,
         )

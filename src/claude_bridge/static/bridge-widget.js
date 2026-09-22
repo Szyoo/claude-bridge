@@ -49,13 +49,14 @@ export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS } = 
   if (model) parts.push({ label: model.replace(/^claude-/, '') });
   if (usage) {
     if (usage.num_turns != null) parts.push({ label: `${usage.num_turns} 轮` });
-    parts.push({ label: `↑${fmtTokens((usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0))} ↓${fmtTokens(usage.output_tokens)}` });
     if (usage.context_tokens) {
+      // 当前会话上下文占用（最后一次请求的 input + cache），不是多轮累计
       const win = contextWindow(model, contextWindows);
       const pct = Math.min(100, Math.round(usage.context_tokens / win * 100));
-      parts.push({ label: `上下文 ${pct}%`, bar: pct, title: `${fmtTokens(usage.context_tokens)} / ${fmtTokens(win)}` });
+      parts.push({ label: `上下文 ${fmtTokens(usage.context_tokens)} · ${pct}%`, bar: pct, title: `窗口 ${fmtTokens(win)}` });
     }
-    if (usage.total_cost_usd != null) parts.push({ label: `$${usage.total_cost_usd.toFixed(3)}` });
+    if (usage.output_tokens != null) parts.push({ label: `↓${fmtTokens(usage.output_tokens)}`, title: '本轮输出 tokens' });
+    if (usage.total_cost_usd != null) parts.push({ label: `$${usage.total_cost_usd.toFixed(3)}`, title: '本轮费用估算' });
   }
   if (rate?.five_hour?.utilization != null) {
     const pct = Math.round(rate.five_hour.utilization * 100);
