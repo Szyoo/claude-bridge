@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>claude-bridge · 登录</title>
+  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <style>
+    body { display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    .card { width: min(360px, 90vw); padding: 24px; border: 1px solid var(--bridge-border); border-radius: var(--bridge-radius); background: var(--bridge-panel); }
+    .card h1 { font-size: 18px; margin: 0 0 16px; }
+    .card input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--bridge-border); border-radius: 8px; background: var(--bridge-bg); color: var(--bridge-fg); font: inherit; }
+    .card button { margin-top: 12px; width: 100%; }
+    .err { color: var(--bridge-err); font-size: 13px; min-height: 1.2em; margin-top: 8px; }
+  </style>
+</head>
+<body class="bridge-root">
+  <form class="card" method="post" action="/login">
+    <h1>claude-bridge</h1>
+    <input type="password" name="password" placeholder="口令" autofocus autocomplete="current-password" required />
+    <div class="err">{{error}}</div>
+    <button type="submit" class="bridge-btn bridge-btn-primary">登录</button>
+  </form>
+</body>
+</html>
