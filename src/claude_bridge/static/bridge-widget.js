@@ -27,6 +27,7 @@ export function describeTool(ev) {
 
 function fmtTokens(n) {
   if (n == null) return '–';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + 'M';
   return n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : String(n);
 }
 
