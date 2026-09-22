@@ -111,11 +111,12 @@ worker.run_forever()
 | `POST /send {text, scope?, key?, new_thread?}` · `POST /threads/{id}/messages {text}` | 发消息,同一线程有未完成回答时 409 |
 | `GET /threads/{id}/stream` | SSE,见下 |
 | `POST /messages/{id}/cancel` | `{status: cancelled \| cancelling \| noop}` |
+| `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 排一个 worker 任务：`claude -p "/context"`（本地计算、零费用）刷新这段会话的上下文构成 / `claude -p "/compact"` 压缩历史；结果存在线程上（`thread.context`），并以 SSE `context` / `job` 帧推给浏览器。每次回答结束 worker 也会自动刷新一次构成 |
 | `GET/PUT /settings` · `GET /jobs` · `GET /jobs/{id}` · `GET /status` | 模型 / effort / 轮数 / 是否带背景;任务表;helper 在线状态 |
 
 Agent router(Bearer 令牌):`POST /jobs/next`(长轮询)· `GET /jobs/{id}` · `POST /jobs/{id}/events {status?, deltas?, events?}` → `{ok, cancel}` · `POST /jobs/{id}/finish {ok, cancelled?, result?, error?, error_kind?, session_id?, reset_session?}` · `POST /chat` · `GET /status`。
 
-SSE 帧:`snapshot`(首帧:线程 + 消息 + 进行中的消息 id + helper 状态 + 事件游标)、`message`、`delta {message_id, text, rev}`、`event`(`init | tool_use | tool_result | thinking | usage | rate_limit | status | error`)、`status`、`thread`、`done`;每 15 s 一个 `: ping`。`id:` 是事件表的全局自增 id,浏览器重连时带 `Last-Event-ID` 只补新事件。
+SSE 帧:`snapshot`(首帧:线程(含 `context` 构成)+ 消息 + 进行中的消息 id + helper 状态 + 事件游标)、`message`、`delta {message_id, text, rev}`、`event`(`init | tool_use | tool_result | thinking | usage | rate_limit | compact | status | error`)、`status`、`thread`、`context`、`job`、`done`;每 15 s 一个 `: ping`。`id:` 是事件表的全局自增 id,浏览器重连时带 `Last-Event-ID` 只补新事件。
 
 ## 数据表
 

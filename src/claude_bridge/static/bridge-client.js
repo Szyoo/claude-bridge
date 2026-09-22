@@ -55,6 +55,9 @@ export class BridgeClient {
     return this.request('POST', '/send', { text, scope, key, new_thread: newThread });
   }
   cancel(messageId) { return this.request('POST', `/messages/${messageId}/cancel`); }
+  // session-level actions: refresh the /context breakdown, or ask Claude to compact the session history
+  refreshContext(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/context`); }
+  compact(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/compact`); }
 
   // ---- misc ----
   settings() { return this.request('GET', '/settings'); }
@@ -116,6 +119,8 @@ export class Subscription {
     on('status', (s) => { if (s.status !== 'pending' && s.status !== 'streaming' && this.inflight === s.message_id) this.inflight = null; this.h.onStatus?.(s); });
     on('done', (d) => { if (this.inflight === d.message_id) this.inflight = null; this.h.onDone?.(d); });
     on('thread', (t) => this.h.onThread?.(t));
+    on('context', (c) => this.h.onContext?.(c));
+    on('job', (j) => this.h.onJob?.(j));
     es.onerror = async () => {
       if (this.closed) return;
       this.errors += 1;

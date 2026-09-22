@@ -49,6 +49,22 @@
 .bridge-session .bar { display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: var(--bridge-border); vertical-align: middle; overflow: hidden; }
 .bridge-session .bar i { display: block; height: 100%; background: var(--bridge-accent); }
 .bridge-session .bar.hot i { background: var(--bridge-err); }
+.bridge-session .clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+/* /context breakdown panel */
+.bridge-ctxpanel { flex-basis: 100%; }
+.bridge-ctx { border: 1px solid var(--bridge-border); border-radius: 10px; padding: 10px 12px; font-size: 12px; background: var(--bridge-bg); display: flex; flex-direction: column; gap: 8px; }
+.bridge-ctx-help { margin: 0; color: var(--bridge-muted); line-height: 1.5; }
+.bridge-ctx-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.bridge-ctx-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bridge-border); }
+.bridge-ctx-bar i { display: block; height: 100%; }
+.bridge-ctx-table { border-collapse: collapse; width: 100%; }
+.bridge-ctx-table td { padding: 2px 4px; border-bottom: 1px solid var(--bridge-border); }
+.bridge-ctx-table td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bridge-ctx-table tr.deferred td { color: var(--bridge-muted); }
+.bridge-ctx-table .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.bridge-ctx-table .dot.none { background: transparent; border: 1px dashed var(--bridge-muted); }
+.bridge-ctx-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bridge-ctx-foot span { flex: 1; }
 
 .bridge-list { overflow-y: auto; overflow-x: hidden; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 .bridge-empty { color: var(--bridge-muted); font-size: 13px; text-align: center; margin-top: 40px; }

@@ -36,36 +36,92 @@ function fmtReset(ts) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// Builds the "model · turns · tokens · context · cost · quota" line from a thread's events.
-export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS } = {}) {
+export const CONTEXT_HELP = '当前会话上下文 = 每次请求送给模型的全部内容：系统提示、工具定义、对话历史、工具输出。'
+  + '越大每次回答越慢越贵；接近上限时 Claude Code 会自动压缩历史（保留摘要），也可手动压缩；新开对话则归零。';
+
+// Builds the session line from a thread's events (+ the latest /context report if the server has one).
+// Every part carries `title` explaining what the number is; `key` lets a host attach behaviour (e.g. open the context panel).
+export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS, context = null } = {}) {
   let init = null, usage = null, rate = null;
   for (const m of messages) for (const ev of m.events || []) {
     if (ev.type === 'init') init = ev.data;
     else if (ev.type === 'usage') usage = ev.data;
     else if (ev.type === 'rate_limit') rate = ev.data;
   }
-  const model = usage?.model || init?.model || '';
+  const model = context?.model || usage?.model || init?.model || '';
   const parts = [];
-  if (model) parts.push({ label: model.replace(/^claude-/, '') });
-  if (usage) {
-    if (usage.num_turns != null) parts.push({ label: `${usage.num_turns} 轮` });
-    if (usage.context_tokens) {
-      // 当前会话上下文占用（最后一次请求的 input + cache），不是多轮累计
-      const win = contextWindow(model, contextWindows, usage.context_tokens);
-      const pct = Math.min(100, Math.round(usage.context_tokens / win * 100));
-      parts.push({ label: `上下文 ${fmtTokens(usage.context_tokens)}/${fmtTokens(win)}`, bar: pct, title: `本会话已占用模型窗口的 ${pct}%，满了会自动压缩；新开对话可清零` });
-    }
-    if (usage.output_tokens != null) parts.push({ label: `本轮输出 ${fmtTokens(usage.output_tokens)}`, title: '上一条回答生成的 tokens' });
-    if (usage.total_cost_usd != null) parts.push({ label: `本轮 $${usage.total_cost_usd.toFixed(2)}`, title: '上一条回答的费用估算（按 API 价折算，订阅用户仅供参考）' });
+  if (model) parts.push({ key: 'model', label: model.replace(/^claude-/, ''), title: '上一条回答使用的模型' });
+  // context occupancy: prefer the exact /context report, else the last request's input+cache size
+  const used = context?.used ?? usage?.context_tokens ?? null;
+  if (used) {
+    const win = context?.window || contextWindow(model, contextWindows, used);
+    const pct = Math.min(100, Math.round(used / win * 100));
+    const thr = context?.autocompact_pct;
+    parts.push({
+      key: 'context', label: `当前会话上下文 ${fmtTokens(used)}/${fmtTokens(win)} · ${pct}%`, bar: pct, clickable: true,
+      title: `${CONTEXT_HELP}${thr ? ` 自动压缩阈值约 ${thr}%。` : ''} 点开看构成。`,
+    });
   }
-  const win = (w, name, key) => {
+  if (usage) {
+    if (usage.num_turns != null) parts.push({ key: 'turns', label: `本轮 ${usage.num_turns} 次调用`, title: '上一条回答里模型被调用的次数：每用一次工具就多一次' });
+    const inp = usage.context_tokens || null;
+    if (inp || usage.output_tokens != null) {
+      parts.push({
+        key: 'io', label: `本轮输入 ${inp ? fmtTokens(inp) : '–'} · 输出 ${fmtTokens(usage.output_tokens)}`,
+        title: '输入 = 上一条回答时送给模型的 tokens（就是当时的上下文，大部分命中缓存）；输出 = 模型生成的 tokens',
+      });
+    }
+  }
+  const win = (w, name) => {
     if (w?.utilization == null) return;
     const pct = Math.round(w.utilization * 100);
-    parts.push({ label: `${name} ${pct}%`, bar: pct, title: `${name}额度已用 ${pct}%，${fmtReset(w.resets_at)} 重置` });
+    parts.push({ key: name, label: `${name} 已用 ${pct}%`, bar: pct, title: `订阅的${name}滚动窗口已用 ${pct}%，${fmtReset(w.resets_at)} 重置（来自 claude 命令行自己报告的限额）` });
   };
-  win(rate?.five_hour, '5h 额度');
-  win(rate?.seven_day, '7d 额度');
-  return { model, usage, rate, parts };
+  win(rate?.five_hour, '5 小时额度');
+  win(rate?.seven_day, '7 天额度');
+  return { model, usage, rate, context, parts };
+}
+
+const CATEGORY_ZH = {
+  'System prompt': '系统提示', 'System tools': '系统工具', 'MCP tools': 'MCP 工具', 'MCP tools (deferred)': 'MCP 工具（按需加载，不计入）',
+  'System tools (deferred)': '系统工具（按需加载，不计入）', Skills: '技能说明', 'Memory files': '记忆文件', Messages: '对话消息（历史 + 工具输出）',
+  'Autocompact buffer': '自动压缩预留', 'Free space': '剩余空间',
+};
+const CATEGORY_COLORS = ['#3b6df2', '#e0703a', '#2e9b5d', '#d4a72c', '#8b8b8b', '#6f6f6f', '#3b6df2', '#555555'];
+
+// Renders the /context breakdown into `el`. opts: { onRefresh, onCompact, busy }
+export function renderContextPanel(el, ctx, opts = {}) {
+  if (!ctx || ctx.used == null) {
+    el.innerHTML = `<div class="bridge-ctx"><p class="bridge-ctx-help">${esc(CONTEXT_HELP)}</p><p class="bridge-muted bridge-tiny">还没有构成数据：回答一次后自动获取，或点「刷新构成」。</p>`
+      + `<div class="bridge-ctx-foot"><span></span><button type="button" class="bridge-btn bridge-tiny" data-ctx="refresh"${opts.busy ? ' disabled' : ''}>刷新构成</button></div></div>`;
+  } else {
+    const win = ctx.window || 1;
+    const counted = (ctx.categories || []).filter(c => !c.deferred && c.name !== 'Free space');
+    const segs = counted.map((c, i) => `<i style="width:${Math.max(0.3, (c.tokens || 0) / win * 100)}%;background:${CATEGORY_COLORS[i % CATEGORY_COLORS.length]}" title="${esc(CATEGORY_ZH[c.name] || c.name)} ${fmtTokens(c.tokens)}"></i>`).join('');
+    const rows = (ctx.categories || []).map((c) => {
+      const counting = !c.deferred && c.name !== 'Free space';
+      const dot = counting ? `<i class="dot" style="background:${CATEGORY_COLORS[counted.indexOf(c) % CATEGORY_COLORS.length]}"></i>` : '<i class="dot none"></i>';
+      const pct = c.pct == null ? '—' : `${c.pct}%`;
+      return `<tr class="${c.deferred ? 'deferred' : ''}"><td>${dot}${esc(CATEGORY_ZH[c.name] || c.name)}</td><td class="n">${fmtTokens(c.tokens)}</td><td class="n">${pct}</td></tr>`;
+    }).join('');
+    const thr = ctx.autocompact_pct ? `<p class="bridge-ctx-help">用到约 ${ctx.autocompact_pct}% 时 Claude Code 会自动压缩历史（保留摘要）；「压缩会话」现在就做同样的事，需要模型读一遍历史，会花一次调用。</p>` : '';
+    el.innerHTML = `<div class="bridge-ctx">
+      <p class="bridge-ctx-help">${esc(CONTEXT_HELP)}</p>
+      <div class="bridge-ctx-head"><b>${fmtTokens(ctx.used)} / ${fmtTokens(win)}（${ctx.pct ?? Math.round(ctx.used / win * 100)}%）</b><span class="bridge-muted bridge-tiny">${esc(ctx.model || '')}</span></div>
+      <div class="bridge-ctx-bar">${segs}</div>
+      <table class="bridge-ctx-table"><tbody>${rows}</tbody></table>
+      ${thr}
+      <div class="bridge-ctx-foot"><span class="bridge-muted bridge-tiny">数据来自 claude /context${ctx.at ? ` · 更新于 ${esc(ctx.at)} UTC` : ''}</span>
+        <button type="button" class="bridge-btn bridge-tiny" data-ctx="refresh"${opts.busy ? ' disabled' : ''}>刷新构成</button>
+        <button type="button" class="bridge-btn bridge-tiny bridge-btn-danger" data-ctx="compact"${opts.busy ? ' disabled' : ''}>压缩会话</button></div>
+    </div>`;
+  }
+  el.querySelector('[data-ctx="refresh"]')?.addEventListener('click', () => opts.onRefresh?.());
+  el.querySelector('[data-ctx="compact"]')?.addEventListener('click', () => { if (confirm('让 Claude 把这段对话的历史压缩成摘要？细节会丢失，但上下文会明显变小。')) opts.onCompact?.(); });
+}
+
+export function describeCompact(d) {
+  return `已${d.trigger === 'auto' ? '自动' : '手动'}压缩会话：${fmtTokens(d.pre_tokens)} → ${fmtTokens(d.post_tokens)}`;
 }
 
 export function mountBridgeWidget(el, client, opts = {}) {
@@ -90,6 +146,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
           <button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-act="pin" title="${esc(S.pin)}">📌</button>
           <button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny bridge-btn-danger" data-act="del" title="${esc(S.del)}">🗑</button>` : ''}
           <div class="bridge-session"></div>
+          <div class="bridge-ctxpanel" hidden></div>
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
         <form class="bridge-form">
@@ -165,6 +222,8 @@ export function mountBridgeWidget(el, client, opts = {}) {
       steps.appendChild(card);
     } else if (ev.type === 'status' && d.phase === 'cancel_requested') {
       const n = document.createElement('div'); n.className = 'bridge-note'; n.textContent = '已请求停止…'; steps.appendChild(n);
+    } else if (ev.type === 'compact') {
+      const n = document.createElement('div'); n.className = 'bridge-note'; n.textContent = describeCompact(d); steps.appendChild(n);
     } else if (ev.type === 'error') {
       const n = document.createElement('div'); n.className = 'bridge-note error'; n.textContent = d.message || '出错'; steps.appendChild(n);
     }
@@ -211,8 +270,18 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   function renderSession() {
     const box = $('.bridge-session');
-    const { parts } = sessionSummary([...state.msgs.values()], { contextWindows: o.contextWindows });
-    box.innerHTML = parts.map(p => `<span title="${esc(p.title || '')}">${esc(p.label)}${p.bar != null ? ` <span class="bar${p.bar >= 80 ? ' hot' : ''}"><i style="width:${p.bar}%"></i></span>` : ''}</span>`).join('');
+    const { parts } = sessionSummary([...state.msgs.values()], { contextWindows: o.contextWindows, context: state.threadRow?.context });
+    box.innerHTML = parts.map(p => `<span class="${p.clickable ? 'clickable' : ''}" data-key="${esc(p.key || '')}" title="${esc(p.title || '')}">${esc(p.label)}${p.bar != null ? ` <span class="bar${p.bar >= 80 ? ' hot' : ''}"><i style="width:${p.bar}%"></i></span>` : ''}</span>`).join('');
+    const panel = $('.bridge-ctxpanel');
+    if (!panel.hidden) renderContextPanel(panel, state.threadRow?.context, ctxActions());
+  }
+
+  function ctxActions() {
+    return {
+      busy: state.ctxBusy,
+      onRefresh: async () => { try { state.ctxBusy = true; renderSession(); await client.refreshContext(state.thread); toast('已请求刷新，helper 计算中…'); } catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); } },
+      onCompact: async () => { try { state.ctxBusy = true; renderSession(); await client.compact(state.thread); toast('已请求压缩，Claude 正在整理历史…'); } catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); } },
+    };
   }
 
   function renderAgent(agent, fallback = false) {
@@ -252,6 +321,15 @@ export function mountBridgeWidget(el, client, opts = {}) {
       onStatus: (s) => { const m = state.msgs.get(s.message_id); if (!m) return; m.status = s.status; paint(s.message_id); if (s.status !== 'pending' && s.status !== 'streaming') setPending(false); },
       onDone: (d) => { const m = state.msgs.get(d.message_id); if (m) { m.status = d.status; paint(d.message_id); } setPending(false); renderSession(); loadThreads(); },
       onThread: (t) => { if (t.id === state.thread) $('.bridge-title').textContent = t.title || S.threadTitle; loadThreads(); },
+      onContext: (c) => { if (state.threadRow) state.threadRow.context = c.context; state.ctxBusy = false; renderSession(); },
+      onJob: (j) => {
+        state.ctxBusy = false; renderSession();
+        if (j.kind === 'compact') {
+          let r = null; try { r = JSON.parse(j.result || '{}'); } catch { r = null; }
+          if (j.status === 'done' && r?.compact) toast(describeCompact({ ...r.compact, trigger: 'manual' }));
+          else if (j.status !== 'done') toast(`压缩失败：${j.error || ''}`, true);
+        } else if (j.status !== 'done') toast(`刷新构成失败：${j.error || ''}`, true);
+      },
       onFallback: (on) => renderAgent({ online: $('.bridge-dot').classList.contains('on') }, on),
       onError: (err) => { // transport errors repeat every poll while the server is down; say it once in a while
         const now = Date.now();
@@ -316,6 +394,8 @@ export function mountBridgeWidget(el, client, opts = {}) {
   input.addEventListener('input', autoGrow);
   stopBtn.addEventListener('click', async () => { if (!state.inflight) return; try { await client.cancel(state.inflight); } catch (e) { toast(e.message, true); } });
   el.addEventListener('click', async (e) => {
+    const chip = e.target.closest('.bridge-session .clickable');
+    if (chip) { const panel = $('.bridge-ctxpanel'); panel.hidden = !panel.hidden; if (!panel.hidden) renderContextPanel(panel, state.threadRow?.context, ctxActions()); return; }
     const act = e.target.closest('[data-act]')?.dataset.act;
     const th = e.target.closest('.bridge-thread');
     if (th) return openThread(th.dataset.id);

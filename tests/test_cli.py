@@ -41,7 +41,8 @@ def test_status_with_fake_claude_and_unreachable_server(tmp_path, capsys):
     rc = cli.main(["status", "--url", "http://127.0.0.1:1", "--token", "x", "--claude-bin", fake])
     out = capsys.readouterr().out
     assert rc == 1 and "❌ server" in out and "claude --version" in out and "claude auth status" in out
-    assert json.loads((tmp_path / "args.json").read_text()) == ["auth", "status"]
+    calls = [json.loads(ln) for ln in (tmp_path / "args.jsonl").read_text().splitlines()]
+    assert calls == [["--version"], ["auth", "status"]]
 
     rc = cli.main(["status", "--claude-bin", fake])
     assert rc == 0 and "skipped" in capsys.readouterr().out
