@@ -62,14 +62,19 @@ def make_fake_claude(tmp_path: Path, lines: list[dict], *, exit_code: int = 0, s
     script.write_text(
         f"""#!{sys.executable}
 import json, os, sys, time
-open({str(tmp_path / 'args.json')!r}, 'w').write(json.dumps(sys.argv[1:], ensure_ascii=False))
-open({str(tmp_path / 'env.txt')!r}, 'w').write(os.environ.get('BRIDGE_TEST_ENV', ''))
+argv = json.dumps(sys.argv[1:], ensure_ascii=False)
+if not os.path.exists({str(tmp_path / 'args.json')!r}):
+    open({str(tmp_path / 'args.json')!r}, 'w').write(argv)   # first invocation (the chat command)
+open({str(tmp_path / 'args.jsonl')!r}, 'a').write(argv + '\\n')  # every invocation, incl. the /context follow-up
+if not os.path.exists({str(tmp_path / 'env.txt')!r}):
+    open({str(tmp_path / 'env.txt')!r}, 'w').write(os.environ.get('BRIDGE_TEST_ENV', ''))
 if not sys.stdin.isatty():
     try:
         data = sys.stdin.read()
     except Exception:
         data = ''
-    open({str(tmp_path / 'stdin.txt')!r}, 'w').write(data)
+    if data:
+        open({str(tmp_path / 'stdin.txt')!r}, 'w').write(data)
 for line in json.loads({payload!r}):
     if '__sleep__' in line:
         time.sleep(line['__sleep__']); continue

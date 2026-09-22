@@ -157,6 +157,14 @@ def create_bridge(
     def cancel(message_id: int):
         return _svc(service.cancel, message_id)
 
+    @browser.post("/threads/{thread_id}/context", status_code=202)
+    def refresh_context(thread_id: str):
+        return _svc(service.request_session_job, thread_id, "context")
+
+    @browser.post("/threads/{thread_id}/compact", status_code=202)
+    def compact_thread(thread_id: str):
+        return _svc(service.request_session_job, thread_id, "compact")
+
     @browser.get("/settings")
     def get_settings():
         return {

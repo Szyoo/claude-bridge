@@ -397,7 +397,7 @@ def test_run_once_dispatch_handlers_unknown_and_errors(tmp_path):
         raise RuntimeError("bad day")
 
     worker, _ = make_worker(tmp_path, HAPPY, client=client, hooks=hooks, handlers={"review": review, "boom": boom, "text": lambda j, w: "plain"})
-    assert worker.kinds == ["chat", "review", "boom", "text"]
+    assert worker.kinds == ["chat", "context", "compact", "review", "boom", "text"]
     for _ in range(4):
         assert worker.run_once(wait=0) is True
     assert worker.run_once(wait=0) is False

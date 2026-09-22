@@ -120,9 +120,39 @@ class BridgeService:
             rest = self.store.threads(sc)
             current = rest[0]["id"] if rest else None
             self.store.set_meta(key, current)
+        self.store.set_meta(f"context:{thread_id}", None)
         if self.config.on_thread_deleted:
             self.config.on_thread_deleted(thread_id)
         return {"deleted": n, "current": current}
+
+    # ---------------- session context (/context, /compact) ----------------
+
+    def thread_context(self, thread_id: str) -> dict[str, Any] | None:
+        raw = self.store.get_meta(f"context:{thread_id}")
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+
+    def _save_context(self, thread_id: str, report: dict[str, Any]) -> None:
+        data = {**report, "at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
+        self.store.set_meta(f"context:{thread_id}", json.dumps(data, ensure_ascii=False))
+        self._pub(thread_id, "context", {"thread": thread_id, "context": data})
+
+    def request_session_job(self, thread_id: str, kind: str) -> dict[str, Any]:
+        """Queue a `/context` refresh or a `/compact` on the thread's Claude session; the worker does the rest."""
+        th = self.store.get_thread(thread_id)
+        if not th:
+            raise NotFound("没有这个对话")
+        if not th.get("session_id"):
+            raise BadRequest("这个对话还没有 Claude 会话，先发一条消息")
+        if kind == "compact" and self.store.inflight(thread_id):
+            raise ChatBusy("回答中不能压缩")
+        payload = {"thread": thread_id, "session_id": th["session_id"], "settings": self.settings()}
+        jid = self.store.enqueue_job(kind, payload)
+        return {"job_id": jid, "thread": thread_id, "agent_online": self.agent_online()}
 
     # ---------------- chat ----------------
 
@@ -215,6 +245,7 @@ class BridgeService:
         th = self.store.get_thread(thread_id)
         if not th:
             raise NotFound("没有这个对话")
+        th["context"] = self.thread_context(thread_id)
         cursor = self.store.last_event_id()
         msgs = self.store.messages(thread_id, after_id=after, limit=self.config.messages_limit, tail=after == 0)
         inflight = self.store.inflight(thread_id)
@@ -377,6 +408,10 @@ class BridgeService:
                 self._pub(thread, ftype, data, id=fid)
             if msg and msg_status:
                 self._pub_done(msg["id"], thread, msg_status, job)
+            if body.context and isinstance(body.context, dict) and body.context.get("used") is not None:
+                self._save_context(thread, body.context)
+            if job["kind"] in ("context", "compact"):
+                self._pub(thread, "job", {k: job.get(k) for k in ("id", "kind", "status", "result", "error")})
 
     def requeue_stale(self) -> int:
         n = 0

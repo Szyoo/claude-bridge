@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 from collections.abc import Iterator
 from typing import Any
@@ -17,6 +18,56 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 Emission = tuple[str, Any]  # ("delta", str) | ("event", {"type": str, "data": dict})
+
+_TOKEN_RE = re.compile(r"([\d.]+)\s*([kKmM]?)")
+_TOKENS_LINE_RE = re.compile(r"\*\*Tokens:\*\*\s*([\d.]+[kKmM]?)\s*/\s*([\d.]+[kKmM]?)\s*\((\d+)%\)")
+_MODEL_LINE_RE = re.compile(r"\*\*Model:\*\*\s*(\S+)")
+
+
+def parse_token_count(text: str) -> int | None:
+    """'42.1k' → 42100, '1M' → 1000000, '< 20' → 20, '~80' → 80."""
+    m = _TOKEN_RE.search(text or "")
+    if not m:
+        return None
+    n = float(m.group(1))
+    unit = m.group(2).lower()
+    if unit == "k":
+        n *= 1_000
+    elif unit == "m":
+        n *= 1_000_000
+    return int(round(n))
+
+
+def parse_context_report(md: str) -> dict[str, Any]:
+    """Parse the Markdown that `claude -p "/context"` returns into {model, used, window, pct, categories}."""
+    out: dict[str, Any] = {"model": None, "used": None, "window": None, "pct": None, "categories": [], "autocompact_pct": None}
+    m = _MODEL_LINE_RE.search(md or "")
+    if m:
+        out["model"] = m.group(1)
+    m = _TOKENS_LINE_RE.search(md or "")
+    if m:
+        out["used"], out["window"], out["pct"] = parse_token_count(m.group(1)), parse_token_count(m.group(2)), int(m.group(3))
+    section = ""
+    if "### Estimated usage by category" in (md or ""):
+        section = md.split("### Estimated usage by category", 1)[1].split("###", 1)[0]
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or set(line) <= set("|-: "):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 3 or cells[0].lower() == "category":
+            continue
+        pct_txt = cells[2].rstrip("%").strip()
+        try:
+            pct = float(pct_txt)
+        except ValueError:
+            pct = None
+        out["categories"].append({"name": cells[0], "tokens": parse_token_count(cells[1]), "pct": pct,
+                                  "deferred": "deferred" in cells[0].lower()})
+    buf = next((c for c in out["categories"] if c["name"].lower().startswith("autocompact")), None)
+    if buf and buf["tokens"] and out["window"]:
+        out["autocompact_pct"] = round(100 - buf["tokens"] / out["window"] * 100)
+    return out
 
 
 def iter_stream(lines: Iterator[str]) -> Iterator[dict[str, Any]]:
@@ -86,6 +137,7 @@ class StreamState:
         self.stop_reason: str | None = None
         self.text_total = 0
         self.chunks: list[str] = []
+        self.compactions: list[dict[str, Any]] = []
         self._cur_msg: str | None = None
         self._open: dict[int, dict[str, Any]] = {}
         self._tools_seen: set[str] = set()
@@ -115,6 +167,11 @@ class StreamState:
         return []
 
     def _system(self, ev: dict[str, Any]) -> list[Emission]:
+        if ev.get("subtype") == "compact_boundary":
+            meta = ev.get("compact_metadata") or {}
+            data = {k: meta.get(k) for k in ("trigger", "pre_tokens", "post_tokens", "cumulative_dropped_tokens", "duration_ms")}
+            self.compactions.append(data)
+            return [("event", {"type": "compact", "data": data})]
         if ev.get("subtype") != "init":
             return []
         self.init = ev

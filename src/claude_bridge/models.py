@@ -72,6 +72,7 @@ class JobFinishIn(BaseModel):
     error_kind: str | None = None
     session_id: str | None = None
     reset_session: bool = False
+    context: dict[str, Any] | None = None  # parsed `claude /context` report for the thread's session
 
 
 class AgentChatIn(BaseModel):

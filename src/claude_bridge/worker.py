@@ -21,11 +21,12 @@ from pathlib import Path
 from typing import Any
 
 from claude_bridge.client import BridgeClient, BridgeClientError
-from claude_bridge.stream_json import StreamState, describe_tool, iter_stream
+from claude_bridge.stream_json import StreamState, describe_tool, iter_stream, parse_context_report
 
 log = logging.getLogger(__name__)
 
 VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+SESSION_KINDS = ("context", "compact")  # built-in jobs that act on an existing Claude session
 
 
 @dataclass
@@ -95,7 +96,7 @@ class Worker:
 
     @property
     def kinds(self) -> list[str]:
-        return list(self.config.kinds) if self.config.kinds else ["chat", *self.handlers]
+        return list(self.config.kinds) if self.config.kinds else ["chat", *SESSION_KINDS, *self.handlers]
 
     # ---------------- loop ----------------
 
@@ -142,6 +143,8 @@ class Worker:
             kind = job["kind"]
             if kind == "chat":
                 self.run_chat(job)
+            elif kind in SESSION_KINDS:
+                self.run_session_job(job)
             elif kind in self.handlers:
                 out = self.handlers[kind](job, self)
                 result = out if isinstance(out, str) or out is None else json.dumps(out, ensure_ascii=False)
@@ -179,6 +182,80 @@ class Worker:
             runner.run()
         finally:
             self._current = None
+
+    # ---------------- session commands (/context, /compact) ----------------
+
+    def _session_env(self) -> dict[str, str]:
+        return {**os.environ, **self.config.extra_env}
+
+    def context_report(self, session_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """`claude -p "/context" --resume` is computed locally: no API call, no cost, ~1 s."""
+        cfg = self.config
+        model = ((settings or {}).get("model") or cfg.model or "").strip()
+        cmd = [cfg.claude_bin, "-p", "/context", "--output-format", "json", "--resume", session_id]
+        if model:
+            cmd += ["--model", model]
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(), capture_output=True, text=True,
+                timeout=60, stdin=subprocess.DEVNULL,
+            )
+            envelope = next((ev for ev in reversed(list(iter_stream(iter(proc.stdout.splitlines())))) if ev.get("type") == "result"), None)
+            if envelope is None:
+                log.warning("/context returned no result (exit %s): %s", proc.returncode, proc.stderr.strip()[-200:])
+                return None
+            if envelope.get("is_error"):
+                log.warning("/context failed: %s", str(envelope.get("result"))[:200])
+                return None
+            report = parse_context_report(str(envelope.get("result") or ""))
+            return report if report.get("used") is not None else None
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("/context unavailable: %s", e)
+            return None
+
+    def compact_session(self, session_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+        """`claude -p "/compact" --resume`: asks the model to summarise the history; returns compact_metadata."""
+        cfg = self.config
+        model = ((settings or {}).get("model") or cfg.model or "").strip()
+        cmd = [cfg.claude_bin, "-p", "/compact", "--output-format", "stream-json", "--verbose", "--resume", session_id]
+        if model:
+            cmd += ["--model", model]
+        proc = subprocess.run(
+            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(), capture_output=True, text=True,
+            timeout=cfg.chat_timeout, stdin=subprocess.DEVNULL,
+        )
+        meta: dict[str, Any] | None = None
+        result: dict[str, Any] | None = None
+        for ev in iter_stream(iter(proc.stdout.splitlines())):
+            if ev.get("type") == "system" and ev.get("subtype") == "compact_boundary":
+                m = ev.get("compact_metadata") or {}
+                meta = {k: m.get(k) for k in ("trigger", "pre_tokens", "post_tokens", "cumulative_dropped_tokens", "duration_ms")}
+            elif ev.get("type") == "result":
+                result = ev
+        if result is None:
+            raise RuntimeError(f"claude 未返回 result（exit {proc.returncode}）：{proc.stderr.strip()[-300:]}")
+        if result.get("is_error"):
+            raise RuntimeError(f"压缩失败：{result.get('result')}")
+        if meta is None:
+            raise RuntimeError("claude 没有报告压缩结果（compact_boundary）")
+        return meta
+
+    def run_session_job(self, job: dict[str, Any]) -> None:
+        p = job.get("payload") or {}
+        sid = p.get("session_id")
+        settings = p.get("settings") or {}
+        if not sid:
+            self._safe_finish(job["id"], ok=False, error="这个对话还没有 Claude 会话", error_kind="worker")
+            return
+        out: dict[str, Any] = {}
+        if job["kind"] == "compact":
+            out["compact"] = self.compact_session(sid, settings)
+        report = self.context_report(sid, settings)
+        if job["kind"] == "context" and report is None:
+            self._safe_finish(job["id"], ok=False, error="取不到上下文报告（claude /context 失败）", error_kind="claude")
+            return
+        out["context"] = report
+        self._safe_finish(job["id"], ok=True, result=json.dumps(out, ensure_ascii=False), context=report)
 
     def build_chat_command(
         self, prompt: str, session_id: str | None, settings: dict[str, Any], system_prompt: str
@@ -484,7 +561,12 @@ class ChatRunner:
 
         self.emitter.add_event("usage", st.usage_data())
         self.emitter.final_flush()
-        self.worker._safe_finish(jid, ok=True, result=json.dumps(summary, ensure_ascii=False), session_id=st.session_id)
+        # refresh the session's context breakdown (local, free) so the UI shows the post-turn composition
+        report = self.worker.context_report(st.session_id, settings) if st.session_id else None
+        summary["context"] = report
+        self.worker._safe_finish(
+            jid, ok=True, result=json.dumps(summary, ensure_ascii=False), session_id=st.session_id, context=report
+        )
         try:
             self.worker.hooks.on_chat_finished(self.job, st.text, summary)
         except Exception:

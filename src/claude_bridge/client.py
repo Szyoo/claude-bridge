@@ -82,6 +82,7 @@ class BridgeClient:
         cancelled: bool = False,
         session_id: str | None = None,
         reset_session: bool = False,
+        context: dict[str, Any] | None = None,
     ) -> None:
         self._call(
             "POST",
@@ -94,6 +95,7 @@ class BridgeClient:
                 "error_kind": error_kind,
                 "session_id": session_id,
                 "reset_session": reset_session,
+                "context": context,
             },
         )
 
