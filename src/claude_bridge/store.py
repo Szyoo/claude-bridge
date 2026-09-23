@@ -536,6 +536,17 @@ class BridgeStore:
         row = self._one("SELECT COUNT(*) AS n FROM bridge_jobs WHERE status=?", (status,))
         return int(row["n"]) if row else 0
 
+    def active_jobs(self, thread: str, kinds: tuple[str, ...]) -> list[dict[str, Any]]:
+        """Queued / running jobs of the given kinds whose payload targets `thread` (oldest first)."""
+        return [
+            _job(r)
+            for r in self._q(
+                f"SELECT * FROM bridge_jobs WHERE status IN ('queued','running') AND kind IN ({','.join('?' * len(kinds))}) "
+                "AND json_extract(payload, '$.thread') = ? ORDER BY id",
+                (*kinds, thread),
+            )
+        ]
+
     def stale_running(self, seconds: int) -> list[dict[str, Any]]:
         return [
             _job(r)

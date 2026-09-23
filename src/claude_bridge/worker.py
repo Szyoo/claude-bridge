@@ -52,6 +52,7 @@ class WorkerConfig:
     cancel_poll_interval: float = 2.0
     argv_limit: int = 200_000
     # report which models this machine's `claude` supports (zero-cost local `/model` probes)
+    session_heartbeat: float = 15.0  # /compact can take minutes; keep the server from declaring the job dead
     model_probe: bool = True
     model_probe_interval: float = 6 * 3600
     version_check_interval: float = 600
@@ -306,27 +307,58 @@ class Worker:
             log.warning("/context unavailable: %s", e)
             return None
 
-    def compact_session(self, session_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:
-        """`claude -p "/compact" --resume`: asks the model to summarise the history; returns compact_metadata."""
+    def compact_session(self, session_id: str, settings: dict[str, Any] | None = None, job_id: int | None = None) -> dict[str, Any]:
+        """`claude -p "/compact" --resume`: asks the model to summarise the history; returns compact_metadata.
+        Long histories take minutes, so while it runs we heartbeat the job (and stop if the server asks us to)."""
         cfg = self.config
         model = ((settings or {}).get("model") or cfg.model or "").strip()
         cmd = [cfg.claude_bin, "-p", "/compact", "--output-format", "stream-json", "--verbose", "--resume", session_id]
         if model:
             cmd += ["--model", model]
-        proc = subprocess.run(
-            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(), capture_output=True, text=True,
-            timeout=cfg.chat_timeout, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(
+            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
         )
+        out: dict[str, str] = {}
+        readers = [threading.Thread(target=lambda k, f: out.__setitem__(k, f.read()), args=(k, f), daemon=True)
+                   for k, f in (("stdout", proc.stdout), ("stderr", proc.stderr))]
+        for t in readers:
+            t.start()
+        deadline = time.monotonic() + cfg.chat_timeout
+
+        def stop(reason: str) -> None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            proc.wait(timeout=10)
+            raise RuntimeError(reason)
+
+        while True:
+            try:
+                proc.wait(timeout=max(0.1, min(cfg.session_heartbeat, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    stop(f"压缩超时（{cfg.chat_timeout:.0f} 秒）")
+                if job_id is not None:
+                    try:
+                        if (self.client.post_events(job_id) or {}).get("cancel"):
+                            stop("压缩已取消")
+                    except BridgeClientError as e:
+                        log.warning("compact heartbeat failed: %s", e)
+        for t in readers:
+            t.join(timeout=5)
         meta: dict[str, Any] | None = None
         result: dict[str, Any] | None = None
-        for ev in iter_stream(iter(proc.stdout.splitlines())):
+        for ev in iter_stream(iter(out.get("stdout", "").splitlines())):
             if ev.get("type") == "system" and ev.get("subtype") == "compact_boundary":
                 m = ev.get("compact_metadata") or {}
                 meta = {k: m.get(k) for k in ("trigger", "pre_tokens", "post_tokens", "cumulative_dropped_tokens", "duration_ms")}
             elif ev.get("type") == "result":
                 result = ev
         if result is None:
-            raise RuntimeError(f"claude 未返回 result（exit {proc.returncode}）：{proc.stderr.strip()[-300:]}")
+            raise RuntimeError(f"claude 未返回 result（exit {proc.returncode}）：{out.get('stderr', '').strip()[-300:]}")
         if result.get("is_error"):
             raise RuntimeError(f"压缩失败：{result.get('result')}")
         if meta is None:
@@ -342,7 +374,7 @@ class Worker:
             return
         out: dict[str, Any] = {}
         if job["kind"] == "compact":
-            out["compact"] = self.compact_session(sid, settings)
+            out["compact"] = self.compact_session(sid, settings, job_id=job["id"])
         report = self.context_report(sid, settings)
         if job["kind"] == "context" and report is None:
             self._safe_finish(job["id"], ok=False, error="取不到上下文报告（claude /context 失败）", error_kind="claude")
