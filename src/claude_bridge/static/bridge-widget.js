@@ -691,8 +691,8 @@ export function mountBridgeWidget(el, client, opts = {}) {
             <span class="grow"></span>
             ${o.showSettings ? `<select class="bridge-pick" data-set="effort" title="思考深度"></select><select class="bridge-pick" data-set="model" title="模型"></select>` : ''}
             <button type="button" class="bridge-pill" data-act="ctx" hidden title="当前会话上下文占用，点开看构成与额度"><span class="pct"></span><i class="ring"></i></button>
-            <button type="button" class="bridge-btn bridge-stop" hidden title="${esc(S.stop)}">■</button>
-            <button type="submit" class="bridge-btn bridge-send" title="发送">↑</button>
+            <button type="button" class="bridge-btn bridge-stop" hidden title="${esc(S.stop)}" aria-label="${esc(S.stop)}"><svg viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
+            <button type="submit" class="bridge-btn bridge-send" title="发送" aria-label="发送"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3.5M3.8 7.7 8 3.5l4.2 4.2"/></svg></button>
           </div>
         </form>
       </div>
