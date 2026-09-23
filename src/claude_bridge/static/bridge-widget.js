@@ -457,6 +457,28 @@ export function attachDrag(handle, onMove, onEnd) {
   return () => { handle.removeEventListener('pointerdown', down); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); };
 }
 
+// Popover chrome: a head row (title + ✕; on phones also a grip — swipe the head down to dismiss) above a body.
+// Fills `pop`, returns the body element to render into. The ✕ sits outside the drag area: pointer capture on
+// the drag handle would otherwise retarget its click.
+export function popShell(pop, title, onClose) {
+  pop.innerHTML = `<div class="bridge-pop-head"><div class="bridge-pop-drag"><i class="bridge-pop-grip"></i><span class="bridge-pop-name">${esc(title)}</span></div>`
+    + '<button type="button" class="bridge-pop-x" aria-label="关闭" title="关闭">✕</button></div><div class="bridge-pop-body"></div>';
+  pop.querySelector('.bridge-pop-x').addEventListener('click', () => onClose());
+  let dy = 0;
+  attachDrag(pop.querySelector('.bridge-pop-drag'),
+    (_, y) => { dy = Math.max(0, y); pop.style.transform = dy ? `translateY(${dy}px)` : ''; },
+    () => { pop.style.transform = ''; if (dy > 60) onClose(); dy = 0; });
+  return pop.querySelector('.bridge-pop-body');
+}
+
+// iOS Safari fires no `click` for taps on non-interactive elements, so "tap outside to close" has to listen to
+// pointerdown. `keep` = selector of elements that must not dismiss (the popovers themselves and their toggles).
+export function onOutsidePointer(keep, close) {
+  const h = (e) => { if (!e.target.closest(keep)) close(); };
+  document.addEventListener('pointerdown', h);
+  return () => document.removeEventListener('pointerdown', h);
+}
+
 // ============================================================
 // Reference widget
 // ============================================================
@@ -504,6 +526,8 @@ export function mountBridgeWidget(el, client, opts = {}) {
   // 弹层 / 菜单都挂到 body：宿主祖先若有 transform / filter / backdrop-filter，会把 position:fixed 的参照系困在那个祖先里
   const menu = el.querySelector('.bridge-menu');
   if (menu) { menu.classList.add('bridge-root'); document.body.appendChild(menu); }
+  // phones: popovers become bottom sheets that cover their own toggles; a scrim behind them closes on tap
+  const scrim = document.createElement('div'); scrim.className = 'bridge-scrim'; scrim.hidden = true; document.body.appendChild(scrim);
 
   const $ = (sel) => el.querySelector(sel);
   const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop'), pill = $('[data-act="ctx"]');
@@ -564,7 +588,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const s = summary();
     pill.hidden = s.pct == null;
     if (s.pct != null) { pill.querySelector('.pct').textContent = `${s.pct}%`; pill.style.setProperty('--p', s.pct); pill.classList.toggle('hot', s.pct >= 80); }
-    if (!pops.ctx.hidden) renderSessionPanel(pops.ctx, s, ctxActions());
+    if (!pops.ctx.hidden) renderSessionPanel(ctxBody(), s, ctxActions());
   }
   function ctxActions() {
     const run = (fn, msg) => async () => {
@@ -675,13 +699,17 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (!p.hidden) { closePops(); return; }
     closePops();
     if (kind === 'prefs') {
-      p.innerHTML = '<div class="bridge-pop-title">界面</div><div class="ui"></div>' + (o.showSettings && state.settings ? '<div class="bridge-pop-title">对话</div><div class="chat"></div>' : '');
-      renderPrefsPanel(p.querySelector('.ui'), prefs, { onChange: (_, key) => usePrefs(key) });
-      const c = p.querySelector('.chat'); if (c) c.innerHTML = settingsHtml();
-    } else renderSessionPanel(p, summary(), ctxActions());
+      const body = popShell(p, '设置', closePops);
+      body.innerHTML = '<div class="bridge-pop-title">界面</div><div class="ui"></div>' + (o.showSettings && state.settings ? '<div class="bridge-pop-title">对话</div><div class="chat"></div>' : '');
+      renderPrefsPanel(body.querySelector('.ui'), prefs, { onChange: (_, key) => usePrefs(key) });
+      const c = body.querySelector('.chat'); if (c) c.innerHTML = settingsHtml();
+    } else renderSessionPanel(ctxBody(), summary(), ctxActions());
+    scrim.hidden = false;
     placePopover(anchor, p, { align: kind === 'prefs' ? 'start' : 'end' });
   }
-  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) menu.hidden = true; }
+  function ctxBody() { return pops.ctx.querySelector('.bridge-pop-body') || popShell(pops.ctx, '当前会话', closePops); }
+  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) menu.hidden = true; scrim.hidden = true; }
+  scrim.addEventListener('click', closePops);
 
   // ---------- actions ----------
   async function send() {
@@ -732,10 +760,11 @@ export function mountBridgeWidget(el, client, opts = {}) {
     saveSetting({ [key]: v });
   };
   el.addEventListener('change', onSet); pops.prefs.addEventListener('change', onSet);
-  const onDocClick = (e) => { if (e.target.closest('.bridge-pop, .bridge-menu, [data-act="prefs"], [data-act="ctx"], [data-act="menu"]')) return; closePops(); };
+  // the scrim closes on its own click (closing it on pointerdown would let the tap fall through to what is underneath)
+  const offOutside = onOutsidePointer('.bridge-pop, .bridge-menu, .bridge-scrim, [data-act="prefs"], [data-act="ctx"], [data-act="menu"]', closePops);
   const onKey = (e) => { if (e.key === 'Escape') closePops(); };
   const onVis = () => { if (document.visibilityState === 'visible') state.sub?.wake(); };
-  document.addEventListener('click', onDocClick); document.addEventListener('keydown', onKey); document.addEventListener('visibilitychange', onVis);
+  document.addEventListener('keydown', onKey); document.addEventListener('visibilitychange', onVis);
 
   usePrefs();
   loadSettings();
@@ -745,9 +774,9 @@ export function mountBridgeWidget(el, client, opts = {}) {
   return {
     destroy() {
       state.sub?.close();
-      document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
+      offOutside(); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
       for (const p of Object.values(pops)) p.remove();
-      menu?.remove();
+      menu?.remove(); scrim.remove();
       el.innerHTML = '';
     },
     openThread,
