@@ -59,6 +59,12 @@ class BridgeClient:
             raise BridgeClientError(f"图片取不到 {file_id}: HTTP {resp.status_code}")
         return resp.content, (resp.headers.get("content-type") or "image/png").split(";")[0].strip()
 
+    def model_candidates(self) -> list[str]:
+        return (self._call("GET", "/models") or {}).get("candidates") or []
+
+    def report_models(self, report: dict[str, Any]) -> None:
+        self._call("POST", "/models", json=report)
+
     def next_job(self, worker: str, kinds: list[str], wait: int = 25) -> dict[str, Any] | None:
         body = {"worker": worker, "kinds": kinds, "wait": wait}
         return (self._call("POST", "/jobs/next", json=body, timeout=wait + 15) or {}).get("job")

@@ -123,6 +123,10 @@ worker.run_forever()
 - **服务端**:按文件头魔数认 PNG / JPEG / GIF / WebP(不信任 Content-Type,不收 SVG),单张默认 ≤7MB(API 单图 10MB 上限是按 base64 算的);文件落盘 `<files_dir>/<id>.<ext>`,表 `bridge_files` 记元数据;发送时绑定到用户消息,删对话一起删,24 小时没发出去的上传自动清掉。
 - **worker**:任务 payload 带 `files` 时,从 `GET /api/agent/files/{id}` 取回、base64,改用 `claude -p --input-format stream-json` 把图片和文字放进同一条用户消息(图在前,多张时逐张标注);不带图的消息命令行不变。
 
+### 模型列表
+
+worker 启动后在后台用本地、零费用的 `claude -p "/model" --no-session-persistence` 探测本机 CLI:别名(`opus` / `sonnet` / `haiku` / `fable` / `opus[1m]`…,各自指向这版 CLI 的最新模型)和宿主 `model_choices` 里哪些固定版本本机认得(`/model <id>` 会回 "not found"),`POST /api/agent/models` 上报;之后每 6 小时、以及 `claude --version` 变化时重探。`GET /settings` 的 `models` 优先用上报(带 `group`:「跟随 CLI 最新」/「固定版本」,前端用 `modelOptionsHtml` 渲染成 `<optgroup>`),没上报时退回 `model_choices`;`models_info.source` 说明来源。`WorkerConfig(model_probe=False)` 可关掉。
+
 ## HTTP API
 
 浏览器 router(宿主决定前缀):

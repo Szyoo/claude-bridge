@@ -11,12 +11,14 @@ import json
 import logging
 import os
 import platform
+import re
 import signal
 import subprocess
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,10 @@ class WorkerConfig:
     flush_chars: int = 400
     cancel_poll_interval: float = 2.0
     argv_limit: int = 200_000
+    # report which models this machine's `claude` supports (zero-cost local `/model` probes)
+    model_probe: bool = True
+    model_probe_interval: float = 6 * 3600
+    version_check_interval: float = 600
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
@@ -94,6 +100,11 @@ class Worker:
         self.handlers = dict(handlers or {})
         self.stopping = False
         self._current: ChatRunner | None = None
+        self._probe_lock = threading.Lock()
+        self._probe_thread: threading.Thread | None = None
+        self._next_probe = 0.0          # monotonic time of the next model probe
+        self._next_version_check = 0.0
+        self._probed_version: str | None = None
 
     @property
     def kinds(self) -> list[str]:
@@ -109,6 +120,7 @@ class Worker:
         backoff = 2.0
         while not self.stopping:
             try:
+                self.maybe_probe_models()
                 try:
                     self.hooks.tick()
                 except Exception:
@@ -188,6 +200,86 @@ class Worker:
 
     def _session_env(self) -> dict[str, str]:
         return {**os.environ, **self.config.extra_env}
+
+    # ---------------- models the local CLI supports ----------------
+
+    def cli_version(self) -> str:
+        try:
+            out = subprocess.run([self.config.claude_bin, "--version"], capture_output=True, text=True, timeout=20,
+                                 stdin=subprocess.DEVNULL, env=self._session_env())
+            return out.stdout.strip().splitlines()[0] if out.stdout.strip() else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    def _slash(self, command: str, model: str | None = None) -> str | None:
+        """Run a local slash command in print mode (no model call, nothing saved) and return its text."""
+        cmd = [self.config.claude_bin, "-p", command, "--output-format", "json", "--no-session-persistence"]
+        if model:
+            cmd += ["--model", model]
+        try:
+            proc = subprocess.run(cmd, cwd=str(self.config.cwd) if self.config.cwd else None, env=self._session_env(),
+                                  capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("claude %s failed: %s", command, e)
+            return None
+        env = next((ev for ev in reversed(list(iter_stream(iter(proc.stdout.splitlines())))) if ev.get("type") == "result"), None)
+        return str(env.get("result") or "") if env else None
+
+    def probe_models(self, candidates: list[str]) -> dict[str, Any]:
+        """Aliases this CLI knows (each follows its newest model) + which pinned `candidates` it recognises."""
+        text = self._slash("/model", self.config.model or None)
+        if text is None:
+            raise RuntimeError("claude /model 没有输出")
+        avail = re.search(r"Available:\s*(.+)", text)
+        aliases = []
+        for a in (avail.group(1).split(",") if avail else []):
+            a = a.strip().rstrip(".")
+            if a and not a.startswith("or ") and " " not in a and a not in PROBE_SKIP_ALIASES:
+                aliases.append(a)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            alias_names = list(pool.map(lambda a: model_display_name(self._slash("/model", a)), aliases))
+            pinned_names = list(pool.map(lambda i: model_display_name(self._slash(f"/model {i}")), candidates))
+        seen: set[str] = set()
+        out_aliases = []
+        for a, name in zip(aliases, alias_names, strict=True):
+            if name and name not in seen:  # "best" and "fable" are both Fable 5.1: keep the first
+                seen.add(name)
+                out_aliases.append({"id": a, "name": name})
+        pinned = [{"id": i, "name": n} for i, n in zip(candidates, pinned_names, strict=True) if n]
+        return {"cli_version": self.cli_version(), "default_name": model_display_name(text) or "",
+                "aliases": out_aliases, "pinned": pinned}
+
+    def _probe_and_report(self) -> None:
+        try:
+            report = self.probe_models(self.client.model_candidates())
+            self.client.report_models(report)
+            self._probed_version = report["cli_version"]
+            self._next_probe = time.monotonic() + self.config.model_probe_interval
+            log.info("models reported: %d aliases, %d pinned (%s)", len(report["aliases"]), len(report["pinned"]), report["cli_version"])
+        except Exception as e:
+            self._next_probe = time.monotonic() + self.config.version_check_interval  # retry later, not every loop
+            log.warning("model probe failed: %s", e)
+
+    def maybe_probe_models(self, *, block: bool = False) -> None:
+        """Probe in the background on start, every `model_probe_interval`, and when `claude --version` changes."""
+        if not self.config.model_probe:
+            return
+        with self._probe_lock:
+            if self._probe_thread and self._probe_thread.is_alive():
+                return
+            now = time.monotonic()
+            if now >= self._next_version_check and self._probed_version is not None:
+                self._next_version_check = now + self.config.version_check_interval
+                if self.cli_version() != self._probed_version:
+                    log.info("claude CLI version changed; re-probing models")
+                    self._next_probe = 0.0
+            if now < self._next_probe:
+                return
+            self._next_probe = now + self.config.model_probe_interval  # claimed; _probe_and_report sets the real value
+            self._probe_thread = threading.Thread(target=self._probe_and_report, name="model-probe", daemon=True)
+            self._probe_thread.start()
+        if block:
+            self._probe_thread.join()
 
     def context_report(self, session_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """`claude -p "/context" --resume` is computed locally: no API call, no cost, ~1 s."""
@@ -376,6 +468,15 @@ class Emitter:
             if self.flush():
                 return
             time.sleep(max(0.0, self.retry_at - time.time()))
+
+
+PROBE_SKIP_ALIASES = {"default", "opusplan"}  # "default" is our "" choice; opusplan only matters in plan mode
+
+
+def model_display_name(text: str | None) -> str | None:
+    """'Current model: <backticked name>' or 'Set model to <backticked name>' → the name; '… not found' → None."""
+    m = re.search(r"(?:Current model|Set model to)[^`]*`([^`]+)`", text or "")
+    return m.group(1).strip() if m else None
 
 
 def stream_json_user_message(text: str, images: list[dict[str, str]]) -> str:
