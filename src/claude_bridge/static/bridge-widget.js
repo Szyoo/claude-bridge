@@ -473,6 +473,26 @@ export function popShell(pop, title, onClose) {
 
 // iOS Safari fires no `click` for taps on non-interactive elements, so "tap outside to close" has to listen to
 // pointerdown. `keep` = selector of elements that must not dismiss (the popovers themselves and their toggles).
+// Freeze the page behind a modal sheet. iOS Safari ignores overflow:hidden on <body> for touch scrolling,
+// so pin the body with position:fixed at the current offset and put the offset back on release.
+// Idempotent: safe to call setScrollLock(false) from every close path.
+let scrollLock = null;
+export function setScrollLock(on) {
+  if (!!on === !!scrollLock) return;
+  const b = document.body, h = document.documentElement;
+  if (on) {
+    scrollLock = { y: window.scrollY, x: window.scrollX, body: b.style.cssText, html: h.style.overscrollBehavior };
+    Object.assign(b.style, { position: 'fixed', top: `-${scrollLock.y}px`, left: `-${scrollLock.x}px`, right: '0', overflow: 'hidden' });
+    h.style.overscrollBehavior = 'none';   // no rubber-band of the whole viewport either
+  } else {
+    const { x, y, body, html } = scrollLock; scrollLock = null;
+    b.style.cssText = body; h.style.overscrollBehavior = html;
+    window.scrollTo({ left: x, top: y, behavior: 'instant' });
+  }
+}
+// Lock only when the popover is acting as a modal sheet (its scrim is visible = narrow screens).
+export const lockIfModal = (scrim) => setScrollLock(getComputedStyle(scrim).display !== 'none');
+
 export function onOutsidePointer(keep, close) {
   const h = (e) => { if (!e.target.closest(keep)) close(); };
   document.addEventListener('pointerdown', h);
@@ -704,11 +724,11 @@ export function mountBridgeWidget(el, client, opts = {}) {
       renderPrefsPanel(body.querySelector('.ui'), prefs, { onChange: (_, key) => usePrefs(key) });
       const c = body.querySelector('.chat'); if (c) c.innerHTML = settingsHtml();
     } else renderSessionPanel(ctxBody(), summary(), ctxActions());
-    scrim.hidden = false;
+    scrim.hidden = false; lockIfModal(scrim);
     placePopover(anchor, p, { align: kind === 'prefs' ? 'start' : 'end' });
   }
   function ctxBody() { return pops.ctx.querySelector('.bridge-pop-body') || popShell(pops.ctx, '当前会话', closePops); }
-  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) menu.hidden = true; scrim.hidden = true; }
+  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) menu.hidden = true; scrim.hidden = true; setScrollLock(false); }
   scrim.addEventListener('click', closePops);
 
   // ---------- actions ----------
@@ -776,7 +796,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       state.sub?.close();
       offOutside(); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
       for (const p of Object.values(pops)) p.remove();
-      menu?.remove(); scrim.remove();
+      menu?.remove(); scrim.remove(); setScrollLock(false);
       el.innerHTML = '';
     },
     openThread,

@@ -250,7 +250,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
   .bridge-input { font-size: max(16px, 1em); } /* iOS zooms into inputs smaller than 16px */
   .bridge-bar [data-set="effort"] { display: none; }
   .bridge-pop { left: 0 !important; right: 0; top: auto !important; bottom: 0; max-width: none; max-height: 80vh; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
-  .bridge-scrim { display: block; position: fixed; inset: 0; z-index: 49; background: rgba(0, 0, 0, .28); }
+  .bridge-scrim { display: block; position: fixed; inset: 0; z-index: 49; background: rgba(0, 0, 0, .28); touch-action: none; }
   /* the grip marks the head as swipe-down-able */
   .bridge-pop-head { padding-top: 12px; }
   .bridge-pop-grip { display: block; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--bridge-muted); opacity: .45; }
