@@ -344,7 +344,8 @@ class StreamState:
         if not text.strip():
             return []
         t, truncated = truncate(text, self.thinking_max)
-        return [("event", {"type": "thinking", "data": {"text": t, "truncated": truncated}})]
+        # `at` = how much answer text had streamed when this block closed; the browser interleaves it at that point
+        return [("event", {"type": "thinking", "data": {"text": t, "truncated": truncated, "at": self.text_total}})]
 
     # ---------------- end of run ----------------
 

@@ -159,7 +159,7 @@ def test_stream_state_thinking_and_prefix_extension():
     ]
     st, out = feed_all(seq, thinking_max=4)
     th = events(out, "thinking")
-    assert len(th) == 1 and th[0]["data"] == {"text": "想一想再\n…", "truncated": True}
+    assert len(th) == 1 and th[0]["data"] == {"text": "想一想再\n…", "truncated": True, "at": 0}
     assert deltas(out) == ["hel", "lo", "\n\n", "tail", "\n\n"]
     assert st.text == "hello\n\ntail\n\n"
 

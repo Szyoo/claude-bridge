@@ -1,5 +1,10 @@
 // Reference chat UI for claude-bridge. Framework-free; all styling via bridge-widget.css (--bridge-* tokens).
-// mountBridgeWidget(el, client, opts) -> { destroy(), openThread(id), refresh() }
+//
+// Exports, roughly in layers a host can pick from:
+//   pure helpers   describeTool, sessionSummary, splitTurn, DEFAULT_PREFS, loadPrefs, savePrefs
+//   renderers      renderTurn, renderSteps, renderContextPanel, renderSessionPanel, renderPrefsPanel, applyPrefs, placePopover
+//   full widget    mountBridgeWidget(el, client, opts) -> { destroy(), openThread(id), refresh() }
+// Renderers emit `bridge-*` structural class names; a host either loads bridge-widget.css or skins those classes itself.
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -37,6 +42,29 @@ function fmtReset(ts) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// Server timestamps are UTC 'YYYY-MM-DD HH:MM:SS'; show local HH:MM, with the date when it is not today.
+export function fmtTime(utc, now = new Date()) {
+  if (!utc) return '';
+  const d = new Date(String(utc).replace(' ', 'T') + (/Z$|[+-]\d\d:?\d\d$/.test(utc) ? '' : 'Z'));
+  if (Number.isNaN(d.getTime())) return '';
+  const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
+// 「昨天 / 3 天前」式的相对日期，给对话列表用
+export function fmtRelative(utc, now = new Date()) {
+  if (!utc) return '';
+  const d = new Date(String(utc).replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return '';
+  const day = (x) => Math.floor((x - x.getTimezoneOffset() * 60000) / 86400000);
+  const diff = day(now) - day(d);
+  if (diff <= 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diff === 1) return '昨天';
+  if (diff < 7) return `${diff} 天前`;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 export const CONTEXT_HELP = '当前会话上下文 = 每次请求送给模型的全部内容：系统提示、工具定义、对话历史、工具输出。'
   + '越大每次回答越慢越贵；接近上限时 Claude Code 会自动压缩历史（保留摘要），也可手动压缩；新开对话则归零。';
 
@@ -54,9 +82,10 @@ export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS, con
   if (model) parts.push({ key: 'model', label: model.replace(/^claude-/, ''), title: '上一条回答使用的模型' });
   // context occupancy: prefer the exact /context report, else the last request's input+cache size
   const used = context?.used ?? usage?.context_tokens ?? null;
+  let pct = null;
   if (used) {
     const win = context?.window || contextWindow(model, contextWindows, used);
-    const pct = Math.min(100, Math.round(used / win * 100));
+    pct = Math.min(100, Math.round(used / win * 100));
     const thr = context?.autocompact_pct;
     parts.push({
       key: 'context', label: `当前会话上下文 ${fmtTokens(used)}/${fmtTokens(win)} · ${pct}%`, bar: pct, clickable: true,
@@ -75,12 +104,12 @@ export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS, con
   }
   const win = (w, name) => {
     if (w?.utilization == null) return;
-    const pct = Math.round(w.utilization * 100);
-    parts.push({ key: name, label: `${name} 已用 ${pct}%`, bar: pct, title: `订阅的${name}滚动窗口已用 ${pct}%，${fmtReset(w.resets_at)} 重置（来自 claude 命令行自己报告的限额）` });
+    const p = Math.round(w.utilization * 100);
+    parts.push({ key: name, label: `${name} 已用 ${p}%`, bar: p, title: `订阅的${name}滚动窗口已用 ${p}%，${fmtReset(w.resets_at)} 重置（来自 claude 命令行自己报告的限额）` });
   };
   win(rate?.five_hour, '5 小时额度');
   win(rate?.seven_day, '7 天额度');
-  return { model, usage, rate, context, parts };
+  return { model, usage, rate, context, parts, pct };
 }
 
 const CATEGORY_ZH = {
@@ -121,51 +150,361 @@ export function renderContextPanel(el, ctx, opts = {}) {
   el.querySelector('[data-ctx="compact"]')?.addEventListener('click', () => { if (confirm('让 Claude 把这段对话的历史压缩成摘要？细节会丢失，但上下文会明显变小。')) opts.onCompact?.(); });
 }
 
+// Bottom popover body: the session numbers (model / turns / io / quotas) above the /context breakdown.
+// `summary` is a sessionSummary() result; ctxOpts go to renderContextPanel.
+export function renderSessionPanel(el, summary, ctxOpts = {}) {
+  const rows = (summary?.parts || []).filter(p => p.key !== 'context').map(p =>
+    `<div class="bridge-sess-row" title="${esc(p.title || '')}"><span>${esc(p.label)}</span>${p.bar != null ? `<span class="bridge-meter${p.bar >= 80 ? ' hot' : ''}"><i style="width:${p.bar}%"></i></span>` : ''}</div>`).join('');
+  el.innerHTML = `<div class="bridge-sess">${rows || '<div class="bridge-sess-row bridge-muted">还没有会话数据：回答一次后出现</div>'}</div><div class="bridge-sess-ctx"></div>`;
+  renderContextPanel(el.querySelector('.bridge-sess-ctx'), summary?.context, ctxOpts);
+}
+
 export function describeCompact(d) {
   return `已${d.trigger === 'auto' ? '自动' : '手动'}压缩会话：${fmtTokens(d.pre_tokens)} → ${fmtTokens(d.post_tokens)}`;
 }
 
+// ============================================================
+// Turn splitting: interleave tool groups with the answer text in real order.
+// Each tool_use / thinking event carries `at` = answer chars streamed when it happened; we cut the
+// markdown at the next paragraph boundary (`\n\n`, never inside a fenced code block) and put the
+// group there. Adjacent groups with no text between merge (→ "执行了 N 条命令").
+// ============================================================
+
+function fenceRanges(text) {
+  const ranges = []; const re = /^ {0,3}(`{3,}|~{3,})/gm; let open = null, m;
+  while ((m = re.exec(text))) {
+    if (!open) open = { pos: m.index, fence: m[1] };
+    else if (m[1][0] === open.fence[0] && m[1].length >= open.fence.length) { ranges.push([open.pos, m.index + m[0].length]); open = null; }
+  }
+  if (open) ranges.push([open.pos, text.length]);
+  return ranges;
+}
+const inRanges = (ranges, i) => ranges.some(([a, b]) => i >= a && i < b);
+
+// Python counted code points; JS indexes UTF-16 units. Only differs when astral chars (emoji) precede `cp`.
+function cpIndex(text, cp) {
+  let i = 0, n = 0;
+  while (i < text.length && n < cp) { i += text.codePointAt(i) > 0xffff ? 2 : 1; n++; }
+  return i;
+}
+
+// → [{kind:'text', text}, {kind:'steps', items:[…]}, …]; items: {kind:'tool'|'thinking'|'trace'|'note', …}
+export function splitTurn(content, events) {
+  content = content || '';
+  const items = []; const byTool = new Map(); const END = Infinity;
+  for (const ev of events || []) {
+    const d = ev.data || {};
+    switch (ev.type) {
+      case 'tool_use': { const it = { kind: 'tool', id: d.id || '', name: d.name || '?', input: d.input || {}, result: null, at: d.at ?? 0 }; items.push(it); if (d.id) byTool.set(d.id, it); break; }
+      case 'tool_result': { const it = byTool.get(d.tool_use_id); if (it) it.result = d; break; }
+      case 'thinking': items.push({ kind: 'thinking', text: d.text || '', truncated: !!d.truncated, at: d.at ?? 0 }); break;
+      case 'compact': items.push({ kind: 'note', sub: 'compact', text: describeCompact(d), at: 0 }); break;
+      case 'error': items.push({ kind: 'note', sub: 'error', text: d.message || '出错', at: END }); break;
+      case 'status':
+        if (d.phase === 'legacy_trace') items.push({ kind: 'trace', text: d.text || '', at: END });
+        else if (d.phase === 'cancel_requested') items.push({ kind: 'note', sub: 'cancel', text: '已请求停止…', at: END });
+        break;
+      default: break;
+    }
+  }
+  if (!items.length) return content ? [{ kind: 'text', text: content }] : [];
+  items.sort((a, b) => a.at - b.at);
+  const fences = fenceRanges(content);
+  const astral = /[\uD800-\uDBFF]/.test(content);
+  const segs = []; let pos = 0;
+  const pushText = (to) => { if (to > pos) { segs.push({ kind: 'text', text: content.slice(pos, to) }); pos = to; } };
+  for (const it of items) {
+    let cut;
+    if (it.at === END) cut = content.length;
+    else {
+      const i = Math.min(astral ? cpIndex(content, it.at) : it.at, content.length);
+      if (i <= pos) cut = pos;
+      else if (i >= content.length) cut = content.length;
+      else if (content.slice(i - 2, i) === '\n\n' && !inRanges(fences, i)) cut = i;
+      else {
+        let j = content.indexOf('\n\n', i);
+        while (j !== -1 && inRanges(fences, j)) j = content.indexOf('\n\n', j + 2);
+        cut = j === -1 ? content.length : j + 2;
+      }
+    }
+    pushText(cut);
+    const last = segs[segs.length - 1];
+    if (last?.kind === 'steps') last.items.push(it); else segs.push({ kind: 'steps', items: [it] });
+  }
+  pushText(content.length);
+  return segs;
+}
+
+// ---------- step rows (collapsed grey lines) ----------
+
+const firstLine = (t, n = 72) => { const s = (t || '').trim().split('\n')[0]; return s.length > n ? s.slice(0, n) + '…' : s; };
+
+function toolRow(it, o) {
+  const running = !it.result && o.streaming;
+  const err = !!it.result?.is_error;
+  const state = running ? '<i class="bridge-run"></i>' : err ? '<span class="bridge-step-state err">失败</span>' : it.result ? '' : '<span class="bridge-step-state">无结果</span>';
+  const out = it.result ? (it.result.content || '(无输出)') + (it.result.truncated ? '\n…（输出已截断）' : '') : running ? '运行中…' : '';
+  const cmd = it.name === 'Bash' ? `$ ${it.input.command || ''}` : JSON.stringify(it.input, null, 1);
+  return `<details class="bridge-step tool${running ? ' running' : ''}${err ? ' error' : ''}" data-k="${esc(it.id)}"${o.open ? ' open' : ''}>`
+    + `<summary><i class="bridge-caret"></i><span class="bridge-step-name">${esc(it.name)}</span><span class="bridge-step-desc">${esc(describeTool(it))}</span>${state}</summary>`
+    + `<div class="bridge-term"><pre class="cmd">${esc(cmd)}</pre>${out ? `<pre class="out">${esc(out)}</pre>` : ''}</div></details>`;
+}
+
+function toolGroup(run, o, key) {
+  const done = run.filter(t => t.result).length, n = run.length;
+  const running = o.streaming && done < n;
+  const err = run.some(t => t.result?.is_error);
+  const allBash = run.every(t => t.name === 'Bash');
+  const label = running ? `执行中 · ${done}/${n}` : allBash ? `执行了 ${n} 条命令` : `${n} 次工具调用`;
+  const state = running ? '<i class="bridge-run"></i>' : err ? '<span class="bridge-step-state err">有失败</span>' : '';
+  return `<details class="bridge-step group${running ? ' running' : ''}${err ? ' error' : ''}" data-k="${esc(key)}"${o.open ? ' open' : ''}>`
+    + `<summary><i class="bridge-caret"></i><span class="bridge-step-name">${label}</span>${state}</summary>`
+    + `<div class="bridge-step-list">${run.map(t => toolRow(t, o)).join('')}</div></details>`;
+}
+
+// items → HTML. opts: { streaming, open (expand by default), key (stable prefix for data-k) }
+export function stepsHtml(items, opts = {}) {
+  const o = { streaming: false, open: false, key: 's', ...opts };
+  const out = []; let i = 0;
+  while (i < items.length) {
+    const it = items[i];
+    if (it.kind === 'tool') {
+      let j = i; while (j < items.length && items[j].kind === 'tool') j++;
+      const run = items.slice(i, j);
+      out.push(run.length >= 2 ? toolGroup(run, o, `g:${run[0].id || `${o.key}-${i}`}`) : toolRow(run[0], o));
+      i = j; continue;
+    }
+    if (it.kind === 'thinking') {
+      out.push(`<details class="bridge-step thinking" data-k="${o.key}-t${i}"${o.open ? ' open' : ''}><summary><i class="bridge-caret"></i><span class="bridge-step-name">思考过程</span><span class="bridge-step-desc">${esc(firstLine(it.text))}</span></summary>`
+        + `<div class="bridge-step-body">${esc(it.text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`);
+    } else if (it.kind === 'trace') {
+      out.push(`<details class="bridge-step trace" data-k="${o.key}-r${i}"><summary><i class="bridge-caret"></i><span class="bridge-step-name">执行轨迹</span></summary><div class="bridge-term"><pre class="out">${esc(it.text)}</pre></div></details>`);
+    } else if (it.kind === 'note') {
+      out.push(`<div class="bridge-note${it.sub === 'error' ? ' error' : ''}">${esc(it.text)}</div>`);
+    }
+    i++;
+  }
+  return out.join('');
+}
+
+export function renderSteps(el, items, opts = {}) { el.innerHTML = stepsHtml(items, opts); }
+
+function messageModel(m) {
+  let model = '';
+  for (const ev of m.events || []) if ((ev.type === 'init' || ev.type === 'usage') && ev.data?.model) model = ev.data.model;
+  return model.replace(/^claude-/, '');
+}
+
+// Renders one message into `el` (a .bridge-turn). Re-rendering keeps the user's expand/collapse choices.
+// opts: { markdown, head (speaker line), timestamps, open (tools expanded by default), strings }
+export function renderTurn(el, m, opts = {}) {
+  const o = { markdown: defaultMarkdown, head: true, timestamps: true, open: false, strings: {}, ...opts };
+  const S = { me: '我', assistant: 'Claude', waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', ...o.strings };
+  el.className = `bridge-turn ${m.role} ${m.status || 'done'}`;
+  el.dataset.id = m.id;
+  if (m.role === 'system') { el.textContent = m.content || ''; return; }
+  const opened = new Set(), closed = new Set();
+  for (const d of el.querySelectorAll('details[data-k]')) (d.open ? opened : closed).add(d.dataset.k);
+  const time = o.timestamps ? fmtTime(m.created_at) : '';
+  let head = '';
+  if (o.head) {
+    const meta = m.role === 'user' ? [time] : [messageModel(m), time];
+    head = `<div class="bridge-turn-head"><span class="bridge-who ${m.role}">${esc(m.role === 'user' ? S.me : S.assistant)}</span>`
+      + `<span class="bridge-turn-meta">${meta.filter(Boolean).map(esc).join(' · ')}</span></div>`;
+  }
+  let body;
+  if (m.role === 'user') body = `<div class="bridge-user-text">${esc(m.content || '')}</div>`;
+  else {
+    const streaming = m.status === 'pending' || m.status === 'streaming';
+    const segs = splitTurn(m.content || '', m.events || []);
+    body = segs.map((s, i) => s.kind === 'text'
+      ? `<div class="bridge-md">${o.markdown(s.text)}</div>`
+      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, open: o.open, key: `s${i}` })}</div>`).join('');
+    if (streaming && !segs.length) body = `<div class="bridge-wait">${esc(m.status === 'pending' ? S.waitingHelper : S.thinking)}</div>`;
+  }
+  el.innerHTML = head + `<div class="bridge-turn-body">${body}</div>`;
+  for (const d of el.querySelectorAll('details[data-k]')) { const k = d.dataset.k; if (opened.has(k)) d.open = true; else if (closed.has(k)) d.open = false; }
+}
+
+// ============================================================
+// Per-device UI preferences (localStorage). Hosts may extend the object with their own keys.
+// ============================================================
+
+export const DEFAULT_PREFS = {
+  scale: 1,           // 文字大小倍数 0.85–1.4
+  density: 'cozy',    // compact 13px / cozy 14px / roomy 16px（同客户端三档）
+  width: 'cozy',      // 正文宽度 cozy(68ch) / full
+  sendKey: 'enter',   // enter = Enter 发送、Shift+Enter 换行；mod = ⌘/Ctrl+Enter 发送
+  timestamps: true,
+  toolsOpen: false,   // 工具调用默认展开
+  codeWrap: false,    // 代码块自动换行
+  sidebar: true,      // 桌面端对话列表
+  height: 72,         // 聊天区高度 vh
+  sideW: null,        // 侧栏宽度 px（拖过才有）
+  inputH: null,       // 输入框高度 px（拖过才有；有值就不再自动长高）
+};
+export const DENSITY_PX = { compact: 13, cozy: 14, roomy: 16 };
+const clamp = (v, lo, hi, d) => { v = Number(v); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; };
+
+export function sanitizePrefs(p, defaults = DEFAULT_PREFS) {
+  const o = { ...defaults, ...(p && typeof p === 'object' ? p : {}) };
+  o.scale = clamp(o.scale, 0.85, 1.4, defaults.scale);
+  o.height = clamp(o.height, 50, 95, defaults.height);
+  if (!(o.density in DENSITY_PX)) o.density = defaults.density;
+  if (!['cozy', 'full'].includes(o.width)) o.width = defaults.width;
+  if (!['enter', 'mod'].includes(o.sendKey)) o.sendKey = defaults.sendKey;
+  o.sideW = o.sideW == null ? null : clamp(o.sideW, 180, 480, null);
+  o.inputH = o.inputH == null ? null : clamp(o.inputH, 40, 600, null);
+  for (const k of ['timestamps', 'toolsOpen', 'codeWrap', 'sidebar']) o[k] = !!o[k];
+  return o;
+}
+export function loadPrefs(key = 'bridge_ui', defaults = DEFAULT_PREFS) {
+  let raw = null;
+  try { raw = localStorage.getItem(key); } catch { /* private mode / blocked */ }
+  let p = {};
+  if (raw) { try { p = JSON.parse(raw); } catch { p = {}; } }
+  return sanitizePrefs(p, defaults);
+}
+export function savePrefs(prefs, key = 'bridge_ui') { try { localStorage.setItem(key, JSON.stringify(prefs)); } catch { /* ignore */ } }
+
+// Pushes prefs onto the chat root as CSS variables + classes; the stylesheet does the rest.
+export function applyPrefs(root, prefs) {
+  root.style.setProperty('--chat-scale', String(prefs.scale));
+  root.style.setProperty('--chat-density-px', `${DENSITY_PX[prefs.density] || 14}px`);
+  root.style.setProperty('--chat-height', `${prefs.height}vh`);
+  if (prefs.sideW) root.style.setProperty('--chat-side-w', `${prefs.sideW}px`); else root.style.removeProperty('--chat-side-w');
+  root.dataset.density = prefs.density;
+  root.dataset.width = prefs.width;
+  root.classList.toggle('tools-open', !!prefs.toolsOpen);
+  root.classList.toggle('code-wrap', !!prefs.codeWrap);
+  root.classList.toggle('no-time', !prefs.timestamps);
+  root.classList.toggle('side-hidden', !prefs.sidebar);
+}
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+export const MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
+export const sendHint = (prefs) => prefs.sendKey === 'mod' ? `${MOD_KEY}+Enter 发送，Enter 换行` : 'Enter 发送，Shift+Enter 换行';
+// true when this keydown should send under the current preference
+export function isSendKey(e, prefs) {
+  if (e.key !== 'Enter' || e.isComposing) return false;
+  return prefs.sendKey === 'mod' ? !!(e.metaKey || e.ctrlKey) : !(e.shiftKey || e.metaKey || e.ctrlKey || e.altKey);
+}
+
+export const PREF_FIELDS = [
+  { key: 'scale', type: 'range', label: '文字大小', min: 0.85, max: 1.4, step: 0.05, fmt: v => `${Math.round(v * 100)}%` },
+  { key: 'density', type: 'chips', label: '消息密度', hint: '行距、间距和控件高度一起变', options: [['compact', '紧凑'], ['cozy', '舒适'], ['roomy', '宽松']] },
+  { key: 'width', type: 'chips', label: '正文宽度', options: [['cozy', '舒适'], ['full', '全宽']] },
+  { key: 'sendKey', type: 'chips', label: '发送键', options: [['enter', 'Enter'], ['mod', `${MOD_KEY} + Enter`]] },
+  { key: 'timestamps', type: 'switch', label: '显示时间' },
+  { key: 'toolsOpen', type: 'switch', label: '工具调用默认展开' },
+  { key: 'codeWrap', type: 'switch', label: '代码块自动换行' },
+  { key: 'sidebar', type: 'switch', label: '对话列表', hint: '桌面端左侧栏；手机上用 ☰', desktop: true },
+  { key: 'height', type: 'range', label: '聊天区高度', min: 50, max: 95, step: 1, fmt: v => `${v}vh` },
+];
+const PREF_CLASSES = { root: 'bridge-prefs', col: 'bridge-pref-col', row: 'bridge-pref-row', label: 'bridge-pref-label', hint: 'bridge-pref-hint', value: 'bridge-pref-value', chips: 'bridge-chips', chip: 'bridge-chip', chipActive: 'active', switch: 'bridge-switch', range: 'bridge-range' };
+
+// Renders the preference controls into `el` and mutates `prefs` in place as the user changes them.
+// opts: { onChange(prefs, key), classes (override structural class names, e.g. with a design system's), fields (keys to show) }
+export function renderPrefsPanel(el, prefs, opts = {}) {
+  const C = { ...PREF_CLASSES, ...(opts.classes || {}) };
+  const fields = PREF_FIELDS.filter(f => !opts.fields || opts.fields.includes(f.key));
+  const label = (f) => `<span class="${C.label}">${esc(f.label)}${f.hint ? `<span class="${C.hint}">${esc(f.hint)}</span>` : ''}</span>`;
+  el.innerHTML = `<div class="${C.root}">` + fields.map((f) => {
+    if (f.type === 'range') return `<div class="${C.col}" data-field="${f.key}"><div class="${C.row}">${label(f)}<span class="${C.value}">${esc(f.fmt(prefs[f.key]))}</span></div>`
+      + `<input type="range" class="${C.range}" data-pref="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${prefs[f.key]}" /></div>`;
+    if (f.type === 'chips') return `<div class="${C.row}" data-field="${f.key}">${label(f)}<div class="${C.chips}">${f.options.map(([v, t]) =>
+      `<button type="button" class="${C.chip}${prefs[f.key] === v ? ` ${C.chipActive}` : ''}" data-pref="${f.key}" data-val="${esc(v)}">${esc(t)}</button>`).join('')}</div></div>`;
+    return `<label class="${C.row}" data-field="${f.key}">${label(f)}<input type="checkbox" class="${C.switch}" data-pref="${f.key}"${prefs[f.key] ? ' checked' : ''} /></label>`;
+  }).join('') + '</div>';
+  const changed = (key) => opts.onChange?.(prefs, key);
+  el.addEventListener('input', (e) => {
+    const t = e.target; if (t.type !== 'range' || !t.dataset.pref) return;
+    const f = fields.find(x => x.key === t.dataset.pref); prefs[f.key] = Number(t.value);
+    const v = el.querySelector(`[data-field="${f.key}"] .${C.value.split(' ')[0]}`); if (v) v.textContent = f.fmt(prefs[f.key]);
+    changed(f.key);
+  });
+  el.addEventListener('change', (e) => { const t = e.target; if (t.type === 'checkbox' && t.dataset.pref) { prefs[t.dataset.pref] = t.checked; changed(t.dataset.pref); } });
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-pref][data-val]'); if (!b) return;
+    prefs[b.dataset.pref] = b.dataset.val;
+    for (const x of el.querySelectorAll(`[data-pref="${b.dataset.pref}"][data-val]`)) x.classList.toggle(C.chipActive, x === b);
+    changed(b.dataset.pref);
+  });
+}
+
+// Fixed-position popover next to `anchor` (above it when there is no room below). Narrow screens: the
+// stylesheet turns .bridge-pop into a bottom sheet and ignores these coordinates.
+export function placePopover(anchor, pop, { gap = 6, align = 'end' } = {}) {
+  pop.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  let left = align === 'end' ? r.right - w : r.left;
+  left = Math.max(8, Math.min(left, innerWidth - w - 8));
+  const below = r.bottom + gap + h <= innerHeight - 8;
+  const top = Math.min(innerHeight - h - 8, below ? r.bottom + gap : Math.max(8, r.top - gap - h));
+  pop.style.left = `${left}px`; pop.style.top = `${top}px`;
+  pop.classList.toggle('above', !below);
+}
+
+// Drag helper for resizers: onMove(dx, dy) per pointer move, onEnd() once. Returns a disposer.
+export function attachDrag(handle, onMove, onEnd) {
+  let sx = 0, sy = 0, active = false;
+  const move = (e) => { if (active) { onMove(e.clientX - sx, e.clientY - sy); e.preventDefault(); } };
+  const up = () => { if (!active) return; active = false; document.body.classList.remove('bridge-dragging'); onEnd?.(); };
+  const down = (e) => { if (e.button) return; active = true; sx = e.clientX; sy = e.clientY; handle.setPointerCapture?.(e.pointerId); document.body.classList.add('bridge-dragging'); e.preventDefault(); };
+  handle.addEventListener('pointerdown', down); handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+  return () => { handle.removeEventListener('pointerdown', down); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); };
+}
+
+// ============================================================
+// Reference widget
+// ============================================================
+
 export function mountBridgeWidget(el, client, opts = {}) {
   const o = {
     scope: '', title: 'Claude', markdown: defaultMarkdown, showThreads: true, showSettings: true,
-    contextWindows: CONTEXT_WINDOWS, placeholder: '输入消息，Enter 发送，Shift+Enter 换行',
-    strings: {}, ...opts,
+    contextWindows: CONTEXT_WINDOWS, placeholder: '输入消息', prefsKey: 'bridge_ui', strings: {}, ...opts,
   };
-  const S = { threadTitle: '新对话', helperOn: 'helper 在线', helperOff: 'helper 离线：消息会排队', polling: '轮询模式',
+  const S = { threadTitle: '新对话', helperOff: 'helper 离线：消息会排队', polling: '轮询模式',
     waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', empty: '问点什么吧', newThread: '＋ 新对话',
-    rename: '重命名', pin: '置顶', del: '删除这个对话？', ctx: '自动带背景', stop: '停止', ...o.strings };
+    rename: '重命名', pin: '置顶', unpin: '取消置顶', del: '删除对话', delConfirm: '删除这个对话？消息记录会一起删除。', stop: '停止', me: '我', assistant: 'Claude',
+    ctx: '自动带背景', ...o.strings };
+  const prefs = loadPrefs(o.prefsKey);
 
   el.innerHTML = `
     <div class="bridge ${o.showThreads ? '' : 'no-side'}">
-      ${o.showThreads ? `<aside class="bridge-side"><button type="button" class="bridge-btn" data-act="new">${esc(S.newThread)}</button><div class="bridge-threads"></div></aside>` : ''}
+      ${o.showThreads ? `<aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="new">${esc(S.newThread)}</button><div class="bridge-threads"></div><div class="bridge-side-grip" title="拖动调整宽度"></div></aside>` : ''}
       <div class="bridge-main">
         <div class="bridge-top">
-          <span class="bridge-dot" title="helper"></span>
+          ${o.showThreads ? '<button type="button" class="bridge-icon" data-act="side" title="对话列表">☰</button>' : ''}
           <span class="bridge-title">${esc(o.title)}</span>
-          <span class="bridge-tiny bridge-muted bridge-agent"></span>
-          ${o.showThreads ? `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-act="rename" title="${esc(S.rename)}">✎</button>
-          <button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-act="pin" title="${esc(S.pin)}">📌</button>
-          <button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny bridge-btn-danger" data-act="del" title="${esc(S.del)}">🗑</button>` : ''}
-          <div class="bridge-session"></div>
-          <div class="bridge-ctxpanel" hidden></div>
+          <span class="bridge-agent"><i class="bridge-dot"></i><span class="txt"></span></span>
+          ${o.showThreads ? `<button type="button" class="bridge-icon" data-act="menu" title="更多">⋯</button>
+          <div class="bridge-menu" hidden><button type="button" data-act="rename">${esc(S.rename)}</button><button type="button" data-act="pin">${esc(S.pin)}</button><button type="button" class="danger" data-act="del">${esc(S.del)}</button></div>` : ''}
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
         <form class="bridge-form">
-          <textarea class="bridge-input" rows="2" placeholder="${esc(o.placeholder)}"></textarea>
+          <div class="bridge-grip" title="拖动调整输入框高度，双击恢复自动"></div>
+          <textarea class="bridge-input" rows="1" placeholder="${esc(o.placeholder)}"></textarea>
           <div class="bridge-bar">
-            ${o.showSettings ? `<label class="bridge-tiny bridge-muted"><input type="checkbox" data-set="auto_context" /> ${esc(S.ctx)}</label>` : ''}
+            <button type="button" class="bridge-icon" data-act="prefs" title="设置">⚙</button>
             <span class="grow"></span>
-            ${o.showSettings ? `<select class="bridge-pick" data-set="effort"></select><select class="bridge-pick" data-set="model"></select>` : ''}
+            ${o.showSettings ? `<select class="bridge-pick" data-set="effort" title="思考深度"></select><select class="bridge-pick" data-set="model" title="模型"></select>` : ''}
+            <button type="button" class="bridge-pill" data-act="ctx" hidden title="当前会话上下文占用，点开看构成与额度"><span class="pct"></span><i class="ring"></i></button>
             <button type="button" class="bridge-btn bridge-stop" hidden title="${esc(S.stop)}">■</button>
             <button type="submit" class="bridge-btn bridge-send" title="发送">↑</button>
           </div>
         </form>
       </div>
     </div>`;
+  const root = el.firstElementChild;
+  const pops = { prefs: document.createElement('div'), ctx: document.createElement('div') };
+  for (const [k, p] of Object.entries(pops)) { p.className = `bridge-pop bridge-root pop-${k}`; p.hidden = true; document.body.appendChild(p); }
 
   const $ = (sel) => el.querySelector(sel);
-  const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop');
-  const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set() };
+  const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop'), pill = $('[data-act="ctx"]');
+  const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null };
 
   // ---------- helpers ----------
   let toastTimer;
@@ -177,119 +516,66 @@ export function mountBridgeWidget(el, client, opts = {}) {
   }
   const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 80;
   const scrollBottom = () => { list.scrollTop = list.scrollHeight; };
+  const placeholder = () => o.placeholder + (o.placeholder.includes('发送') ? '' : `，${sendHint(prefs)}`);
 
   function setPending(on) {
     state.inflight = on ? state.inflight : null;
     sendBtn.disabled = !!on;
     stopBtn.hidden = !on;
-    input.placeholder = on ? 'Claude 正在回答，稍等…' : o.placeholder;
+    input.placeholder = on ? 'Claude 正在回答，稍等…' : placeholder();
+  }
+
+  function usePrefs(key) {
+    applyPrefs(root, prefs);
+    savePrefs(prefs, o.prefsKey);
+    if (key === 'sendKey' || !key) input.placeholder = state.inflight ? input.placeholder : placeholder();
+    if (key === 'timestamps' || key === 'toolsOpen' || !key) for (const id of state.order) paint(id);
+    if (key === 'inputH' || !key) { if (prefs.inputH) { input.style.height = `${prefs.inputH}px`; input.classList.add('fixed'); } else { input.classList.remove('fixed'); autoGrow(); } }
   }
 
   // ---------- rendering ----------
-  function bubbleEl(m) {
-    const d = document.createElement('div');
-    d.className = `bridge-bubble ${m.role} ${m.status}`;
-    d.dataset.id = m.id;
-    if (m.role === 'assistant') d.innerHTML = '<div class="bridge-steps"></div><div class="bridge-md"></div><div class="bridge-wait" hidden></div>';
-    return d;
-  }
-
-  function renderStep(steps, ev) {
-    const d = ev.data || {};
-    if (ev.type === 'tool_use') {
-      const card = document.createElement('details');
-      card.className = 'bridge-card running';
-      card.dataset.tool = d.id;
-      card.innerHTML = `<summary><span class="name">${esc(d.name)}</span><span class="desc">${esc(describeTool(d))}</span><span class="state"></span></summary>` +
-        `<pre class="in">${esc(JSON.stringify(d.input, null, 1))}</pre><pre class="out" hidden></pre>`;
-      steps.appendChild(card);
-    } else if (ev.type === 'tool_result') {
-      const card = steps.querySelector(`.bridge-card[data-tool="${CSS.escape(d.tool_use_id || '')}"]`);
-      if (!card) return;
-      card.classList.remove('running');
-      card.classList.toggle('error', !!d.is_error);
-      card.querySelector('.state').textContent = d.is_error ? '失败' : '完成';
-      const out = card.querySelector('.out');
-      out.textContent = d.content || '(无输出)'; out.hidden = false;
-    } else if (ev.type === 'thinking') {
-      const card = document.createElement('details');
-      card.className = 'bridge-card';
-      card.innerHTML = `<summary><span class="name">思考</span><span class="desc bridge-muted">${esc((d.text || '').slice(0, 80))}</span></summary><pre>${esc(d.text || '')}</pre>`;
-      steps.appendChild(card);
-    } else if (ev.type === 'status' && d.phase === 'legacy_trace') {
-      const card = document.createElement('details');
-      card.className = 'bridge-card';
-      card.innerHTML = `<summary><span class="name">执行轨迹</span></summary><pre>${esc(d.text || '')}</pre>`;
-      steps.appendChild(card);
-    } else if (ev.type === 'status' && d.phase === 'cancel_requested') {
-      const n = document.createElement('div'); n.className = 'bridge-note'; n.textContent = '已请求停止…'; steps.appendChild(n);
-    } else if (ev.type === 'compact') {
-      const n = document.createElement('div'); n.className = 'bridge-note'; n.textContent = describeCompact(d); steps.appendChild(n);
-    } else if (ev.type === 'error') {
-      const n = document.createElement('div'); n.className = 'bridge-note error'; n.textContent = d.message || '出错'; steps.appendChild(n);
-    }
-  }
-
+  function turnEl(m) { const d = document.createElement('div'); d.className = `bridge-turn ${m.role}`; d.dataset.id = m.id; return d; }
   function paint(id) {
     const m = state.msgs.get(id); if (!m) return;
-    const b = list.querySelector(`.bridge-bubble[data-id="${id}"]`); if (!b) return;
-    b.className = `bridge-bubble ${m.role} ${m.status}`;
-    if (m.role !== 'assistant') { b.textContent = m.content; return; }
+    const b = list.querySelector(`.bridge-turn[data-id="${id}"]`); if (!b) return;
     const follow = nearBottom();
-    b.querySelector('.bridge-md').innerHTML = o.markdown(m.content || '');
-    const wait = b.querySelector('.bridge-wait');
-    const streaming = m.status === 'pending' || m.status === 'streaming';
-    wait.hidden = !(streaming && !m.content);
-    wait.textContent = m.status === 'pending' ? S.waitingHelper : S.thinking;
+    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, strings: { me: S.me, assistant: S.assistant, waitingHelper: S.waitingHelper, thinking: S.thinking } });
     if (follow) scrollBottom();
   }
-
   function schedulePaint(id) {
     state.dirty.add(id);
     if (state.raf) return;
     state.raf = requestAnimationFrame(() => { state.raf = null; for (const i of state.dirty) paint(i); state.dirty.clear(); });
   }
-
   function upsert(m) {
     const existed = state.msgs.has(m.id);
     if (existed) { const prev = state.msgs.get(m.id); m.events = m.events?.length ? m.events : prev.events; }
     state.msgs.set(m.id, m);
-    if (!existed) {
-      state.order.push(m.id);
-      list.querySelector('.bridge-empty')?.remove();
-      const b = bubbleEl(m);
-      list.appendChild(b);
-      if (m.role === 'assistant') for (const ev of m.events || []) renderStep(b.querySelector('.bridge-steps'), ev);
-    } else if (m.role === 'assistant') {
-      const steps = list.querySelector(`.bridge-bubble[data-id="${m.id}"] .bridge-steps`);
-      steps.innerHTML = '';
-      for (const ev of m.events || []) renderStep(steps, ev);
-    }
+    if (!existed) { state.order.push(m.id); list.querySelector('.bridge-empty')?.remove(); list.appendChild(turnEl(m)); }
     paint(m.id);
     if (!existed) scrollBottom();
   }
 
+  function summary() { return sessionSummary([...state.msgs.values()], { contextWindows: o.contextWindows, context: state.threadRow?.context }); }
   function renderSession() {
-    const box = $('.bridge-session');
-    const { parts } = sessionSummary([...state.msgs.values()], { contextWindows: o.contextWindows, context: state.threadRow?.context });
-    box.innerHTML = parts.map(p => `<span class="${p.clickable ? 'clickable' : ''}" data-key="${esc(p.key || '')}" title="${esc(p.title || '')}">${esc(p.label)}${p.bar != null ? ` <span class="bar${p.bar >= 80 ? ' hot' : ''}"><i style="width:${p.bar}%"></i></span>` : ''}</span>`).join('');
-    const panel = $('.bridge-ctxpanel');
-    if (!panel.hidden) renderContextPanel(panel, state.threadRow?.context, ctxActions());
+    const s = summary();
+    pill.hidden = s.pct == null;
+    if (s.pct != null) { pill.querySelector('.pct').textContent = `${s.pct}%`; pill.style.setProperty('--p', s.pct); pill.classList.toggle('hot', s.pct >= 80); }
+    if (!pops.ctx.hidden) renderSessionPanel(pops.ctx, s, ctxActions());
   }
-
   function ctxActions() {
-    return {
-      busy: state.ctxBusy,
-      onRefresh: async () => { try { state.ctxBusy = true; renderSession(); await client.refreshContext(state.thread); toast('已请求刷新，helper 计算中…'); } catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); } },
-      onCompact: async () => { try { state.ctxBusy = true; renderSession(); await client.compact(state.thread); toast('已请求压缩，Claude 正在整理历史…'); } catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); } },
+    const run = (fn, msg) => async () => {
+      try { state.ctxBusy = true; renderSession(); await fn(state.thread); toast(msg); } catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); }
     };
+    return { busy: state.ctxBusy, onRefresh: run((t) => client.refreshContext(t), '已请求刷新，helper 计算中…'), onCompact: run((t) => client.compact(t), '已请求压缩，Claude 正在整理历史…') };
   }
-
-  function renderAgent(agent, fallback = false) {
-    $('.bridge-dot').classList.toggle('on', !!agent?.online);
-    $('.bridge-agent').textContent = (agent?.online ? `${S.helperOn} · ${agent.worker || ''}` : S.helperOff) + (fallback ? ` · ${S.polling}` : '');
+  function renderAgent(agent, fallback = state.sub?.fallback) {
+    if (agent) state.agent = agent;
+    const a = state.agent || {};
+    $('.bridge-dot').classList.toggle('on', !!a.online);
+    $('.bridge-agent').title = a.online ? `helper 在线 · ${a.worker || ''}` : S.helperOff;
+    $('.bridge-agent .txt').textContent = (a.online ? '' : S.helperOff) + (fallback ? (a.online ? S.polling : ` · ${S.polling}`) : '');
   }
-
   function applySnapshot(snap) {
     list.innerHTML = '';
     state.msgs.clear(); state.order = [];
@@ -299,7 +585,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     state.inflight = snap.inflight;
     setPending(!!snap.inflight);
     $('.bridge-title').textContent = snap.thread?.title || S.threadTitle;
-    renderAgent(snap.agent, state.sub?.fallback);
+    renderAgent(snap.agent);
     renderSession();
     scrollBottom();
   }
@@ -315,13 +601,11 @@ export function mountBridgeWidget(el, client, opts = {}) {
       onEvent: (ev) => {
         const m = state.msgs.get(ev.message_id); if (!m) return;
         (m.events ||= []).push(ev);
-        const steps = list.querySelector(`.bridge-bubble[data-id="${ev.message_id}"] .bridge-steps`);
-        if (steps) renderStep(steps, ev);
-        if (ev.type === 'usage' || ev.type === 'init' || ev.type === 'rate_limit') renderSession();
+        if (ev.type === 'usage' || ev.type === 'init' || ev.type === 'rate_limit') renderSession(); else schedulePaint(ev.message_id);
       },
       onStatus: (s) => { const m = state.msgs.get(s.message_id); if (!m) return; m.status = s.status; paint(s.message_id); if (s.status !== 'pending' && s.status !== 'streaming') setPending(false); },
       onDone: (d) => { const m = state.msgs.get(d.message_id); if (m) { m.status = d.status; paint(d.message_id); } setPending(false); renderSession(); loadThreads(); },
-      onThread: (t) => { if (t.id === state.thread) $('.bridge-title').textContent = t.title || S.threadTitle; loadThreads(); },
+      onThread: (t) => { if (t.id === state.thread) { state.threadRow = { ...state.threadRow, ...t }; $('.bridge-title').textContent = t.title || S.threadTitle; } loadThreads(); },
       onContext: (c) => { if (state.threadRow) state.threadRow.context = c.context; state.ctxBusy = false; renderSession(); },
       onJob: (j) => {
         state.ctxBusy = false; renderSession();
@@ -331,7 +615,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
           else if (j.status !== 'done') toast(`压缩失败：${j.error || ''}`, true);
         } else if (j.status !== 'done') toast(`刷新构成失败：${j.error || ''}`, true);
       },
-      onFallback: (on) => renderAgent({ online: $('.bridge-dot').classList.contains('on') }, on),
+      onFallback: (on) => renderAgent(null, on),
       onError: (err) => { // transport errors repeat every poll while the server is down; say it once in a while
         const now = Date.now();
         if (now - (state.lastErrToast || 0) > 30000) { state.lastErrToast = now; toast(err.message, true); }
@@ -344,38 +628,57 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (!o.showThreads) return;
     try {
       const d = await client.threads(o.scope);
-      const box = $('.bridge-threads');
-      box.innerHTML = d.items.map(t => `<button type="button" class="bridge-thread ${t.id === state.thread ? 'active' : ''}" data-id="${esc(t.id)}">` +
-        `<span class="t">${t.pinned ? '<span class="pin">📌</span>' : ''}${esc(t.title || S.threadTitle)}</span><span class="p">${esc(t.preview || '')}</span></button>`).join('');
+      $('.bridge-threads').innerHTML = d.items.map(t => `<button type="button" class="bridge-thread ${t.id === state.thread ? 'active' : ''}" data-id="${esc(t.id)}">`
+        + `<span class="t">${t.pinned ? '<span class="pin">📌</span>' : ''}${esc(t.title || S.threadTitle)}</span>`
+        + `<span class="p">${esc(t.preview || '')}</span><span class="m">${t.n ?? 0} 条 · ${esc(fmtRelative(t.updated_at))}</span></button>`).join('');
       if (!state.thread && d.current) subscribe(d.current);
     } catch (e) { toast(e.message, true); }
   }
-
   async function openThread(id) {
-    try { await client.selectThread(id, o.scope); subscribe(id); loadThreads(); } catch (e) { toast(e.message, true); }
+    try { await client.selectThread(id, o.scope); subscribe(id); loadThreads(); root.classList.remove('side-open'); } catch (e) { toast(e.message, true); }
   }
 
-  // ---------- settings ----------
+  // ---------- settings (server side: model / effort / auto_context) ----------
+  function settingsHtml() {
+    const s = state.settings; if (!s) return '';
+    const opt = (v, t, cur) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(t)}</option>`;
+    return `<div class="bridge-prefs bridge-prefs-chat"><div class="bridge-pref-row"><span class="bridge-pref-label">模型</span><select class="bridge-pick" data-set="model">${s.models.map(m => opt(m.id, m.label, s.chat.model)).join('')}</select></div>`
+      + `<div class="bridge-pref-row"><span class="bridge-pref-label">思考深度</span><select class="bridge-pick" data-set="effort">${s.efforts.map(e => opt(e, e || '默认', s.chat.effort)).join('')}</select></div>`
+      + `<div class="bridge-pref-row"><span class="bridge-pref-label">单次最多工具轮数</span><input type="number" class="bridge-num" data-set="max_turns" min="1" max="200" value="${Number(s.chat.max_turns) || 40}" /></div>`
+      + `<label class="bridge-pref-row"><span class="bridge-pref-label">${esc(S.ctx)}<span class="bridge-pref-hint">新对话第一条自动附上宿主提供的背景</span></span><input type="checkbox" class="bridge-switch" data-set="auto_context"${s.chat.auto_context ? ' checked' : ''} /></label></div>`;
+  }
   async function loadSettings() {
     if (!o.showSettings) return;
     try {
       const s = await client.settings();
       state.settings = s;
-      const model = $('[data-set="model"]'), effort = $('[data-set="effort"]'), ctx = $('[data-set="auto_context"]');
+      const model = $('.bridge-bar [data-set="model"]'), effort = $('.bridge-bar [data-set="effort"]');
       model.innerHTML = s.models.map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
       if (![...model.options].some(x => x.value === s.chat.model)) model.insertAdjacentHTML('beforeend', `<option value="${esc(s.chat.model)}">${esc(s.chat.model)}</option>`);
       model.value = s.chat.model || '';
       effort.innerHTML = s.efforts.map(e => `<option value="${esc(e)}">${e ? esc(e) : '默认'}</option>`).join('');
       effort.value = s.chat.effort || '';
-      ctx.checked = !!s.chat.auto_context;
-      renderAgent(s.agent, state.sub?.fallback);
+      renderAgent(s.agent);
     } catch (e) { toast(e.message, true); }
   }
-
   async function saveSetting(patch) {
-    try { const d = await client.saveSettings(patch); if (state.settings) state.settings.chat = d.chat; toast('设置已保存，下一条消息生效'); }
+    try { const d = await client.saveSettings(patch); if (state.settings) state.settings.chat = d.chat; toast('设置已保存，下一条消息生效'); loadSettings(); }
     catch (e) { toast(e.message, true); }
   }
+
+  // ---------- popovers ----------
+  function openPop(kind, anchor) {
+    const p = pops[kind];
+    if (!p.hidden) { closePops(); return; }
+    closePops();
+    if (kind === 'prefs') {
+      p.innerHTML = '<div class="bridge-pop-title">界面</div><div class="ui"></div>' + (o.showSettings && state.settings ? '<div class="bridge-pop-title">对话</div><div class="chat"></div>' : '');
+      renderPrefsPanel(p.querySelector('.ui'), prefs, { onChange: (_, key) => usePrefs(key) });
+      const c = p.querySelector('.chat'); if (c) c.innerHTML = settingsHtml();
+    } else renderSessionPanel(p, summary(), ctxActions());
+    placePopover(anchor, p, { align: kind === 'prefs' ? 'start' : 'end' });
+  }
+  function closePops() { for (const p of Object.values(pops)) p.hidden = true; $('.bridge-menu')?.setAttribute('hidden', ''); }
 
   // ---------- actions ----------
   async function send() {
@@ -387,42 +690,64 @@ export function mountBridgeWidget(el, client, opts = {}) {
       if (r.thread !== state.thread) subscribe(r.thread);
     } catch (e) { toast(e.message, true); sendBtn.disabled = false; }
   }
-
-  function autoGrow() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
+  function autoGrow() { if (prefs.inputH) return; input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
 
   $('.bridge-form').addEventListener('submit', (e) => { e.preventDefault(); send(); });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  input.addEventListener('keydown', (e) => { if (isSendKey(e, prefs)) { e.preventDefault(); send(); } });
   input.addEventListener('input', autoGrow);
   stopBtn.addEventListener('click', async () => { if (!state.inflight) return; try { await client.cancel(state.inflight); } catch (e) { toast(e.message, true); } });
+  // drag the grip above the input to fix its height; double-click restores auto-grow
+  let h0 = 0;
+  attachDrag($('.bridge-grip'), (_, dy) => { prefs.inputH = Math.max(40, Math.min(600, h0 - dy)); input.style.height = `${prefs.inputH}px`; input.classList.add('fixed'); }, () => usePrefs('inputH'));
+  $('.bridge-grip').addEventListener('pointerdown', () => { h0 = input.offsetHeight; });
+  $('.bridge-grip').addEventListener('dblclick', () => { prefs.inputH = null; usePrefs('inputH'); });
+  if (o.showThreads) {
+    let w0 = 0; const side = $('.bridge-side');
+    $('.bridge-side-grip').addEventListener('pointerdown', () => { w0 = side.offsetWidth; });
+    attachDrag($('.bridge-side-grip'), (dx) => { prefs.sideW = Math.max(180, Math.min(480, w0 + dx)); root.style.setProperty('--chat-side-w', `${prefs.sideW}px`); }, () => usePrefs('sideW'));
+  }
+
   el.addEventListener('click', async (e) => {
-    const chip = e.target.closest('.bridge-session .clickable');
-    if (chip) { const panel = $('.bridge-ctxpanel'); panel.hidden = !panel.hidden; if (!panel.hidden) renderContextPanel(panel, state.threadRow?.context, ctxActions()); return; }
     const act = e.target.closest('[data-act]')?.dataset.act;
     const th = e.target.closest('.bridge-thread');
     if (th) return openThread(th.dataset.id);
     if (!act) return;
     try {
-      if (act === 'new') { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); }
-      else if (act === 'rename') { const t = prompt(S.rename, state.threadRow?.title || ''); if (t != null) await client.patchThread(state.thread, { title: t.trim() }); }
-      else if (act === 'pin') { await client.patchThread(state.thread, { pinned: !state.threadRow?.pinned }); state.threadRow.pinned = !state.threadRow.pinned; loadThreads(); }
-      else if (act === 'del') { if (!confirm(S.del)) return; const r = await client.deleteThread(state.thread, o.scope); state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } loadThreads(); }
+      if (act === 'new') { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); root.classList.remove('side-open'); }
+      else if (act === 'side') { if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open'); else { prefs.sidebar = !prefs.sidebar; usePrefs('sidebar'); } }
+      else if (act === 'menu') { const m = $('.bridge-menu'); const was = m.hidden; closePops(); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
+      else if (act === 'prefs' || act === 'ctx') openPop(act, e.target.closest('[data-act]'));
+      else if (act === 'rename') { closePops(); const t = prompt(S.rename, state.threadRow?.title || ''); if (t != null) await client.patchThread(state.thread, { title: t.trim() || null }); }
+      else if (act === 'pin') { closePops(); await client.patchThread(state.thread, { pinned: !state.threadRow?.pinned }); }
+      else if (act === 'del') { closePops(); if (!confirm(S.delConfirm)) return; const r = await client.deleteThread(state.thread, o.scope); state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } loadThreads(); }
     } catch (err) { toast(err.message, true); }
   });
-  el.addEventListener('change', (e) => {
+  const onSet = (e) => {
     const key = e.target.dataset.set; if (!key) return;
-    saveSetting({ [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
-  });
+    const v = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'number' ? Number(e.target.value) : e.target.value;
+    saveSetting({ [key]: v });
+  };
+  el.addEventListener('change', onSet); pops.prefs.addEventListener('change', onSet);
+  const onDocClick = (e) => { if (e.target.closest('.bridge-pop, .bridge-menu, [data-act="prefs"], [data-act="ctx"], [data-act="menu"]')) return; closePops(); };
+  const onKey = (e) => { if (e.key === 'Escape') closePops(); };
   const onVis = () => { if (document.visibilityState === 'visible') state.sub?.wake(); };
-  document.addEventListener('visibilitychange', onVis);
+  document.addEventListener('click', onDocClick); document.addEventListener('keydown', onKey); document.addEventListener('visibilitychange', onVis);
 
+  usePrefs();
   loadSettings();
   if (o.showThreads) loadThreads();
   else client.threads(o.scope).then(d => d.current && subscribe(d.current)).catch(e => toast(e.message, true));
 
   return {
-    destroy() { state.sub?.close(); document.removeEventListener('visibilitychange', onVis); el.innerHTML = ''; },
+    destroy() {
+      state.sub?.close();
+      document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
+      for (const p of Object.values(pops)) p.remove();
+      el.innerHTML = '';
+    },
     openThread,
     refresh() { loadThreads(); loadSettings(); },
     get thread() { return state.thread; },
+    get prefs() { return prefs; },
   };
 }
