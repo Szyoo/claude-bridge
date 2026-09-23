@@ -488,7 +488,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
           <div class="bridge-grip" title="拖动调整输入框高度，双击恢复自动"></div>
           <textarea class="bridge-input" rows="1" placeholder="${esc(o.placeholder)}"></textarea>
           <div class="bridge-bar">
-            <button type="button" class="bridge-icon" data-act="prefs" title="设置">⚙</button>
+            <button type="button" class="bridge-icon" data-act="prefs" title="设置" aria-label="设置"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h7M13 4h1M2 8h2M8 8h6M2 12h8"/><circle cx="11" cy="4" r="1.7"/><circle cx="6" cy="8" r="1.7"/><circle cx="12" cy="12" r="1.7"/></svg></button>
             <span class="grow"></span>
             ${o.showSettings ? `<select class="bridge-pick" data-set="effort" title="思考深度"></select><select class="bridge-pick" data-set="model" title="模型"></select>` : ''}
             <button type="button" class="bridge-pill" data-act="ctx" hidden title="当前会话上下文占用，点开看构成与额度"><span class="pct"></span><i class="ring"></i></button>
@@ -501,6 +501,9 @@ export function mountBridgeWidget(el, client, opts = {}) {
   const root = el.firstElementChild;
   const pops = { prefs: document.createElement('div'), ctx: document.createElement('div') };
   for (const [k, p] of Object.entries(pops)) { p.className = `bridge-pop bridge-root pop-${k}`; p.hidden = true; document.body.appendChild(p); }
+  // 弹层 / 菜单都挂到 body：宿主祖先若有 transform / filter / backdrop-filter，会把 position:fixed 的参照系困在那个祖先里
+  const menu = el.querySelector('.bridge-menu');
+  if (menu) { menu.classList.add('bridge-root'); document.body.appendChild(menu); }
 
   const $ = (sel) => el.querySelector(sel);
   const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop'), pill = $('[data-act="ctx"]');
@@ -678,7 +681,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     } else renderSessionPanel(p, summary(), ctxActions());
     placePopover(anchor, p, { align: kind === 'prefs' ? 'start' : 'end' });
   }
-  function closePops() { for (const p of Object.values(pops)) p.hidden = true; $('.bridge-menu')?.setAttribute('hidden', ''); }
+  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) menu.hidden = true; }
 
   // ---------- actions ----------
   async function send() {
@@ -707,7 +710,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     attachDrag($('.bridge-side-grip'), (dx) => { prefs.sideW = Math.max(180, Math.min(480, w0 + dx)); root.style.setProperty('--chat-side-w', `${prefs.sideW}px`); }, () => usePrefs('sideW'));
   }
 
-  el.addEventListener('click', async (e) => {
+  const onClick = async (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;
     const th = e.target.closest('.bridge-thread');
     if (th) return openThread(th.dataset.id);
@@ -715,13 +718,14 @@ export function mountBridgeWidget(el, client, opts = {}) {
     try {
       if (act === 'new') { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); root.classList.remove('side-open'); }
       else if (act === 'side') { if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open'); else { prefs.sidebar = !prefs.sidebar; usePrefs('sidebar'); } }
-      else if (act === 'menu') { const m = $('.bridge-menu'); const was = m.hidden; closePops(); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
+      else if (act === 'menu') { const m = menu; const was = m.hidden; closePops(); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
       else if (act === 'prefs' || act === 'ctx') openPop(act, e.target.closest('[data-act]'));
       else if (act === 'rename') { closePops(); const t = prompt(S.rename, state.threadRow?.title || ''); if (t != null) await client.patchThread(state.thread, { title: t.trim() || null }); }
       else if (act === 'pin') { closePops(); await client.patchThread(state.thread, { pinned: !state.threadRow?.pinned }); }
       else if (act === 'del') { closePops(); if (!confirm(S.delConfirm)) return; const r = await client.deleteThread(state.thread, o.scope); state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } loadThreads(); }
     } catch (err) { toast(err.message, true); }
-  });
+  };
+  el.addEventListener('click', onClick); menu?.addEventListener('click', onClick);
   const onSet = (e) => {
     const key = e.target.dataset.set; if (!key) return;
     const v = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'number' ? Number(e.target.value) : e.target.value;
@@ -743,6 +747,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       state.sub?.close();
       document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
       for (const p of Object.values(pops)) p.remove();
+      menu?.remove();
       el.innerHTML = '';
     },
     openThread,

@@ -78,6 +78,9 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-title { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bridge-agent { display: inline-flex; align-items: center; gap: 6px; color: var(--bridge-muted); font-size: .857em; }
 .bridge-agent .txt:empty { display: none; }
+.bridge-agent { min-width: 0; flex: 0 1 auto; }
+.bridge-agent .txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bridge-title { min-width: 3em; }
 .bridge-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bridge-muted); display: inline-block; opacity: .6; }
 .bridge-dot.on { background: var(--bridge-ok); opacity: 1; box-shadow: 0 0 6px var(--bridge-ok); }
 .bridge-icon { width: var(--chat-control); height: var(--chat-control); flex: none; display: inline-grid; place-items: center; border: 0; border-radius: var(--chat-radius); background: transparent; color: var(--bridge-muted); font: inherit; font-size: 1.07em; line-height: 1; cursor: pointer; }
