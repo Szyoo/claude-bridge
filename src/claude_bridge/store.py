@@ -77,6 +77,20 @@ CREATE TABLE IF NOT EXISTS bridge_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- uploaded images: bytes live on disk as <files_dir>/<fname>; message_id is NULL until the message is sent
+CREATE TABLE IF NOT EXISTS bridge_files (
+  id         TEXT PRIMARY KEY,
+  thread     TEXT,
+  message_id INTEGER,
+  name       TEXT NOT NULL DEFAULT '',
+  mime       TEXT NOT NULL,
+  size       INTEGER NOT NULL DEFAULT 0,
+  fname      TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_files_msg ON bridge_files(message_id);
+CREATE INDEX IF NOT EXISTS idx_bridge_files_thread ON bridge_files(thread);
 """
 
 # (table, column, DDL) — applied when the column is missing; same idiom as ashare's Store.
@@ -101,6 +115,11 @@ def _job(row: dict[str, Any]) -> dict[str, Any]:
         row["payload"] = {}
     row["cancel_requested"] = bool(row.get("cancel_requested"))
     return row
+
+
+def public_file(row: dict[str, Any]) -> dict[str, Any]:
+    """What browsers and job payloads see of a file (no disk path)."""
+    return {"id": row["id"], "name": row.get("name") or "", "mime": row["mime"], "size": row.get("size") or 0}
 
 
 def _event(row: dict[str, Any]) -> dict[str, Any]:
@@ -296,6 +315,7 @@ class BridgeStore:
         )
         row = dict(cur.fetchone())
         row["events"] = []
+        row["files"] = []
         return row
 
     def get_message(self, message_id: int, *, with_events: bool = True) -> dict[str, Any] | None:
@@ -304,6 +324,7 @@ class BridgeStore:
             return None
         if with_events:
             row["events"] = self.events(message_id)
+        row["files"] = self.files_for_messages([message_id]).get(message_id, [])
         return row
 
     def messages(
@@ -329,7 +350,64 @@ class BridgeStore:
                 by_msg[e["message_id"]].append(_event(e))
             for r in rows:
                 r["events"] = by_msg[r["id"]]
+        if rows:
+            files = self.files_for_messages([r["id"] for r in rows])
+            for r in rows:
+                r["files"] = files.get(r["id"], [])
         return rows
+
+    # ---------------- files ----------------
+
+    def add_file(self, file_id: str, *, name: str, mime: str, size: int, fname: str) -> dict[str, Any]:
+        cur = self._x(
+            "INSERT INTO bridge_files(id, name, mime, size, fname, created_at) VALUES(?,?,?,?,?,?) RETURNING *",
+            (file_id, name, mime, size, fname, _now()),
+        )
+        return dict(cur.fetchone())
+
+    def get_file(self, file_id: str) -> dict[str, Any] | None:
+        return self._one("SELECT * FROM bridge_files WHERE id=?", (file_id,))
+
+    def attach_files(self, message_id: int, thread: str, ids: list[str]) -> list[dict[str, Any]]:
+        """Bind not-yet-sent uploads to a message; returns them in the given order."""
+        rows = []
+        for fid in ids:
+            cur = self._x(
+                "UPDATE bridge_files SET message_id=?, thread=? WHERE id=? AND message_id IS NULL RETURNING *",
+                (message_id, thread, fid),
+            )
+            row = cur.fetchone()
+            if row:
+                rows.append(dict(row))
+        return rows
+
+    def files_for_messages(self, ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        if not ids:
+            return {}
+        rows = self._q(
+            f"SELECT * FROM bridge_files WHERE message_id IN ({','.join('?' * len(ids))}) ORDER BY created_at, rowid",
+            tuple(ids),
+        )
+        out: dict[int, list[dict[str, Any]]] = {}
+        for r in rows:
+            out.setdefault(r["message_id"], []).append(public_file(r))
+        return out
+
+    def delete_thread_files(self, thread: str) -> list[str]:
+        """Drops the rows; returns the on-disk names for the caller to unlink."""
+        with self.transaction():
+            names = [r["fname"] for r in self._q("SELECT fname FROM bridge_files WHERE thread=?", (thread,))]
+            self._x("DELETE FROM bridge_files WHERE thread=?", (thread,))
+        return names
+
+    def purge_orphans(self, older_than_seconds: int) -> list[str]:
+        """Uploads never attached to a message (the user removed them or never hit send)."""
+        cutoff = datetime.fromtimestamp(datetime.now(UTC).timestamp() - older_than_seconds, UTC).strftime("%Y-%m-%d %H:%M:%S")
+        with self.transaction():
+            names = [r["fname"] for r in self._q(
+                "SELECT fname FROM bridge_files WHERE message_id IS NULL AND created_at < ?", (cutoff,))]
+            self._x("DELETE FROM bridge_files WHERE message_id IS NULL AND created_at < ?", (cutoff,))
+        return names
 
     def inflight(self, thread: str) -> dict[str, Any] | None:
         return self._one(

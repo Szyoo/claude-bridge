@@ -29,6 +29,7 @@ def bridge(tmp_path):
         on_thread_deleted=deleted.append,
         model_choices=[{"id": "", "label": "默认"}, {"id": "sonnet", "label": "Sonnet"}],
         model_aliases={"claude-sonnet-4-5": "sonnet"},
+        files_dir=tmp_path / "files",
     )
     b = create_bridge(store=BridgeStore(tmp_path / "b.db"), config=cfg, agent_token="tok")
     b.deleted = deleted  # type: ignore[attr-defined]

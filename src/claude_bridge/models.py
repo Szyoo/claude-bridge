@@ -8,14 +8,16 @@ from pydantic import BaseModel, Field
 
 
 class SendIn(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = ""  # may be empty when images are attached; the service enforces "text or files"
     scope: str = ""
     key: str = ""
     new_thread: bool = False
+    files: list[str] = Field(default_factory=list, max_length=50)
 
 
 class ThreadMessageIn(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = ""
+    files: list[str] = Field(default_factory=list, max_length=50)
 
 
 class ThreadIn(BaseModel):

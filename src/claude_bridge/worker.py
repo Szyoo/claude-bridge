@@ -6,6 +6,7 @@ Hosts customise behaviour through `WorkerConfig` (static knobs), `Hooks` (per-jo
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -258,14 +259,19 @@ class Worker:
         self._safe_finish(job["id"], ok=True, result=json.dumps(out, ensure_ascii=False), context=report)
 
     def build_chat_command(
-        self, prompt: str, session_id: str | None, settings: dict[str, Any], system_prompt: str
+        self, prompt: str, session_id: str | None, settings: dict[str, Any], system_prompt: str,
+        *, input_json: bool = False,
     ) -> tuple[list[str], bool]:
+        """`input_json`: the user turn is written to stdin as one stream-json message (used when it carries images)."""
         cfg = self.config
         model = (settings.get("model") or cfg.model or "").strip()
         effort = (settings.get("effort") or "").strip().lower()
         max_turns = int(settings.get("max_turns") or cfg.max_turns)
-        via_stdin = len(prompt.encode()) > cfg.argv_limit
-        cmd = [cfg.claude_bin, "-p", *([] if via_stdin else [prompt]), "--output-format", "stream-json", "--verbose"]
+        via_stdin = input_json or len(prompt.encode()) > cfg.argv_limit
+        cmd = [cfg.claude_bin, "-p", *([] if via_stdin else [prompt])]
+        if input_json:
+            cmd += ["--input-format", "stream-json"]
+        cmd += ["--output-format", "stream-json", "--verbose"]
         if cfg.include_partial:
             cmd.append("--include-partial-messages")
         cmd += ["--max-turns", str(max(1, min(max_turns, 100)))]
@@ -372,6 +378,19 @@ class Emitter:
             time.sleep(max(0.0, self.retry_at - time.time()))
 
 
+def stream_json_user_message(text: str, images: list[dict[str, str]]) -> str:
+    """One `--input-format stream-json` line: images first (Claude reads image-then-text best), then the text.
+    Several images get a short label each ("图 1：" or the name the browser gave, e.g. a long-screenshot part)."""
+    content: list[dict[str, Any]] = []
+    for i, im in enumerate(images, 1):
+        if len(images) > 1:
+            content.append({"type": "text", "text": f"{im.get('name') or f'图 {i}'}："})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": im["mime"], "data": im["data"]}})
+    if text:
+        content.append({"type": "text", "text": text})
+    return json.dumps({"type": "user", "message": {"role": "user", "content": content}}, ensure_ascii=False) + "\n"
+
+
 class ChatRunner:
     def __init__(self, worker: Worker, job: dict[str, Any]) -> None:
         self.worker = worker
@@ -386,6 +405,16 @@ class ChatRunner:
         self.state: StreamState | None = None
 
     # ---------------- lifecycle ----------------
+
+    def _load_images(self, files: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Fetch the message's uploads from the server; a failure fails the job (the message shows the error)."""
+        out = []
+        for f in files:
+            data, mime = self.worker.client.get_file(f["id"])
+            out.append({"mime": f.get("mime") or mime, "name": f.get("name") or "", "data": base64.b64encode(data).decode()})
+        if out:
+            log.info("job #%s: %d image(s), %d KB", self.job["id"], len(out), sum(len(i["data"]) for i in out) * 3 // 4 // 1024)
+        return out
 
     def run(self) -> None:
         p = self.job.get("payload") or {}
@@ -404,7 +433,9 @@ class ChatRunner:
             if ctx:
                 prompt = ctx + text
         system_prompt = self.worker.hooks.system_prompt(p) or self.cfg.system_prompt
-        cmd, via_stdin = self.worker.build_chat_command(prompt, session_id, settings, system_prompt)
+        images = self._load_images(p.get("files") or [])
+        cmd, via_stdin = self.worker.build_chat_command(prompt, session_id, settings, system_prompt, input_json=bool(images))
+        stdin_data = stream_json_user_message(prompt, images) if images else prompt
         env = {**os.environ, **self.cfg.extra_env, **self.worker.hooks.env(p)}
         self.state = StreamState(
             resumed=bool(session_id),
@@ -415,7 +446,7 @@ class ChatRunner:
         self.emitter.set_status("streaming")
         self.emitter.add_event(
             "status",
-            {"phase": "started", "text": f"$ claude -p … ({len(prompt)} chars, {label}{', with context' if prompt is not text else ''})"},
+            {"phase": "started", "text": f"$ claude -p … ({len(prompt)} chars{f', +{len(images)} 张图' if images else ''}, {label}{', with context' if prompt is not text else ''})"},
         )
 
         start = time.time()
@@ -432,7 +463,7 @@ class ChatRunner:
         proc = self.proc
         if via_stdin and proc.stdin is not None:
             try:
-                proc.stdin.write(prompt)
+                proc.stdin.write(stdin_data)
             finally:
                 proc.stdin.close()
 

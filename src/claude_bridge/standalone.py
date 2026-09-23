@@ -29,12 +29,16 @@ def create_standalone_app(
     no_auth: bool = False,
     cookie_secure: bool = False,
     config: BridgeConfig | None = None,
+    files_dir: str | Path | None = None,
 ) -> FastAPI:
     store = BridgeStore(db_path)
     auth = PasswordAuth(password, secret, disabled=no_auth)
     if not auth.configured:
         raise RuntimeError("需要 CLAUDE_BRIDGE_PASSWORD（或 --no-auth）")
-    cfg = config or BridgeConfig(new_thread_notice="新对话已开始，Claude 不再记得之前的内容。")
+    cfg = config or BridgeConfig(
+        new_thread_notice="新对话已开始，Claude 不再记得之前的内容。",
+        files_dir=files_dir or Path(db_path).resolve().parent / "claude-bridge-files",
+    )
     bridge = create_bridge(store=store, config=cfg, browser_auth=auth.dependency(), agent_token=agent_token)
 
     app = FastAPI(title="claude-bridge", docs_url=None, redoc_url=None)

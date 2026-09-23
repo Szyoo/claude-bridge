@@ -47,6 +47,18 @@ class BridgeClient:
             raise BridgeClientError(f"bridge {method} {path} HTTP {resp.status_code}: {detail}")
         return resp.json() if resp.content else None
 
+    def get_file(self, file_id: str) -> tuple[bytes, str]:
+        """Raw bytes + mime of an uploaded image (for handing it to claude)."""
+        url = f"{self.base_url}{self.prefix}/files/{file_id}"
+        extra = {"timeout": self.timeout * 3} if isinstance(self.http, requests.Session) else {}
+        try:
+            resp = self.http.request("GET", url, headers={"Authorization": f"Bearer {self.token}"}, **extra)
+        except requests.RequestException as e:
+            raise BridgeClientError(f"图片取不到 {file_id}: {e}") from e
+        if resp.status_code >= 400:
+            raise BridgeClientError(f"图片取不到 {file_id}: HTTP {resp.status_code}")
+        return resp.content, (resp.headers.get("content-type") or "image/png").split(";")[0].strip()
+
     def next_job(self, worker: str, kinds: list[str], wait: int = 25) -> dict[str, Any] | None:
         body = {"worker": worker, "kinds": kinds, "wait": wait}
         return (self._call("POST", "/jobs/next", json=body, timeout=wait + 15) or {}).get("job")

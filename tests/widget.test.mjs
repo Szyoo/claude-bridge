@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS,
+  splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS,
 } from '../src/claude_bridge/static/bridge-widget.js';
 
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
@@ -110,4 +110,52 @@ test('fmtTime: today → HH:MM only, other days carry M/D', () => {
   assert.doesNotMatch(fmtTime('2026-09-23 03:00:00', now), /\//);
   assert.match(fmtTime('2026-09-01 03:00:00', now), /^9\/1 /);
   assert.equal(fmtTime(null), '');
+});
+
+// ---------- images ----------
+const MB = 1024 * 1024;
+const coverage = (tiles, len, axis) => {   // every destination pixel of the long side is covered, in order
+  let reach = 0;
+  for (const t of tiles) { const a = axis === 'y' ? t.sy : t.sx, l = axis === 'y' ? t.sh : t.sw; assert.ok(a <= reach + 1e-6, 'gap between tiles'); reach = Math.max(reach, a + l); }
+  assert.ok(Math.abs(reach - len) < 1e-6, `tiles end at ${reach}, expected ${len}`);
+};
+
+test('screenshots that already fit go up untouched', () => {
+  assert.deepEqual(planImage({ width: 800, height: 600, type: 'image/png', size: 200e3 }), { mode: 'asis' });
+  assert.deepEqual(planImage({ width: 2000, height: 1000, type: 'image/jpeg', size: MB }), { mode: 'asis' });
+});
+
+test('iPhone screenshots are scaled to a 2000px long edge and stay PNG', () => {
+  assert.deepEqual(planImage({ width: 1179, height: 2556, type: 'image/png', size: 2 * MB }), { mode: 'scale', w: 923, h: 2000, out: 'image/png' });
+  assert.deepEqual(planImage({ width: 1290, height: 2796, type: 'image/png', size: 3 * MB }), { mode: 'scale', w: 923, h: 2000, out: 'image/png' });
+});
+
+test('camera photos (HEIC / big JPEG) are re-encoded as JPEG within the box', () => {
+  assert.deepEqual(planImage({ width: 3024, height: 4032, type: 'image/heic', size: 3 * MB }), { mode: 'scale', w: 1500, h: 2000, out: 'image/jpeg' });
+  // fits the box but too heavy: re-encode at the same size
+  assert.deepEqual(planImage({ width: 1800, height: 1800, type: 'image/png', size: 9 * MB }), { mode: 'scale', w: 1800, h: 1800, out: 'image/png' });
+});
+
+test('a long screenshot is cut into overlapping 2000px pieces at full width', () => {
+  const p = planImage({ width: 1179, height: 6000, type: 'image/png', size: 4 * MB });
+  assert.equal(p.mode, 'tiles'); assert.equal(p.out, 'image/png'); assert.equal(p.tiles.length, 4);
+  for (const t of p.tiles) { assert.equal(t.dw, 1179); assert.ok(t.dh <= IMAGE_LIMITS.max); assert.equal(t.sx, 0); assert.equal(t.sw, 1179); }
+  coverage(p.tiles, 6000, 'y');
+  for (let i = 1; i < p.tiles.length; i++) assert.ok(p.tiles[i - 1].sy + p.tiles[i - 1].sh - p.tiles[i].sy >= IMAGE_LIMITS.overlap, 'overlap too small');
+});
+
+test('extremely long screenshots are shrunk until they fit in 8 pieces', () => {
+  const p = planImage({ width: 1000, height: 40000, type: 'image/png', size: 6 * MB });
+  assert.equal(p.mode, 'tiles'); assert.equal(p.tiles.length, IMAGE_LIMITS.maxTiles);
+  for (const t of p.tiles) { assert.ok(t.dh <= IMAGE_LIMITS.max); assert.ok(t.dw < 1000); }
+  coverage(p.tiles, 40000, 'y');
+});
+
+test('wide panoramas are cut horizontally; a wide-but-short image with a huge short side is scaled first', () => {
+  const p = planImage({ width: 8000, height: 1000, type: 'image/jpeg', size: 5 * MB });
+  assert.equal(p.mode, 'tiles'); assert.equal(p.out, 'image/jpeg');
+  for (const t of p.tiles) { assert.equal(t.dh, 1000); assert.ok(t.dw <= IMAGE_LIMITS.max); }
+  coverage(p.tiles, 8000, 'x');
+  const q = planImage({ width: 7000, height: 2500, type: 'image/png', size: 5 * MB });   // short side > 2000 → scaled to 2000 across
+  assert.equal(q.mode, 'tiles'); for (const t of q.tiles) assert.equal(t.dh, 2000);
 });

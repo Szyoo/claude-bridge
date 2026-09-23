@@ -177,7 +177,7 @@ def test_text_limits(web, bridge):
     r = web.post("/api/send", json={"text": "x" * 11, "scope": "stock"})
     assert r.status_code == 400 and "上限" in r.json()["detail"]
     assert web.post("/api/send", json={"text": "   ", "scope": "stock"}).status_code == 400
-    assert web.post("/api/send", json={"text": "", "scope": "stock"}).status_code == 422
+    assert web.post("/api/send", json={"text": "", "scope": "stock"}).status_code == 400  # empty is fine only with images
     assert web.post("/api/threads/nope/messages", json={"text": "hi"}).status_code == 404
 
 

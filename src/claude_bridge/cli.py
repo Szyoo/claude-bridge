@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default=env("HOST", "127.0.0.1"))
     s.add_argument("--port", type=int, default=int(env("PORT", "8770")))
     s.add_argument("--db", default=env("DB", "claude-bridge.db"))
+    s.add_argument("--files", default=env("FILES", ""), help="where uploaded images are stored (default: next to the db)")
     s.add_argument("--no-auth", action="store_true", help="disable the password login (local debugging)")
 
     w = sub.add_parser("worker", help="run the machine-side worker that executes claude -p")
@@ -96,6 +97,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         agent_token=env("AGENT_TOKEN"),
         no_auth=args.no_auth,
         cookie_secure=cookie_secure,
+        files_dir=args.files or None,
     )
     print(f"claude-bridge serving on http://{args.host}:{args.port}  db={args.db}{'  [no auth]' if args.no_auth else ''}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)

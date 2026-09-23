@@ -6,16 +6,21 @@ Everything here is synchronous; the SSE route calls `snapshot` through `run_in_t
 from __future__ import annotations
 
 import json
+import logging
+import secrets
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from claude_bridge.broker import Broker
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
 from claude_bridge.models import AgentChatIn, JobEventsIn, JobFinishIn
-from claude_bridge.store import INFLIGHT, BridgeStore, auto_title
+from claude_bridge.store import INFLIGHT, BridgeStore, auto_title, public_file
+
+log = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
 DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
@@ -23,6 +28,19 @@ DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
 
 def _default_thread(scope: str) -> str:
     return "main" if not scope else f"main-{scope}"
+
+
+def sniff_image(data: bytes) -> tuple[str, str] | None:
+    """(mime, extension) from the file header; the client's Content-Type is not trusted. Raster only — no SVG."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg", "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif", "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp", "webp"
+    return None
 
 
 @dataclass
@@ -41,6 +59,11 @@ class BridgeConfig:
     messages_limit: int = 200
     on_thread_deleted: Callable[[str], None] | None = None
     on_chat_started: Callable[[dict[str, Any]], None] | None = None
+    # image uploads: None disables them. 7 MB raw ≈ the API's 10 MB-per-image limit once base64-encoded.
+    files_dir: Path | str | None = None
+    max_file_bytes: int = 7 * 1024 * 1024
+    max_files_per_message: int = 10
+    orphan_seconds: int = 86400  # uploads never sent are removed after this long
 
 
 class BridgeService:
@@ -114,6 +137,7 @@ class BridgeService:
             raise NotFound("没有这个对话")
         sc = th["scope"] if scope is None else scope
         n = self.store.delete_thread(thread_id)
+        self._unlink(self.store.delete_thread_files(thread_id))
         key = f"current_thread:{sc}"
         current = self.store.get_meta(key)
         if current == thread_id:
@@ -165,12 +189,15 @@ class BridgeService:
         key: str = "",
         new_thread: bool = False,
         extra_payload: dict[str, Any] | None = None,
+        files: list[str] | None = None,
     ) -> dict[str, Any]:
         text = (text or "").strip()
-        if not text:
+        file_ids = list(dict.fromkeys(files or []))
+        if not text and not file_ids:
             raise BadRequest("消息不能为空")
         if len(text) > self.config.max_text_len:
             raise BadRequest(f"消息 {len(text)} 字，超过 {self.config.max_text_len} 字上限")
+        self._check_files(file_ids)
         if thread_id:
             if not self.store.get_thread(thread_id):
                 raise NotFound("没有这个对话")
@@ -190,10 +217,15 @@ class BridgeService:
         titled = False
         with self.store.transaction():
             th = self.store.get_thread(tid) or {}
+            title = auto_title(text) or "图片"
             if not th.get("title"):
-                self.store.update_thread(tid, title=auto_title(text))
+                self.store.update_thread(tid, title=title)
                 titled = True
             user_msg = self.store.add_message(tid, "user", text)
+            attached = self.store.attach_files(user_msg["id"], tid, file_ids) if file_ids else []
+            if len(attached) != len(file_ids):  # raced with another send of the same upload
+                raise BadRequest("图片已经发送过，请重新添加")
+            user_msg["files"] = [public_file(f) for f in attached]
             asst_msg = self.store.add_message(tid, "assistant", "", status="pending")
             payload: dict[str, Any] = {
                 "thread": tid,
@@ -201,6 +233,7 @@ class BridgeService:
                 "text": text,
                 "settings": self.settings(),
                 "session_id": th.get("session_id"),
+                **({"files": user_msg["files"]} if attached else {}),
                 **(extra_payload or {}),
             }
             jid = self.store.enqueue_job("chat", payload)
@@ -211,10 +244,72 @@ class BridgeService:
         self._pub(tid, "message", user_msg)
         self._pub(tid, "message", asst_msg)
         if titled:
-            self._pub(tid, "thread", {"id": tid, "title": auto_title(text), "pinned": bool(th.get("pinned"))})
+            self._pub(tid, "thread", {"id": tid, "title": title, "pinned": bool(th.get("pinned"))})
         if self.config.on_chat_started:
             self.config.on_chat_started(payload)
         return {"message_id": asst_msg["id"], "job_id": jid, "thread": tid, "agent_online": self.agent_online()}
+
+    # ---------------- files ----------------
+
+    @property
+    def uploads_enabled(self) -> bool:
+        return self.config.files_dir is not None
+
+    def _files_dir(self) -> Path:
+        if self.config.files_dir is None:
+            raise NotFound("未开启图片上传")
+        return Path(self.config.files_dir)
+
+    def _unlink(self, names: list[str]) -> None:
+        if not names or self.config.files_dir is None:
+            return
+        d = Path(self.config.files_dir)
+        for name in names:
+            try:
+                (d / name).unlink(missing_ok=True)
+            except OSError:
+                log.warning("could not delete %s", d / name)
+
+    def save_upload(self, data: bytes, name: str = "") -> dict[str, Any]:
+        d = self._files_dir()
+        if not data:
+            raise BadRequest("空文件")
+        if len(data) > self.config.max_file_bytes:
+            raise BadRequest(f"图片 {len(data) / 1048576:.1f} MB，超过 {self.config.max_file_bytes / 1048576:.0f} MB 上限", status=413)
+        kind = sniff_image(data)
+        if not kind:
+            raise BadRequest("只支持 PNG / JPEG / GIF / WebP 图片", status=415)
+        mime, ext = kind
+        self._unlink(self.store.purge_orphans(self.config.orphan_seconds))
+        fid = secrets.token_urlsafe(12)
+        fname = f"{fid}.{ext}"
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f"{fname}.part"
+        tmp.write_bytes(data)
+        tmp.replace(d / fname)
+        row = self.store.add_file(fid, name=(name or "")[:80], mime=mime, size=len(data), fname=fname)
+        return public_file(row)
+
+    def file_for_download(self, file_id: str) -> tuple[Path, str]:
+        d = self._files_dir()
+        row = self.store.get_file(file_id)
+        path = d / row["fname"] if row else None
+        if not row or not path.is_file():
+            raise NotFound("图片不存在")
+        return path, row["mime"]
+
+    def _check_files(self, ids: list[str]) -> None:
+        if not ids:
+            return
+        self._files_dir()
+        if len(ids) > self.config.max_files_per_message:
+            raise BadRequest(f"一条消息最多 {self.config.max_files_per_message} 张图")
+        for fid in ids:
+            row = self.store.get_file(fid)
+            if not row:
+                raise BadRequest("图片不存在或已过期，请重新添加")
+            if row["message_id"] is not None:
+                raise BadRequest("图片已经发送过，请重新添加")
 
     def cancel(self, message_id: int) -> dict[str, Any]:
         msg = self.store.get_message(message_id, with_events=False)
