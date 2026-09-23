@@ -13,10 +13,14 @@
 
 ## 安装
 
+不在 PyPI，按 tag 装（`vX.Y.Z` 见 [tags](https://github.com/Szyoo/claude-bridge/tags) / [CHANGELOG](CHANGELOG.md)）：
+
 ```bash
-pip install -e packages/claude-bridge            # 库 + CLI
-pip install -e "packages/claude-bridge[serve]"   # 独立运行还需要 uvicorn / python-multipart
+pip install "claude-bridge @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.2.0.tar.gz"
+pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.2.0.tar.gz"   # 独立运行还需要 uvicorn
 ```
+
+或者**把 `src/ pyproject.toml README.md CHANGELOG.md LICENSE` 拷进宿主仓库**（vendoring）（例如 `packages/claude-bridge/`，只读），用一个更新脚本从 tag 覆盖，再 `pip install -e packages/claude-bridge`——宿主的构建和部署就不需要访问 GitHub。
 
 依赖:`fastapi`、`pydantic>=2`、`requests`。Python ≥ 3.11。**单进程**部署(`Broker` 在内存里,多 worker 进程会让订阅者收不到发布)。
 
@@ -153,7 +157,22 @@ SSE 帧:`snapshot`(首帧:线程(含 `context` 构成)+ 消息 + 进行中的消
 ## 测试
 
 ```bash
-cd packages/claude-bridge && pytest -q && ruff check src tests
+pip install -e ".[dev,serve]"
+pytest -q && ruff check src tests      # 浏览器端的纯函数测试也在里面（node --test，需要 Node ≥ 18）
 ```
+
+GitHub Actions 在每次 push / PR 上跑同样的检查（Python 3.11 / 3.12）。
+
+## 发版流程
+
+1. 改 `src/claude_bridge/_version.py` 与 `pyproject.toml` 里的版本号，`CHANGELOG.md` 写上这一版
+2. 提交，打 tag：`git tag vX.Y.Z && git push && git push --tags`
+3. 等 Actions 绿
+
+## 宿主如何更新
+
+- **拷贝方式**（推荐）：宿主里放一个 `update-bridge.sh`，默认拉 GitHub 最新 tag 覆盖副本、`--local` 从本机 clone 同步（联调没发版的改动）；随后 `pip install -e <副本>`、跑宿主测试、部署服务端，**再重启 worker**（worker 用的是同一份代码）
+- **pip 方式**：把 tag 地址里的版本号改掉重新安装
+- 网页上可以提示更新：`GET /settings` 的 `bridge` 给出服务端版本、worker 最近一次上报的版本（不一致 = worker 还没重启），前端用 `checkBridgeUpdate({current})`（`bridge-client.js`）比对 GitHub 最新 tag，结果在 localStorage 缓存 6 小时
 
 `tests/` 用一个可执行的假 `claude` 脚本回放真实 stream-json 形态,覆盖增量去重、工具配对、取消(响应标记 / 轮询两条路径)、超时、SIGTERM、坏会话重置、SSE 快照与重连、独立模式登录。

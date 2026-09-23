@@ -3,6 +3,32 @@
 
 export class BridgeAuthError extends Error {}
 
+// ---- "is there a newer claude-bridge?" — anonymous GitHub tags API (60 req/h/IP), cached in localStorage ----
+const parseVer = (t) => { const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(t || '').trim()); return m ? [+m[1], +m[2], +m[3]] : null; };
+const newer = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+
+// current: the version the server reports (GET /settings → bridge.version). → { current, latest, hasUpdate, compareUrl }
+export async function checkBridgeUpdate({ current, repo = 'Szyoo/claude-bridge', cacheHours = 6, force = false,
+  cacheKey = 'claude_bridge_latest', fetchFn = (...a) => globalThis.fetch(...a) } = {}) {
+  let latest = null;
+  if (!force) {
+    try { const c = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (c?.repo === repo && c.latest && Date.now() - c.at < cacheHours * 3600e3) latest = c.latest; }
+    catch { /* no / broken cache */ }
+  }
+  if (!latest) {
+    const res = await fetchFn(`https://api.github.com/repos/${repo}/tags?per_page=100`, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+    let best = null;
+    for (const t of await res.json()) { const v = parseVer(t?.name); if (v && (!best || newer(v, best.v))) best = { v, name: t.name }; }
+    if (!best) throw new Error('no semver tags');
+    latest = best.name;
+    try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), repo, latest })); } catch { /* not cached */ }
+  }
+  const cur = parseVer(current), lat = parseVer(latest);
+  return { current, latest: latest.replace(/^v/, ''), hasUpdate: !!(cur && lat && newer(lat, cur)),
+    compareUrl: `https://github.com/${repo}/compare/v${current}...${latest}` };
+}
+
 function detailText(detail, status) {
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail)) {

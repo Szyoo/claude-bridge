@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from claude_bridge._version import REPO, __version__
 from claude_bridge.broker import Broker
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
 from claude_bridge.models import AgentChatIn, JobEventsIn, JobFinishIn
@@ -431,7 +432,8 @@ class BridgeService:
         def entries(key: str) -> list[dict[str, str]]:
             return [{"id": str(e["id"]), "name": str(e.get("name") or e["id"])} for e in report.get(key) or [] if e.get("id")]
 
-        data = {"cli_version": report.get("cli_version") or "", "default_name": report.get("default_name") or "",
+        data = {"cli_version": report.get("cli_version") or "", "bridge_version": report.get("bridge_version") or "",
+                "default_name": report.get("default_name") or "",
                 "aliases": entries("aliases"), "pinned": entries("pinned"),
                 "probed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
         self.store.set_meta("agent_models", json.dumps(data, ensure_ascii=False))
@@ -455,6 +457,14 @@ class BridgeService:
         out += [{"id": a["id"], "label": latest_label(a["name"]), "group": "跟随 CLI 最新"} for a in rep["aliases"]]
         out += [{"id": p["id"], "label": p["name"], "group": "固定版本"} for p in rep["pinned"]]
         return out
+
+    def versions(self) -> dict[str, Any]:
+        """claude-bridge on the server, and on the worker as of its last model report (None until it reports)."""
+        try:
+            rep = json.loads(self.store.get_meta("agent_models") or "null") or {}
+        except json.JSONDecodeError:
+            rep = {}
+        return {"version": __version__, "repo": REPO, "helper_version": rep.get("bridge_version") or None}
 
     def models_info(self) -> dict[str, Any]:
         rep = self.agent_models()
@@ -482,6 +492,7 @@ class BridgeService:
             **self.agent_status(),
             "queued": self.store.count_jobs("queued"),
             "running": self.store.count_jobs("running"),
+            "bridge": self.versions(),
         }
 
     # ---------------- agent side ----------------
