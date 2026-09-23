@@ -52,7 +52,7 @@
 .bridge-root[data-density="roomy"], .bridge[data-density="roomy"] { --chat-control: 34px; }
 
 .bridge { display: grid; grid-template-columns: var(--chat-side-w, 240px) 1fr; height: var(--chat-height, 100%); min-height: 0; position: relative; }
-.bridge [hidden], .bridge-pop[hidden], .bridge-menu[hidden] { display: none !important; }
+.bridge [hidden], .bridge-pop[hidden], .bridge-menu[hidden], .bridge-scrim[hidden] { display: none !important; }
 .bridge.no-side, .bridge.side-hidden { grid-template-columns: 1fr; }
 .bridge.side-hidden .bridge-side { display: none; }
 .bridge-tiny { font-size: .857em; }
@@ -189,6 +189,18 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 
 /* ---------- popovers (settings ⚙ / session ⏱) — fixed, positioned by placePopover ---------- */
 .bridge-pop { position: fixed; z-index: 50; min-width: 300px; max-width: min(440px, calc(100vw - 16px)); max-height: 72vh; overflow: auto; padding: 12px 14px 14px; border: 1px solid var(--bridge-border); border-radius: 10px; background: var(--bridge-panel); box-shadow: var(--bridge-shadow-pop); font-size: 13px; color: var(--bridge-fg); display: flex; flex-direction: column; gap: 10px; }
+.bridge-pop { -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
+.bridge-pop-head { position: relative; display: flex; align-items: center; gap: 6px; margin: -4px -6px -2px 0; }
+.bridge-pop-drag { flex: 1; min-width: 0; display: flex; align-items: center; touch-action: none; }
+.bridge-pop-grip { display: none; }
+.bridge-pop-name { font-size: 13px; font-weight: 600; }
+.bridge-pop-x { flex: none; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--bridge-muted); font: inherit; font-size: 14px; cursor: pointer; }
+.bridge-pop-x:hover { background: var(--bridge-hover); color: var(--bridge-fg); }
+/* only the body scrolls, so the head (✕ / grip) stays put */
+.bridge-pop { overflow: hidden; }
+.bridge-pop-body { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin-right: -8px; padding-right: 8px; }
+.bridge-scrim { display: none; }
+.bridge-side-grip, .bridge-grip { touch-action: none; }
 .bridge-pop-title { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--bridge-muted); margin: 2px 0 -4px; }
 .bridge-pop-title:not(:first-child) { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--bridge-border); }
 .bridge-prefs { display: flex; flex-direction: column; gap: 10px; }
@@ -238,4 +250,8 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
   .bridge-input { font-size: max(16px, 1em); } /* iOS zooms into inputs smaller than 16px */
   .bridge-bar [data-set="effort"] { display: none; }
   .bridge-pop { left: 0 !important; right: 0; top: auto !important; bottom: 0; max-width: none; max-height: 80vh; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .bridge-scrim { display: block; position: fixed; inset: 0; z-index: 49; background: rgba(0, 0, 0, .28); }
+  /* the grip marks the head as swipe-down-able */
+  .bridge-pop-head { padding-top: 12px; }
+  .bridge-pop-grip { display: block; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--bridge-muted); opacity: .45; }
 }
