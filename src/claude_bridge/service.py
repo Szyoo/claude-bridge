@@ -25,6 +25,22 @@ log = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
 DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
+SESSION_JOB_KINDS = ("context", "compact")  # jobs that act on a thread's Claude session; the page shows their progress
+
+
+def job_frame(job: dict[str, Any]) -> dict[str, Any]:
+    return {k: job.get(k) for k in ("id", "kind", "status", "result", "error", "created_at", "started_at", "finished_at")}
+
+
+def _fmt_tokens(n: Any) -> str:
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "?"
+    # same shape as the page's fmtTokens: 744k / 31.5k / 1.2M
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    return f"{n / 1000:.0f}k" if n >= 100_000 else f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
 def _default_thread(scope: str) -> str:
@@ -185,9 +201,14 @@ class BridgeService:
             raise BadRequest("这个对话还没有 Claude 会话，先发一条消息")
         if kind == "compact" and self.store.inflight(thread_id):
             raise ChatBusy("回答中不能压缩")
+        existing = next((j for j in self.store.active_jobs(thread_id, (kind,))), None)
+        if existing:  # a second click while one is queued / running just reports the same job
+            return {"job_id": existing["id"], "thread": thread_id, "agent_online": self.agent_online(), "job": job_frame(existing)}
         payload = {"thread": thread_id, "session_id": th["session_id"], "settings": self.settings()}
         jid = self.store.enqueue_job(kind, payload)
-        return {"job_id": jid, "thread": thread_id, "agent_online": self.agent_online()}
+        job = self.store.get_job(jid) or {"id": jid, "kind": kind, "status": "queued"}
+        self._pub(thread_id, "job", job_frame(job))
+        return {"job_id": jid, "thread": thread_id, "agent_online": self.agent_online(), "job": job_frame(job)}
 
     # ---------------- chat ----------------
 
@@ -365,6 +386,7 @@ class BridgeService:
             "inflight": inflight["id"] if inflight else None,
             "agent": self.agent_status(),
             "cursor": cursor,
+            "jobs": [job_frame(j) for j in self.store.active_jobs(thread_id, SESSION_JOB_KINDS)],
         }
 
     # ---------------- settings / status ----------------
@@ -472,6 +494,8 @@ class BridgeService:
             self.store.set_meta("agent_worker", worker)
             job = self.store.claim_job(worker, kinds)
             remaining = deadline - time.time()
+            if job and job["kind"] in SESSION_JOB_KINDS and job["payload"].get("thread"):
+                self._pub(job["payload"]["thread"], "job", job_frame(job))  # queued → running
             if job or remaining <= 0:
                 return job
             self.store.wait_for_job(min(1.0, remaining))
@@ -557,13 +581,27 @@ class BridgeService:
                 self._pub_done(msg["id"], thread, msg_status, job)
             if body.context and isinstance(body.context, dict) and body.context.get("used") is not None:
                 self._save_context(thread, body.context)
-            if job["kind"] in ("context", "compact"):
-                self._pub(thread, "job", {k: job.get(k) for k in ("id", "kind", "status", "result", "error")})
+            if job["kind"] in SESSION_JOB_KINDS:
+                if job["kind"] == "compact" and status == "done":
+                    self._note_compaction(thread, body.result)
+                self._pub(thread, "job", job_frame(job))
+
+    def _note_compaction(self, thread: str, result: str | None) -> None:
+        """Leave a visible line in the conversation: the history Claude sees is now a summary."""
+        try:
+            meta = (json.loads(result or "{}") or {}).get("compact") or {}
+        except json.JSONDecodeError:
+            meta = {}
+        size = f"：{_fmt_tokens(meta.get('pre_tokens'))} → {_fmt_tokens(meta.get('post_tokens'))}" if meta.get("pre_tokens") else ""
+        msg = self.store.add_message(thread, "system", f"已压缩会话历史{size}。之后 Claude 看到的是摘要，更早的细节可能记不清。")
+        self._pub(thread, "message", msg)
 
     def requeue_stale(self) -> int:
         n = 0
         for job in self.store.stale_running(self.config.stale_seconds):
             self.store.finish_job(job["id"], "failed", None, "helper 心跳超时")
+            if job["kind"] in SESSION_JOB_KINDS and job["payload"].get("thread"):
+                self._pub(job["payload"]["thread"], "job", job_frame(self.store.get_job(job["id"]) or job))
             n += 1
         for msg in self.store.orphan_inflight():
             job = self.store.get_job(msg["job_id"])

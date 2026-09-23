@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml,
+  splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
 } from '../src/claude_bridge/static/bridge-widget.js';
 
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
@@ -169,4 +169,16 @@ test('modelOptionsHtml: optgroups for reported models, unknown saved value kept 
   const stale = modelOptionsHtml(models, 'claude-opus-9');
   assert.match(stale, /<option value="claude-opus-9" selected>claude-opus-9（helper 的 CLI 不认）<\/option>$/);
   assert.doesNotMatch(modelOptionsHtml([{ id: 'a', label: 'A' }], 'a'), /optgroup/);
+});
+
+test('compaction banner: queued vs running with an elapsed counter; nothing when idle', () => {
+  const now = Date.parse('2026-09-24T01:02:30Z');
+  assert.equal(fmtElapsed('2026-09-24 01:01:05', now), '1:25');
+  assert.equal(fmtElapsed(null), '0:00');
+  assert.match(jobBannerHtml({ kind: 'compact', status: 'queued' }), /压缩任务排队中/);
+  const run = jobBannerHtml({ kind: 'compact', status: 'running', started_at: '2026-09-24 01:01:05' });
+  assert.match(run, /正在压缩/); assert.match(run, /data-job-since="2026-09-24 01:01:05"/); assert.match(run, /自动更新/);
+  assert.match(jobBannerHtml({ kind: 'context', status: 'running' }), /正在刷新构成/);
+  assert.equal(jobBannerHtml({ kind: 'compact', status: 'done' }), '');
+  assert.equal(jobBannerHtml(null), '');
 });

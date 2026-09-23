@@ -242,6 +242,12 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-meter { display: inline-block; width: 72px; height: 6px; border-radius: 3px; background: var(--bridge-border); overflow: hidden; flex: none; }
 .bridge-meter i { display: block; height: 100%; background: var(--bridge-accent); }
 .bridge-meter.hot i { background: var(--bridge-err); }
+/* a queued / running /compact or /context job */
+.bridge-job { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--bridge-accent) 10%, transparent); color: var(--bridge-fg); font-size: 12.5px; line-height: 1.5; }
+.bridge-job b { font-weight: 600; }
+.bridge-job-hint { color: var(--bridge-muted); font-size: 11.5px; margin-top: 2px; }
+.bridge-spin { flex: none; display: inline-block; width: 14px; height: 14px; margin-top: 2px; border: 2px solid var(--bridge-accent); border-right-color: transparent; border-radius: 50%; animation: bridge-spin .8s linear infinite; }
+.bridge-pill.busy .ring { background: conic-gradient(var(--bridge-accent) 30%, var(--bridge-border) 0); animation: bridge-spin 1s linear infinite; }
 /* /context breakdown panel */
 .bridge-ctx { border: 1px solid var(--bridge-border); border-radius: 8px; padding: 10px 12px; font-size: 12px; background: var(--bridge-bg); display: flex; flex-direction: column; gap: 8px; }
 .bridge-ctx-help { margin: 0; color: var(--bridge-muted); line-height: 1.5; }

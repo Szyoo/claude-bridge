@@ -119,10 +119,38 @@ const CATEGORY_ZH = {
 };
 const CATEGORY_COLORS = ['#3b6df2', '#e0703a', '#2e9b5d', '#d4a72c', '#8b8b8b', '#6f6f6f', '#3b6df2', '#555555'];
 
-// Renders the /context breakdown into `el`. opts: { onRefresh, onCompact, busy }
+// Elapsed m:ss since a server UTC timestamp ('YYYY-MM-DD HH:MM:SS').
+export function fmtElapsed(utc, now = Date.now()) {
+  if (!utc) return '0:00';
+  const t = Date.parse(String(utc).replace(' ', 'T') + (/Z$|[+-]\d\d:?\d\d$/.test(utc) ? '' : 'Z'));
+  if (Number.isNaN(t)) return '';
+  const sec = Math.max(0, Math.round((now - t) / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+// Refreshes every elapsed counter under `root` (call once a second while a session job is active).
+export function tickJobs(root = document) {
+  for (const el of root.querySelectorAll('[data-job-since]')) el.textContent = fmtElapsed(el.dataset.jobSince);
+}
+const jobActive = (j) => !!j && (j.status === 'queued' || j.status === 'running');
+
+// Status line for a queued / running `/compact` or `/context` job (the server pushes `job` frames as it moves).
+export function jobBannerHtml(job) {
+  if (!jobActive(job)) return '';
+  const queued = job.status === 'queued';
+  if (job.kind === 'compact') {
+    const since = job.started_at || '';
+    return `<div class="bridge-job"><i class="bridge-spin"></i><div><b>${queued ? '压缩任务排队中' : '正在压缩'}</b>`
+      + (queued ? '' : ` · 已进行 <span data-job-since="${esc(since)}">${fmtElapsed(since)}</span>`)
+      + `<div class="bridge-job-hint">${queued ? '等 helper 接手；helper 离线时会一直排队。'
+        : 'Claude 在通读这段对话的全部历史并写成摘要，对话越长越久（通常 1–3 分钟）。完成后上下文数字会自动更新，不用手动刷新。'}</div></div></div>`;
+  }
+  return `<div class="bridge-job"><i class="bridge-spin"></i><div><b>${queued ? '刷新构成排队中' : '正在刷新构成…'}</b></div></div>`;
+}
+
+// Renders the /context breakdown into `el`. opts: { onRefresh, onCompact, busy, job }
 export function renderContextPanel(el, ctx, opts = {}) {
   if (!ctx || ctx.used == null) {
-    el.innerHTML = `<div class="bridge-ctx"><p class="bridge-ctx-help">${esc(CONTEXT_HELP)}</p><p class="bridge-muted bridge-tiny">还没有构成数据：回答一次后自动获取，或点「刷新构成」。</p>`
+    el.innerHTML = `<div class="bridge-ctx">${jobBannerHtml(opts.job)}<p class="bridge-ctx-help">${esc(CONTEXT_HELP)}</p><p class="bridge-muted bridge-tiny">还没有构成数据：回答一次后自动获取，或点「刷新构成」。</p>`
       + `<div class="bridge-ctx-foot"><span></span><button type="button" class="bridge-btn bridge-tiny" data-ctx="refresh"${opts.busy ? ' disabled' : ''}>刷新构成</button></div></div>`;
   } else {
     const win = ctx.window || 1;
@@ -135,7 +163,7 @@ export function renderContextPanel(el, ctx, opts = {}) {
       return `<tr class="${c.deferred ? 'deferred' : ''}"><td>${dot}${esc(CATEGORY_ZH[c.name] || c.name)}</td><td class="n">${fmtTokens(c.tokens)}</td><td class="n">${pct}</td></tr>`;
     }).join('');
     const thr = ctx.autocompact_pct ? `<p class="bridge-ctx-help">用到约 ${ctx.autocompact_pct}% 时 Claude Code 会自动压缩历史（保留摘要）；「压缩会话」现在就做同样的事，需要模型读一遍历史，会花一次调用。</p>` : '';
-    el.innerHTML = `<div class="bridge-ctx">
+    el.innerHTML = `<div class="bridge-ctx">${jobBannerHtml(opts.job)}
       <p class="bridge-ctx-help">${esc(CONTEXT_HELP)}</p>
       <div class="bridge-ctx-head"><b>${fmtTokens(ctx.used)} / ${fmtTokens(win)}（${ctx.pct ?? Math.round(ctx.used / win * 100)}%）</b><span class="bridge-muted bridge-tiny">${esc(ctx.model || '')}</span></div>
       <div class="bridge-ctx-bar">${segs}</div>
@@ -723,7 +751,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   const $ = (sel) => el.querySelector(sel);
   const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop'), pill = $('[data-act="ctx"]');
-  const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null };
+  const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null, job: null, ticker: null };
   const att = mountAttachments({
     button: $('[data-act="attach"]'), input: $('.bridge-file'), tray: $('.bridge-tray'), textarea: input, dropZone: $('.bridge-form'), client,
     onChange: ({ busy }) => { sendBtn.disabled = !!state.inflight || busy; }, onError: (msg) => toast(msg, true),
@@ -781,16 +809,21 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   function summary() { return sessionSummary([...state.msgs.values()], { contextWindows: o.contextWindows, context: state.threadRow?.context }); }
   function renderSession() {
-    const s = summary();
-    pill.hidden = s.pct == null;
-    if (s.pct != null) { pill.querySelector('.pct').textContent = `${s.pct}%`; pill.style.setProperty('--p', s.pct); pill.classList.toggle('hot', s.pct >= 80); }
+    const s = summary(), job = jobActive(state.job) ? state.job : null, compacting = job?.kind === 'compact';
+    pill.hidden = s.pct == null && !compacting;
+    pill.classList.toggle('busy', compacting);
+    if (compacting) pill.querySelector('.pct').innerHTML = job.status === 'running' ? `压缩中 <span data-job-since="${esc(job.started_at || '')}">${fmtElapsed(job.started_at)}</span>` : '压缩排队中';
+    else if (s.pct != null) { pill.querySelector('.pct').textContent = `${s.pct}%`; pill.style.setProperty('--p', s.pct); pill.classList.toggle('hot', s.pct >= 80); }
     if (!pops.ctx.hidden) renderSessionPanel(ctxBody(), s, ctxActions());
+    if (job && !state.ticker) state.ticker = setInterval(() => { tickJobs(el); tickJobs(pops.ctx); }, 1000);
+    if (!job && state.ticker) { clearInterval(state.ticker); state.ticker = null; }
   }
   function ctxActions() {
     const run = (fn, msg) => async () => {
-      try { state.ctxBusy = true; renderSession(); await fn(state.thread); toast(msg); } catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); }
+      try { state.ctxBusy = true; renderSession(); const r = await fn(state.thread); if (r?.job) state.job = r.job; state.ctxBusy = false; renderSession(); toast(msg); }
+      catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); }
     };
-    return { busy: state.ctxBusy, onRefresh: run((t) => client.refreshContext(t), '已请求刷新，helper 计算中…'), onCompact: run((t) => client.compact(t), '已请求压缩，Claude 正在整理历史…') };
+    return { busy: state.ctxBusy || jobActive(state.job), job: state.job, onRefresh: run((t) => client.refreshContext(t), '已请求刷新，helper 计算中…'), onCompact: run((t) => client.compact(t), '已请求压缩，进度见上下文胶囊') };
   }
   function renderAgent(agent, fallback = state.sub?.fallback) {
     if (agent) state.agent = agent;
@@ -803,6 +836,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     list.innerHTML = '';
     state.msgs.clear(); state.order = [];
     state.threadRow = snap.thread;
+    state.job = (snap.jobs || []).find(j => j.kind === 'compact') || (snap.jobs || [])[0] || null;
     if (!snap.messages.length) list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`;
     for (const m of snap.messages) upsert(m);
     state.inflight = snap.inflight;
@@ -831,7 +865,10 @@ export function mountBridgeWidget(el, client, opts = {}) {
       onThread: (t) => { if (t.id === state.thread) { state.threadRow = { ...state.threadRow, ...t }; $('.bridge-title').textContent = t.title || S.threadTitle; } loadThreads(); },
       onContext: (c) => { if (state.threadRow) state.threadRow.context = c.context; state.ctxBusy = false; renderSession(); },
       onJob: (j) => {
-        state.ctxBusy = false; renderSession();
+        state.ctxBusy = false;
+        if (jobActive(j)) { state.job = j; renderSession(); return; }
+        if (state.job?.id === j.id) state.job = null;
+        renderSession();
         if (j.kind === 'compact') {
           let r = null; try { r = JSON.parse(j.result || '{}'); } catch { r = null; }
           if (j.status === 'done' && r?.compact) toast(describeCompact({ ...r.compact, trigger: 'manual' }));
@@ -972,7 +1009,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   return {
     destroy() {
-      state.sub?.close();
+      state.sub?.close(); clearInterval(state.ticker);
       offOutside(); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
       for (const p of Object.values(pops)) p.remove();
       menu?.remove(); scrim.remove(); setScrollLock(false); att.destroy();

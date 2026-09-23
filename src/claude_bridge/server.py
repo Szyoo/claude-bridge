@@ -106,7 +106,7 @@ def create_bridge(
     @browser.get("/threads/{thread_id}")
     def get_thread(thread_id: str):
         snap = _svc(service.snapshot, thread_id)
-        return {k: snap[k] for k in ("thread", "messages", "inflight", "agent")}
+        return {k: snap[k] for k in ("thread", "messages", "inflight", "agent", "jobs")}
 
     @browser.post("/threads/{thread_id}/select")
     def select_thread(thread_id: str, body: ThreadSelectIn | None = None):
