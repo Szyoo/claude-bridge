@@ -38,6 +38,7 @@ claude-bridge status    # 服务端可达性 + claude --version + claude auth st
 | 变量 | 用途 | 默认 |
 |---|---|---|
 | `CLAUDE_BRIDGE_DB` | SQLite 文件 | `claude-bridge.db` |
+| `CLAUDE_BRIDGE_FILES` | 聊天里上传的图片存放目录 | DB 同目录下的 `claude-bridge-files/` |
 | `CLAUDE_BRIDGE_PASSWORD` / `_SECRET` | 登录口令 / cookie 签名密钥(不设则每次重启失效) | — |
 | `CLAUDE_BRIDGE_AGENT_TOKEN` | 服务端与 worker 的共享 Bearer 令牌 | — |
 | `CLAUDE_BRIDGE_COOKIE_SECURE` | `1`/`0`;默认非 localhost 为 1 | — |
@@ -112,6 +113,15 @@ worker.run_forever()
 | `DEFAULT_PREFS / loadPrefs / savePrefs / sanitizePrefs / applyPrefs(root, prefs)` | 每台设备自己的界面偏好(文字大小、密度三档 13/14/16px、正文宽度、发送键、时间戳、工具默认展开、代码换行、侧栏、聊天区高度、拖过的输入框高 / 侧栏宽),`applyPrefs` 只写 CSS 变量与 class |
 | `renderPrefsPanel(el, prefs, {onChange, classes, fields})` | 偏好控件;`classes` 可把结构类名映射到宿主设计系统的开关 / 胶囊 |
 | `isSendKey(e, prefs) / sendHint(prefs) / placePopover(anchor, pop) / attachDrag(handle, onMove, onEnd) / fmtTime / fmtRelative` | 发送键判定、fixed 弹层定位(窄屏由样式改成底部抽屉)、拖拽改高 / 改宽 |
+| `planImage / prepareImages / mountAttachments({button, input, tray, textarea, dropZone, client})` | 发图:见下 |
+
+### 图片
+
+宿主在 `BridgeConfig(files_dir=...)` 里给一个目录就开启上传(`None` = 关闭,`GET /settings` 的 `uploads.enabled` 会告诉前端)。
+
+- **浏览器**:`mountAttachments` 接管 📎 按钮 / 输入框粘贴 / 拖入,选好就处理并上传,托盘显示缩略图;发送时 `client.send(text, {files: att.ids()})`,有图时文字可以为空。处理只管尺寸不压画质:长边 > 2000px 才等比缩(同一请求图超过 20 张时 API 要求每张 ≤2000px,CLI 每轮都会重发历史里的图),长截图(长宽比 > 2.4)不缩、切成 ≤2000px 的段按顺序发;PNG 截图保持 PNG,相册照片(JPEG / HEIC)出 JPEG。
+- **服务端**:按文件头魔数认 PNG / JPEG / GIF / WebP(不信任 Content-Type,不收 SVG),单张默认 ≤7MB(API 单图 10MB 上限是按 base64 算的);文件落盘 `<files_dir>/<id>.<ext>`,表 `bridge_files` 记元数据;发送时绑定到用户消息,删对话一起删,24 小时没发出去的上传自动清掉。
+- **worker**:任务 payload 带 `files` 时,从 `GET /api/agent/files/{id}` 取回、base64,改用 `claude -p --input-format stream-json` 把图片和文字放进同一条用户消息(图在前,多张时逐张标注);不带图的消息命令行不变。
 
 ## HTTP API
 
@@ -125,9 +135,10 @@ worker.run_forever()
 | `GET /threads/{id}/stream` | SSE,见下 |
 | `POST /messages/{id}/cancel` | `{status: cancelled \| cancelling \| noop}` |
 | `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 排一个 worker 任务：`claude -p "/context"`（本地计算、零费用）刷新这段会话的上下文构成 / `claude -p "/compact"` 压缩历史；结果存在线程上（`thread.context`），并以 SSE `context` / `job` 帧推给浏览器。每次回答结束 worker 也会自动刷新一次构成 |
-| `GET/PUT /settings` · `GET /jobs` · `GET /jobs/{id}` · `GET /status` | 模型 / effort / 轮数 / 是否带背景;任务表;helper 在线状态 |
+| `POST /files?name=` · `GET /files/{id}` | 上传图片(请求体就是图片本身)/ 取图;发送时 `/send` 与 `/threads/{id}/messages` 带 `files: [id…]` |
+| `GET/PUT /settings` · `GET /jobs` · `GET /jobs/{id}` · `GET /status` | 模型 / effort / 轮数 / 是否带背景 / 上传开关;任务表;helper 在线状态 |
 
-Agent router(Bearer 令牌):`POST /jobs/next`(长轮询)· `GET /jobs/{id}` · `POST /jobs/{id}/events {status?, deltas?, events?}` → `{ok, cancel}` · `POST /jobs/{id}/finish {ok, cancelled?, result?, error?, error_kind?, session_id?, reset_session?}` · `POST /chat` · `GET /status`。
+Agent router(Bearer 令牌):`POST /jobs/next`(长轮询)· `GET /jobs/{id}` · `GET /files/{id}` · `POST /jobs/{id}/events {status?, deltas?, events?}` → `{ok, cancel}` · `POST /jobs/{id}/finish {ok, cancelled?, result?, error?, error_kind?, session_id?, reset_session?}` · `POST /chat` · `GET /status`。
 
 SSE 帧:`snapshot`(首帧:线程(含 `context` 构成)+ 消息 + 进行中的消息 id + helper 状态 + 事件游标)、`message`、`delta {message_id, text, rev}`、`event`(`init | tool_use | tool_result | thinking | usage | rate_limit | compact | status | error`)、`status`、`thread`、`context`、`job`、`done`;每 15 s 一个 `: ping`。`id:` 是事件表的全局自增 id,浏览器重连时带 `Last-Event-ID` 只补新事件。
 

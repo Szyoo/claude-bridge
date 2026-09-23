@@ -158,6 +158,23 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
 
+/* ---------- images: thumbnails in a user turn, the composer's attachment tray ---------- */
+.bridge-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.bridge-files a { display: block; line-height: 0; }
+.bridge-files img { max-height: 160px; max-width: min(240px, 100%); border-radius: var(--chat-radius); border: 1px solid var(--bridge-border); object-fit: cover; background: var(--bridge-user); }
+.bridge-file-ph { color: var(--bridge-muted); font-size: .857em; }
+.bridge-tray { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 2px 4px; }
+.bridge-att { position: relative; width: 56px; height: 56px; border-radius: var(--chat-radius); overflow: hidden; border: 1px solid var(--bridge-border); background: var(--bridge-user); }
+.bridge-att img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bridge-att.uploading img { opacity: .5; }
+.bridge-att.error { border-color: var(--bridge-err); }
+.bridge-att-name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 1.4; text-align: center; color: #fff; background: rgba(0, 0, 0, .5); }
+.bridge-att-spin { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border: 2px solid var(--bridge-accent); border-right-color: transparent; border-radius: 50%; animation: bridge-spin .8s linear infinite; }
+.bridge-att-err { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--bridge-err); color: #fff; font-style: normal; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.bridge-att-x { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; font-size: 10px; line-height: 18px; cursor: pointer; }
+.bridge-drop { outline: 2px dashed var(--bridge-accent); outline-offset: -2px; }
+@keyframes bridge-spin { to { transform: rotate(360deg); } }
+
 /* ---------- composer ---------- */
 .bridge-form { position: relative; margin: 0 var(--chat-gutter) var(--chat-item-gap); padding: .45em .5em .4em; border: 1px solid var(--bridge-border); border-radius: var(--chat-radius-composer); background: var(--bridge-panel); box-shadow: var(--bridge-shadow-composer); display: grid; gap: 4px; }
 .bridge-form:focus-within { box-shadow: var(--bridge-shadow-composer-focus); border-color: color-mix(in srgb, var(--bridge-muted) 60%, var(--bridge-border)); }

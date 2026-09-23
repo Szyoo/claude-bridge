@@ -296,7 +296,7 @@ function messageModel(m) {
 }
 
 // Renders one message into `el` (a .bridge-turn). Re-rendering keeps the user's expand/collapse choices.
-// opts: { markdown, head (speaker line), timestamps, open (tools expanded by default), strings }
+// opts: { markdown, head (speaker line), timestamps, open (tools expanded by default), fileUrl(id) (image thumbnails), strings }
 export function renderTurn(el, m, opts = {}) {
   const o = { markdown: defaultMarkdown, head: true, timestamps: true, open: false, strings: {}, ...opts };
   const S = { me: '我', assistant: 'Claude', waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', ...o.strings };
@@ -313,7 +313,14 @@ export function renderTurn(el, m, opts = {}) {
       + `<span class="bridge-turn-meta">${meta.filter(Boolean).map(esc).join(' · ')}</span></div>`;
   }
   let body;
-  if (m.role === 'user') body = `<div class="bridge-user-text">${esc(m.content || '')}</div>`;
+  if (m.role === 'user') {
+    const files = (m.files || []).map((f) => {
+      const u = o.fileUrl?.(f.id);
+      return u ? `<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(f.name || '查看原图')}"><img src="${esc(u)}" alt="${esc(f.name || '图片')}" loading="lazy"></a>`
+        : '<span class="bridge-file-ph">[图片]</span>';
+    }).join('');
+    body = (files ? `<div class="bridge-files">${files}</div>` : '') + (m.content ? `<div class="bridge-user-text">${esc(m.content)}</div>` : '');
+  }
   else {
     const streaming = m.status === 'pending' || m.status === 'streaming';
     const segs = splitTurn(m.content || '', m.events || []);
@@ -457,6 +464,153 @@ export function attachDrag(handle, onMove, onEnd) {
   return () => { handle.removeEventListener('pointerdown', down); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); };
 }
 
+// ============================================================
+// Images. Screenshots go up as-is (PNG keeps small text crisp; lossy JPEG smears it). Two size rules only:
+// - long edge ≤ 2000px: once a request carries more than 20 images the API rejects any image over 2000px, and the
+//   CLI re-sends every image in the session history on each turn;
+// - very long screenshots (aspect > 2.4) are not shrunk (the text would become unreadable) but cut into
+//   ≤2000px pieces that overlap a little and are sent in order.
+// ============================================================
+
+export const IMAGE_LIMITS = { max: 2000, maxBytes: 7 * 1024 * 1024, ratio: 2.4, overlap: 60, maxTiles: 8, maxFiles: 10 };
+const PASSTHROUGH = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+// Pure: what to do with an image of this size/type → {mode:'asis'} | {mode:'scale', w, h, out} |
+// {mode:'tiles', out, tiles:[{sx, sy, sw, sh, dw, dh}]} (source rect → destination size).
+export function planImage({ width: w, height: h, type = '', size = 0 }, limits = {}) {
+  const L = { ...IMAGE_LIMITS, ...limits };
+  const out = /png|gif|webp/.test(type) ? 'image/png' : 'image/jpeg';   // photos (JPEG / HEIC) stay JPEG
+  const long = Math.max(w, h), short = Math.min(w, h);
+  if (long <= L.max && size <= L.maxBytes && PASSTHROUGH.includes(type)) return { mode: 'asis' };
+  if (long <= L.max || long / short <= L.ratio) {
+    const k = Math.min(1, L.max / long);
+    return { mode: 'scale', w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)), out };
+  }
+  const vertical = h >= w;
+  const count = (k) => Math.max(1, Math.ceil((long * k - L.overlap) / (L.max - L.overlap)));
+  let k = Math.min(1, L.max / short);                  // keep the short side legible
+  if (count(k) > L.maxTiles) k = (L.maxTiles * (L.max - L.overlap) + L.overlap) / long;   // too long even so: shrink to fit
+  const len = Math.round(long * k), n = Math.min(L.maxTiles, count(k));
+  const across = Math.max(1, Math.round(short * k));
+  const tiles = [];
+  for (let i = 0; i < n; i++) {
+    const d0 = n === 1 ? 0 : Math.round(i * (len - L.max) / (n - 1));   // evenly spread; overlap ≥ L.overlap
+    const dl = Math.min(L.max, len - d0);
+    tiles.push(vertical ? { sx: 0, sy: d0 / k, sw: w, sh: dl / k, dw: across, dh: dl }
+      : { sx: d0 / k, sy: 0, sw: dl / k, sh: h, dw: dl, dh: across });
+  }
+  return { mode: 'tiles', out, tiles };
+}
+
+async function decodeImage(file) {
+  if (globalThis.createImageBitmap) {
+    try { const b = await createImageBitmap(file); return { src: b, width: b.width, height: b.height, close: () => b.close?.() }; }
+    catch { /* e.g. HEIC outside Safari: try an <img> */ }
+  }
+  const url = URL.createObjectURL(file);
+  const im = new Image();
+  im.src = url;
+  try { await im.decode(); }
+  catch { URL.revokeObjectURL(url); throw new Error(`${file.name || '图片'} 解码失败，格式可能不支持`); }
+  return { src: im, width: im.naturalWidth, height: im.naturalHeight, close: () => URL.revokeObjectURL(url) };
+}
+
+// One ≤2000×2000 canvas at a time (iOS caps canvas area), released right after encoding.
+async function drawTo(src, r, type, maxBytes) {
+  const c = document.createElement('canvas');
+  c.width = r.dw; c.height = r.dh;
+  const g = c.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  const paint = (bg) => { if (bg) { g.fillStyle = '#fff'; g.fillRect(0, 0, r.dw, r.dh); } g.drawImage(src, r.sx, r.sy, r.sw, r.sh, 0, 0, r.dw, r.dh); };
+  const encode = (t, q) => new Promise((res) => c.toBlob(res, t, q));
+  paint(type === 'image/jpeg');                       // transparent pixels would turn black in a JPEG
+  let blob = await encode(type, 0.92);
+  if (blob && blob.size > maxBytes && type !== 'image/jpeg') { paint(true); blob = await encode('image/jpeg', 0.9); }
+  c.width = c.height = 0;
+  if (!blob) throw new Error('图片处理失败');
+  return blob;
+}
+
+// Files → [{blob, name}] ready to upload. `name` labels long-screenshot parts ("长截图 2/3").
+export async function prepareImages(files, limits = {}) {
+  const L = { ...IMAGE_LIMITS, ...limits };
+  const out = [];
+  for (const file of files) {
+    if (!/^image\//.test(file.type) && !/\.(png|jpe?g|gif|webp|heic|heif)$/i.test(file.name || '')) throw new Error(`${file.name || '这个文件'}不是图片`);
+    const img = await decodeImage(file);
+    try {
+      const plan = planImage({ width: img.width, height: img.height, type: file.type, size: file.size }, L);
+      if (plan.mode === 'asis') out.push({ blob: file, name: '' });
+      else if (plan.mode === 'scale') out.push({ blob: await drawTo(img.src, { sx: 0, sy: 0, sw: img.width, sh: img.height, dw: plan.w, dh: plan.h }, plan.out, L.maxBytes), name: '' });
+      else for (const [i, t] of plan.tiles.entries()) out.push({ blob: await drawTo(img.src, t, plan.out, L.maxBytes), name: `长截图 ${i + 1}/${plan.tiles.length}` });
+    } finally { img.close(); }
+  }
+  return out;
+}
+
+// Attachment tray for a composer: a button + hidden <input type=file>, paste into the textarea, drop onto
+// `dropZone`. Each image is prepared and uploaded right away; the tray shows thumbnails with ✕ / spinner / error.
+// Returns { ids(), busy(), count(), clear(), add(files), setEnabled(on), setLimits(l), destroy() }.
+export function mountAttachments({ button, input, tray, textarea, dropZone, client, limits = {}, onChange, onError } = {}) {
+  let L = { ...IMAGE_LIMITS, ...limits }, items = [], seq = 0, enabled = true;
+  const changed = () => onChange?.({ busy: items.some(i => i.status === 'uploading'), count: items.length });
+  const render = () => {
+    tray.hidden = !items.length;
+    tray.innerHTML = items.map(it => `<div class="bridge-att ${it.status}" data-k="${it.key}" title="${esc(it.error || it.name || '')}">`
+      + `<img src="${it.url}" alt="">${it.name ? `<span class="bridge-att-name">${esc(it.name.replace('长截图 ', ''))}</span>` : ''}`
+      + `${it.status === 'uploading' ? '<i class="bridge-att-spin"></i>' : ''}${it.status === 'error' ? '<i class="bridge-att-err">!</i>' : ''}`
+      + '<button type="button" class="bridge-att-x" aria-label="移除">✕</button></div>').join('');
+  };
+  async function add(files) {
+    files = [...(files || [])].filter(f => f && (f.type?.startsWith('image/') || /\.(heic|heif)$/i.test(f.name || '')));
+    if (!files.length || !enabled) return;
+    let pieces;
+    try { pieces = await prepareImages(files, L); } catch (e) { onError?.(e.message); return; }
+    const room = L.maxFiles - items.length;
+    if (pieces.length > room) { onError?.(`一条消息最多 ${L.maxFiles} 张图（长截图会切成几张）`); pieces = pieces.slice(0, Math.max(0, room)); }
+    const added = pieces.map(p => ({ key: ++seq, blob: p.blob, name: p.name, url: URL.createObjectURL(p.blob), status: 'uploading', id: null, error: '' }));
+    items.push(...added); render(); changed();
+    await Promise.all(added.map(async (it) => {
+      try { it.id = (await client.upload(it.blob, { name: it.name })).id; it.status = 'ready'; }
+      catch (e) { it.status = 'error'; it.error = e.message; onError?.(`图片上传失败：${e.message}`); }
+      if (items.includes(it)) { render(); changed(); }
+    }));
+  }
+  const remove = (key) => { const it = items.find(i => i.key === key); if (!it) return; URL.revokeObjectURL(it.url); items = items.filter(i => i !== it); render(); changed(); };
+  const onPick = () => { add(input.files); input.value = ''; };
+  const onButton = () => input.click();
+  const onTray = (e) => { const x = e.target.closest('.bridge-att-x'); if (x) remove(Number(x.closest('.bridge-att').dataset.k)); };
+  const onPaste = (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length && enabled) { e.preventDefault(); add(files); }
+  };
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  const onOver = (e) => { if (!hasFiles(e) || !enabled) return; e.preventDefault(); dropZone.classList.add('bridge-drop'); };
+  const onLeave = (e) => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('bridge-drop'); };
+  const onDrop = (e) => { if (!hasFiles(e) || !enabled) return; e.preventDefault(); dropZone.classList.remove('bridge-drop'); add(e.dataTransfer.files); };
+  button?.addEventListener('click', onButton); input?.addEventListener('change', onPick); tray.addEventListener('click', onTray);
+  textarea?.addEventListener('paste', onPaste);
+  dropZone?.addEventListener('dragover', onOver); dropZone?.addEventListener('dragleave', onLeave); dropZone?.addEventListener('drop', onDrop);
+  return {
+    ids: () => items.filter(i => i.status === 'ready').map(i => i.id),
+    busy: () => items.some(i => i.status === 'uploading'),
+    failed: () => items.some(i => i.status === 'error'),
+    count: () => items.length,
+    add,
+    clear() { for (const it of items) URL.revokeObjectURL(it.url); items = []; render(); changed(); },
+    setEnabled(on) { enabled = !!on; if (button) button.hidden = !enabled; },
+    setLimits(l) { L = { ...L, ...l }; },
+    destroy() {
+      this.clear();
+      button?.removeEventListener('click', onButton); input?.removeEventListener('change', onPick); tray.removeEventListener('click', onTray);
+      textarea?.removeEventListener('paste', onPaste);
+      dropZone?.removeEventListener('dragover', onOver); dropZone?.removeEventListener('dragleave', onLeave); dropZone?.removeEventListener('drop', onDrop);
+    },
+  };
+}
+
+export const IMAGE_ICON = '<svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M14 10.5 10.5 7 4 13"/></svg>';
+
 // Popover chrome: a head row (title + ✕; on phones also a grip — swipe the head down to dismiss) above a body.
 // Fills `pop`, returns the body element to render into. The ✕ sits outside the drag area: pointer capture on
 // the drag handle would otherwise retarget its click.
@@ -528,9 +682,12 @@ export function mountBridgeWidget(el, client, opts = {}) {
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
         <form class="bridge-form">
           <div class="bridge-grip" title="拖动调整输入框高度，双击恢复自动"></div>
+          <div class="bridge-tray" hidden></div>
           <textarea class="bridge-input" rows="1" placeholder="${esc(o.placeholder)}"></textarea>
           <div class="bridge-bar">
             <button type="button" class="bridge-icon" data-act="prefs" title="设置" aria-label="设置"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h7M13 4h1M2 8h2M8 8h6M2 12h8"/><circle cx="11" cy="4" r="1.7"/><circle cx="6" cy="8" r="1.7"/><circle cx="12" cy="12" r="1.7"/></svg></button>
+            <button type="button" class="bridge-icon" data-act="attach" title="添加图片（也可以粘贴、拖进来）" aria-label="添加图片" hidden>${IMAGE_ICON}</button>
+            <input type="file" class="bridge-file" accept="image/*" multiple hidden />
             <span class="grow"></span>
             ${o.showSettings ? `<select class="bridge-pick" data-set="effort" title="思考深度"></select><select class="bridge-pick" data-set="model" title="模型"></select>` : ''}
             <button type="button" class="bridge-pill" data-act="ctx" hidden title="当前会话上下文占用，点开看构成与额度"><span class="pct"></span><i class="ring"></i></button>
@@ -552,6 +709,10 @@ export function mountBridgeWidget(el, client, opts = {}) {
   const $ = (sel) => el.querySelector(sel);
   const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop'), pill = $('[data-act="ctx"]');
   const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null };
+  const att = mountAttachments({
+    button: $('[data-act="attach"]'), input: $('.bridge-file'), tray: $('.bridge-tray'), textarea: input, dropZone: $('.bridge-form'), client,
+    onChange: ({ busy }) => { sendBtn.disabled = !!state.inflight || busy; }, onError: (msg) => toast(msg, true),
+  });
 
   // ---------- helpers ----------
   let toastTimer;
@@ -567,7 +728,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   function setPending(on) {
     state.inflight = on ? state.inflight : null;
-    sendBtn.disabled = !!on;
+    sendBtn.disabled = !!on || att.busy();
     stopBtn.hidden = !on;
     input.placeholder = on ? 'Claude 正在回答，稍等…' : placeholder();
   }
@@ -586,7 +747,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const m = state.msgs.get(id); if (!m) return;
     const b = list.querySelector(`.bridge-turn[data-id="${id}"]`); if (!b) return;
     const follow = nearBottom();
-    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, strings: { me: S.me, assistant: S.assistant, waitingHelper: S.waitingHelper, thinking: S.thinking } });
+    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, fileUrl: (id) => client.fileUrl(id), strings: { me: S.me, assistant: S.assistant, waitingHelper: S.waitingHelper, thinking: S.thinking } });
     if (follow) scrollBottom();
   }
   function schedulePaint(id) {
@@ -706,6 +867,8 @@ export function mountBridgeWidget(el, client, opts = {}) {
       effort.innerHTML = s.efforts.map(e => `<option value="${esc(e)}">${e ? esc(e) : '默认'}</option>`).join('');
       effort.value = s.chat.effort || '';
       renderAgent(s.agent);
+      att.setEnabled(!!s.uploads?.enabled);
+      if (s.uploads) att.setLimits({ maxBytes: s.uploads.max_bytes, maxFiles: s.uploads.max_files });
     } catch (e) { toast(e.message, true); }
   }
   async function saveSetting(patch) {
@@ -733,11 +896,14 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   // ---------- actions ----------
   async function send() {
-    const text = input.value.trim(); if (!text) return;
+    const text = input.value.trim();
+    if (att.busy()) { toast('图片还在上传，稍等'); return; }
+    if (!text && !att.ids().length) return;
     sendBtn.disabled = true;
     try {
-      const r = await client.send(text, state.thread ? { thread: state.thread } : { scope: o.scope });
-      input.value = ''; autoGrow();
+      const files = att.ids();
+      const r = await client.send(text, state.thread ? { thread: state.thread, files } : { scope: o.scope, files });
+      input.value = ''; autoGrow(); att.clear();
       if (r.thread !== state.thread) subscribe(r.thread);
     } catch (e) { toast(e.message, true); sendBtn.disabled = false; }
   }
@@ -796,7 +962,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       state.sub?.close();
       offOutside(); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
       for (const p of Object.values(pops)) p.remove();
-      menu?.remove(); scrim.remove(); setScrollLock(false);
+      menu?.remove(); scrim.remove(); setScrollLock(false); att.destroy();
       el.innerHTML = '';
     },
     openThread,

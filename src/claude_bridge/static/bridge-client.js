@@ -24,9 +24,10 @@ export class BridgeClient {
     this.idlePollInterval = idlePollInterval;
   }
 
-  async request(method, path, body) {
+  async request(method, path, body, { raw = null, type = '' } = {}) {
     const opts = { method, headers: {} };
-    if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    if (raw) { opts.headers['Content-Type'] = type || raw.type || 'application/octet-stream'; opts.body = raw; }
+    else if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     const res = await this.fetch(this.baseUrl + path, opts);
     if (res.status === 401) { this.onAuthLost?.(); throw new BridgeAuthError('未登录'); }
     const data = await res.json().catch(() => ({}));
@@ -50,10 +51,15 @@ export class BridgeClient {
   }
 
   // ---- chat ----
-  send(text, { thread = null, scope = '', key = '', newThread = false } = {}) {
-    if (thread) return this.request('POST', `/threads/${encodeURIComponent(thread)}/messages`, { text });
-    return this.request('POST', '/send', { text, scope, key, new_thread: newThread });
+  // `files` = ids returned by upload(); text may be empty when images are attached
+  send(text, { thread = null, scope = '', key = '', newThread = false, files = [] } = {}) {
+    if (thread) return this.request('POST', `/threads/${encodeURIComponent(thread)}/messages`, { text, files });
+    return this.request('POST', '/send', { text, scope, key, new_thread: newThread, files });
   }
+  // ---- images ----
+  // the body is the image itself; the server identifies the format from its bytes → { id, name, mime, size }
+  upload(blob, { name = '' } = {}) { return this.request('POST', `/files?name=${encodeURIComponent(name)}`, undefined, { raw: blob }); }
+  fileUrl(id) { return `${this.baseUrl}/files/${encodeURIComponent(id)}`; }
   cancel(messageId) { return this.request('POST', `/messages/${messageId}/cancel`); }
   // session-level actions: refresh the /context breakdown, or ask Claude to compact the session history
   refreshContext(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/context`); }

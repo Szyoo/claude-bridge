@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -30,6 +30,9 @@ from claude_bridge.models import (
 from claude_bridge.service import BridgeConfig, BridgeService
 from claude_bridge.sse import SSE_HEADERS, event_stream
 from claude_bridge.store import BridgeStore
+
+# uploads are immutable (a new upload gets a new id); nosniff so a browser never reinterprets the bytes
+FILE_HEADERS = {"Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"}
 
 
 def static_dir() -> Path:
@@ -133,11 +136,33 @@ def create_bridge(
 
     @browser.post("/threads/{thread_id}/messages", status_code=201)
     def send_to_thread(thread_id: str, body: ThreadMessageIn):
-        return _svc(service.start_chat, body.text, thread_id=thread_id)
+        return _svc(service.start_chat, body.text, thread_id=thread_id, files=body.files)
 
     @browser.post("/send", status_code=201)
     def send(body: SendIn):
-        return _svc(service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread)
+        return _svc(
+            service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread, files=body.files
+        )
+
+    # image upload: the request body is the image itself (no multipart dependency); ?name= is an optional label
+    @browser.post("/files", status_code=201)
+    async def upload_file(request: Request, name: str = Query("", max_length=80)):
+        if not service.uploads_enabled:
+            raise HTTPException(status_code=404, detail="未开启图片上传")
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > config.max_file_bytes:
+                raise HTTPException(status_code=413, detail=f"图片超过 {config.max_file_bytes / 1048576:.0f} MB 上限")
+        return await run_in_threadpool(_svc, service.save_upload, bytes(data), name)
+
+    def _file_response(file_id: str) -> FileResponse:
+        path, mime = _svc(service.file_for_download, file_id)
+        return FileResponse(path, media_type=mime, headers=FILE_HEADERS)
+
+    @browser.get("/files/{file_id}")
+    def get_file(file_id: str):
+        return _file_response(file_id)
 
     @browser.get("/threads/{thread_id}/stream")
     async def stream(
@@ -172,6 +197,8 @@ def create_bridge(
             "models": config.model_choices,
             "efforts": config.effort_choices,
             "agent": service.agent_status(),
+            "uploads": {"enabled": service.uploads_enabled, "max_bytes": config.max_file_bytes,
+                        "max_files": config.max_files_per_message},
         }
 
     @browser.put("/settings")
@@ -226,6 +253,10 @@ def create_bridge(
     @agent.get("/status")
     def a_status():
         return service.status()
+
+    @agent.get("/files/{file_id}")
+    def a_get_file(file_id: str):
+        return _file_response(file_id)
 
     return Bridge(
         store=store, config=config, broker=broker, service=service, browser_router=browser, agent_router=agent
