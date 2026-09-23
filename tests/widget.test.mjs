@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS,
+  splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml,
 } from '../src/claude_bridge/static/bridge-widget.js';
 
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
@@ -158,4 +158,15 @@ test('wide panoramas are cut horizontally; a wide-but-short image with a huge sh
   coverage(p.tiles, 8000, 'x');
   const q = planImage({ width: 7000, height: 2500, type: 'image/png', size: 5 * MB });   // short side > 2000 → scaled to 2000 across
   assert.equal(q.mode, 'tiles'); for (const t of q.tiles) assert.equal(t.dh, 2000);
+});
+
+test('modelOptionsHtml: optgroups for reported models, unknown saved value kept and flagged', () => {
+  const models = [{ id: '', label: '默认' }, { id: 'opus', label: '最新 Opus（5.5）', group: '跟随 CLI 最新' },
+    { id: 'claude-opus-5', label: 'Opus 5', group: '固定版本' }];
+  const html = modelOptionsHtml(models, 'opus');
+  assert.match(html, /^<option value="">默认<\/option><optgroup label="跟随 CLI 最新"><option value="opus" selected>/);
+  assert.match(html, /<\/optgroup><optgroup label="固定版本"><option value="claude-opus-5">Opus 5<\/option><\/optgroup>$/);
+  const stale = modelOptionsHtml(models, 'claude-opus-9');
+  assert.match(stale, /<option value="claude-opus-9" selected>claude-opus-9（helper 的 CLI 不认）<\/option>$/);
+  assert.doesNotMatch(modelOptionsHtml([{ id: 'a', label: 'A' }], 'a'), /optgroup/);
 });

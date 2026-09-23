@@ -77,6 +77,20 @@ class JobFinishIn(BaseModel):
     context: dict[str, Any] | None = None  # parsed `claude /context` report for the thread's session
 
 
+class ModelEntry(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    name: str = Field("", max_length=100)  # the CLI's display name, e.g. "Opus 5.5"
+
+
+class AgentModelsIn(BaseModel):
+    """What the worker's local `claude` supports (probed with zero-cost `/model` calls)."""
+
+    cli_version: str = Field("", max_length=100)
+    default_name: str = Field("", max_length=100)
+    aliases: list[ModelEntry] = Field(default_factory=list, max_length=50)
+    pinned: list[ModelEntry] = Field(default_factory=list, max_length=100)
+
+
 class AgentChatIn(BaseModel):
     text: str = Field(min_length=1)
     scope: str = ""

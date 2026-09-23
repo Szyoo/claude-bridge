@@ -159,6 +159,21 @@ export function renderSessionPanel(el, summary, ctxOpts = {}) {
   renderContextPanel(el.querySelector('.bridge-sess-ctx'), summary?.context, ctxOpts);
 }
 
+// <option>s for a model <select>. Entries may carry `group` ("跟随 CLI 最新" / "固定版本" when the worker reported
+// what its CLI supports) → <optgroup>. A saved value the list no longer has is kept, flagged, and selected.
+export function modelOptionsHtml(models, current = '') {
+  current = current || '';
+  let html = '', group = null;
+  for (const m of models || []) {
+    const g = m.group || null;
+    if (g !== group) { if (group) html += '</optgroup>'; if (g) html += `<optgroup label="${esc(g)}">`; group = g; }
+    html += `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)}</option>`;
+  }
+  if (group) html += '</optgroup>';
+  if (current && !(models || []).some(m => m.id === current)) html += `<option value="${esc(current)}" selected>${esc(current)}（helper 的 CLI 不认）</option>`;
+  return html;
+}
+
 export function describeCompact(d) {
   return `已${d.trigger === 'auto' ? '自动' : '手动'}压缩会话：${fmtTokens(d.pre_tokens)} → ${fmtTokens(d.post_tokens)}`;
 }
@@ -850,7 +865,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   function settingsHtml() {
     const s = state.settings; if (!s) return '';
     const opt = (v, t, cur) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(t)}</option>`;
-    return `<div class="bridge-prefs bridge-prefs-chat"><div class="bridge-pref-row"><span class="bridge-pref-label">模型</span><select class="bridge-pick" data-set="model">${s.models.map(m => opt(m.id, m.label, s.chat.model)).join('')}</select></div>`
+    return `<div class="bridge-prefs bridge-prefs-chat"><div class="bridge-pref-row"><span class="bridge-pref-label">模型</span><select class="bridge-pick" data-set="model">${modelOptionsHtml(s.models, s.chat.model)}</select></div>`
       + `<div class="bridge-pref-row"><span class="bridge-pref-label">思考深度</span><select class="bridge-pick" data-set="effort">${s.efforts.map(e => opt(e, e || '默认', s.chat.effort)).join('')}</select></div>`
       + `<div class="bridge-pref-row"><span class="bridge-pref-label">单次最多工具轮数</span><input type="number" class="bridge-num" data-set="max_turns" min="1" max="200" value="${Number(s.chat.max_turns) || 40}" /></div>`
       + `<label class="bridge-pref-row"><span class="bridge-pref-label">${esc(S.ctx)}<span class="bridge-pref-hint">新对话第一条自动附上宿主提供的背景</span></span><input type="checkbox" class="bridge-switch" data-set="auto_context"${s.chat.auto_context ? ' checked' : ''} /></label></div>`;
@@ -861,9 +876,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       const s = await client.settings();
       state.settings = s;
       const model = $('.bridge-bar [data-set="model"]'), effort = $('.bridge-bar [data-set="effort"]');
-      model.innerHTML = s.models.map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
-      if (![...model.options].some(x => x.value === s.chat.model)) model.insertAdjacentHTML('beforeend', `<option value="${esc(s.chat.model)}">${esc(s.chat.model)}</option>`);
-      model.value = s.chat.model || '';
+      model.innerHTML = modelOptionsHtml(s.models, s.chat.model);
       effort.innerHTML = s.efforts.map(e => `<option value="${esc(e)}">${e ? esc(e) : '默认'}</option>`).join('');
       effort.value = s.chat.effort || '';
       renderAgent(s.agent);

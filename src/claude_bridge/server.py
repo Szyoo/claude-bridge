@@ -17,6 +17,7 @@ from claude_bridge.broker import Broker
 from claude_bridge.errors import BridgeError
 from claude_bridge.models import (
     AgentChatIn,
+    AgentModelsIn,
     JobEventsIn,
     JobFinishIn,
     JobNextIn,
@@ -194,7 +195,8 @@ def create_bridge(
     def get_settings():
         return {
             "chat": service.settings(),
-            "models": config.model_choices,
+            "models": service.model_choices(),
+            "models_info": service.models_info(),
             "efforts": config.effort_choices,
             "agent": service.agent_status(),
             "uploads": {"enabled": service.uploads_enabled, "max_bytes": config.max_file_bytes,
@@ -257,6 +259,15 @@ def create_bridge(
     @agent.get("/files/{file_id}")
     def a_get_file(file_id: str):
         return _file_response(file_id)
+
+    # the worker validates these pinned ids against its local CLI and reports what it supports
+    @agent.get("/models")
+    def a_model_candidates():
+        return {"candidates": service.model_candidates()}
+
+    @agent.post("/models")
+    def a_report_models(body: AgentModelsIn):
+        return service.save_agent_models(body.model_dump())
 
     return Bridge(
         store=store, config=config, broker=broker, service=service, browser_router=browser, agent_router=agent

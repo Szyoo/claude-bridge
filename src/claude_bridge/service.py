@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -28,6 +29,16 @@ DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
 
 def _default_thread(scope: str) -> str:
     return "main" if not scope else f"main-{scope}"
+
+
+def latest_label(name: str) -> str:
+    """Label for an alias that follows the CLI's newest model: "Opus 5.5 (1M context)" → "最新 Opus（5.5 · 1M）"."""
+    m = re.match(r"^(\S+)\s*(.*?)\s*(?:\((\S+) context\))?$", (name or "").strip())
+    if not m:
+        return f"最新 {name}"
+    family, version, ctx = m.groups()
+    detail = " · ".join(x for x in (version, ctx) if x)
+    return f"最新 {family}（{detail}）" if detail else f"最新 {family}"
 
 
 def sniff_image(data: bytes) -> tuple[str, str] | None:
@@ -387,6 +398,47 @@ class BridgeService:
             cur["auto_context"] = bool(patch["auto_context"])
         self.store.set_meta("settings", json.dumps(cur, ensure_ascii=False))
         return self.settings()
+
+    # ---------------- models (reported by the worker's CLI) ----------------
+
+    def model_candidates(self) -> list[str]:
+        """Pinned model ids the worker should validate against its local CLI."""
+        return [m["id"] for m in self.config.model_choices if m.get("id")]
+
+    def save_agent_models(self, report: dict[str, Any]) -> dict[str, Any]:
+        def entries(key: str) -> list[dict[str, str]]:
+            return [{"id": str(e["id"]), "name": str(e.get("name") or e["id"])} for e in report.get(key) or [] if e.get("id")]
+
+        data = {"cli_version": report.get("cli_version") or "", "default_name": report.get("default_name") or "",
+                "aliases": entries("aliases"), "pinned": entries("pinned"),
+                "probed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
+        self.store.set_meta("agent_models", json.dumps(data, ensure_ascii=False))
+        return data
+
+    def agent_models(self) -> dict[str, Any] | None:
+        try:
+            data = json.loads(self.store.get_meta("agent_models") or "null")
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) and (data.get("aliases") or data.get("pinned")) else None
+
+    def model_choices(self) -> list[dict[str, str]]:
+        """The worker's report when there is one (aliases that follow the CLI's newest + pinned ids it recognised),
+        else the host's static list."""
+        rep = self.agent_models()
+        if not rep:
+            return [dict(m) for m in self.config.model_choices]
+        default = rep.get("default_name")
+        out = [{"id": "", "label": f"默认（helper：{default}）" if default else "默认（helper 配置）"}]
+        out += [{"id": a["id"], "label": latest_label(a["name"]), "group": "跟随 CLI 最新"} for a in rep["aliases"]]
+        out += [{"id": p["id"], "label": p["name"], "group": "固定版本"} for p in rep["pinned"]]
+        return out
+
+    def models_info(self) -> dict[str, Any]:
+        rep = self.agent_models()
+        if not rep:
+            return {"source": "static"}
+        return {"source": "helper", "cli_version": rep.get("cli_version"), "probed_at": rep.get("probed_at")}
 
     def agent_online(self) -> bool:
         raw = self.store.get_meta("agent_heartbeat")
