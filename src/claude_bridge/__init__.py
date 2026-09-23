@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
-
+from claude_bridge._version import REPO, __version__  # noqa: E402
 from claude_bridge.auth import PasswordAuth, bearer_auth  # noqa: E402
 from claude_bridge.broker import Broker  # noqa: E402
 from claude_bridge.errors import BadRequest, BridgeError, ChatBusy, NotFound  # noqa: E402
@@ -22,6 +21,7 @@ __all__ = [
     "ChatBusy",
     "NotFound",
     "PasswordAuth",
+    "REPO",
     "bearer_auth",
     "create_bridge",
     "static_dir",

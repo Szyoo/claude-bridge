@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from claude_bridge import REPO, __version__
 from claude_bridge.service import latest_label
 from claude_bridge.worker import Worker, WorkerConfig, model_display_name
 from test_worker import FakeClient
@@ -75,6 +76,7 @@ def test_probe_models_reports_aliases_and_recognised_pinned(tmp_path):
     w = Worker(ModelClient(), WorkerConfig(claude_bin=fake_cli(tmp_path), cwd=tmp_path))
     rep = w.probe_models(["claude-opus-5-5", "claude-opus-5", "claude-opus-9-9"])
     assert rep["cli_version"] == "2.1.280 (Claude Code)" and rep["default_name"] == "Sonnet 5"
+    assert rep["bridge_version"] == __version__
     # default / opusplan dropped; best (= fable) and sonnet[1m] (= sonnet) folded into the first alias with that name
     assert [(a["id"], a["name"]) for a in rep["aliases"]] == [
         ("sonnet", "Sonnet 5"), ("opus", "Opus 5.5"), ("haiku", "Haiku 4.5"), ("fable", "Fable 5.1"), ("opus[1m]", "Opus 5.5 (1M context)")]
@@ -155,3 +157,11 @@ def test_settings_use_the_reported_models_with_groups(web, agent):
 def test_empty_report_keeps_the_static_list(web, agent):
     agent.post("/api/agent/models", json={"cli_version": "x", "aliases": [], "pinned": []})
     assert web.get("/api/settings").json()["models_info"] == {"source": "static"}
+
+
+def test_versions_show_server_and_helper(web, agent):
+    b = web.get("/api/settings").json()["bridge"]
+    assert b == {"version": __version__, "repo": REPO, "helper_version": None}   # helper has not reported yet
+    agent.post("/api/agent/models", json={**REPORT, "bridge_version": "0.1.9"})
+    assert web.get("/api/settings").json()["bridge"]["helper_version"] == "0.1.9"   # → "helper not restarted yet"
+    assert web.get("/api/status").json()["bridge"]["version"] == __version__

@@ -197,6 +197,7 @@ def create_bridge(
             "chat": service.settings(),
             "models": service.model_choices(),
             "models_info": service.models_info(),
+            "bridge": service.versions(),
             "efforts": config.effort_choices,
             "agent": service.agent_status(),
             "uploads": {"enabled": service.uploads_enabled, "max_bytes": config.max_file_bytes,

@@ -1,6 +1,7 @@
 // Pure-function tests for bridge-widget.js (run by test_widget_js.py via `node --test`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
 import {
   splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
 } from '../src/claude_bridge/static/bridge-widget.js';
@@ -181,4 +182,16 @@ test('compaction banner: queued vs running with an elapsed counter; nothing when
   assert.match(jobBannerHtml({ kind: 'context', status: 'running' }), /正在刷新构成/);
   assert.equal(jobBannerHtml({ kind: 'compact', status: 'done' }), '');
   assert.equal(jobBannerHtml(null), '');
+});
+
+test('checkBridgeUpdate: picks the highest semver tag, caches it, compares with the running version', async () => {
+  const store = {};
+  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
+  let calls = 0;
+  const fetchFn = async () => { calls++; return { ok: true, json: async () => [{ name: 'v0.2.0' }, { name: 'v0.10.1' }, { name: 'nightly' }, { name: 'v0.9.9' }] }; };
+  const r = await checkBridgeUpdate({ current: '0.2.0', fetchFn });
+  assert.deepEqual(r, { current: '0.2.0', latest: '0.10.1', hasUpdate: true, compareUrl: 'https://github.com/Szyoo/claude-bridge/compare/v0.2.0...v0.10.1' });
+  assert.equal((await checkBridgeUpdate({ current: '0.10.1', fetchFn })).hasUpdate, false);
+  assert.equal(calls, 1);   // second call served from the cache
+  await assert.rejects(checkBridgeUpdate({ current: '0.2.0', force: true, fetchFn: async () => ({ ok: false, status: 403 }) }), /GitHub API 403/);
 });

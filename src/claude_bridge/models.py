@@ -60,7 +60,7 @@ class JobEventsIn(BaseModel):
     status: str | None = None
     deltas: list[str] | None = None
     events: list[EventIn] | None = None
-    # legacy helper body (pre-bridge ashare): free text append + trace line
+    # legacy worker body (before structured events): free text append + trace line
     append: str | None = None
     trace_append: str | None = None
     content: str | None = None
@@ -86,6 +86,7 @@ class AgentModelsIn(BaseModel):
     """What the worker's local `claude` supports (probed with zero-cost `/model` calls)."""
 
     cli_version: str = Field("", max_length=100)
+    bridge_version: str = Field("", max_length=40)  # the worker's claude-bridge; differs from the server's until it restarts
     default_name: str = Field("", max_length=100)
     aliases: list[ModelEntry] = Field(default_factory=list, max_length=50)
     pinned: list[ModelEntry] = Field(default_factory=list, max_length=100)

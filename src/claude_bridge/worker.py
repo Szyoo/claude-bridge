@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from claude_bridge._version import __version__
 from claude_bridge.client import BridgeClient, BridgeClientError
 from claude_bridge.stream_json import StreamState, describe_tool, iter_stream, parse_context_report
 
@@ -247,7 +248,7 @@ class Worker:
                 seen.add(name)
                 out_aliases.append({"id": a, "name": name})
         pinned = [{"id": i, "name": n} for i, n in zip(candidates, pinned_names, strict=True) if n]
-        return {"cli_version": self.cli_version(), "default_name": model_display_name(text) or "",
+        return {"cli_version": self.cli_version(), "bridge_version": __version__, "default_name": model_display_name(text) or "",
                 "aliases": out_aliases, "pinned": pinned}
 
     def _probe_and_report(self) -> None:

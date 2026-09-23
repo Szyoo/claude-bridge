@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_bridge_files_msg ON bridge_files(message_id);
 CREATE INDEX IF NOT EXISTS idx_bridge_files_thread ON bridge_files(thread);
 """
 
-# (table, column, DDL) — applied when the column is missing; same idiom as ashare's Store.
+# (table, column, DDL) — applied when the column is missing; the usual idiom for hosts that share the file.
 MIGRATIONS: list[tuple[str, str, str]] = []
 
 
