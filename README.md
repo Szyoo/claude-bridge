@@ -98,7 +98,20 @@ worker.run_forever()
 </script>
 ```
 
-只要传输层时用 `client.subscribe(threadId, handlers)`:`onSnapshot / onMessage / onDelta / onEvent / onStatus / onDone / onThread / onFallback / onError`。增量按 `rev` 去重(重复跳过、断档自动重拉整条);EventSource 连续失败会降级为轮询,30 秒后再尝试 SSE;401 触发 `onAuthLost`。组件的样式全部通过 `--bridge-*` 自定义属性覆盖,markdown 渲染优先用 `opts.markdown`,其次 `window.marked`(先转义),否则纯文本。
+只要传输层时用 `client.subscribe(threadId, handlers)`:`onSnapshot / onMessage / onDelta / onEvent / onStatus / onDone / onThread / onContext / onJob / onFallback / onError`。增量按 `rev` 去重(重复跳过、断档自动重拉整条);EventSource 连续失败会降级为轮询,30 秒后再尝试 SSE;401 触发 `onAuthLost`。组件的样式全部通过 `--bridge-*` 自定义属性覆盖,markdown 渲染优先用 `opts.markdown`,其次 `window.marked`(先转义),否则纯文本。
+
+界面照 Claude Code 客户端:助手消息通栏无容器、用户消息浅底块、工具调用折叠成一行灰字(连续多条合并为「执行了 N 条命令」)、正文与工具组**按真实顺序交错**(每个 `tool_use` / `thinking` 事件带 `at` = 当时已输出的正文字数,在下一个段落边界切开,不会切进代码块)。宿主想自己排版但复用这套渲染时,`bridge-widget.js` 还导出:
+
+| 导出 | 用途 |
+|---|---|
+| `splitTurn(content, events)` | 纯函数:一条回答 → `[{kind:'text'}, {kind:'steps', items}]` 交错段 |
+| `renderTurn(el, message, {markdown, head, timestamps, open})` | 把一条消息渲染进 `el`(结构类名 `bridge-turn / bridge-md / bridge-steps / bridge-step / bridge-term`,重渲保留用户展开状态) |
+| `renderSteps / stepsHtml` | 只渲染工具组 |
+| `sessionSummary(messages, {context})` | 模型 / 上下文占用(`pct`)/ 本轮调用与 tokens / 5h·7d 额度 |
+| `renderSessionPanel(el, summary, {onRefresh, onCompact, busy})` · `renderContextPanel` | 会话弹层内容(含 `/context` 构成) |
+| `DEFAULT_PREFS / loadPrefs / savePrefs / sanitizePrefs / applyPrefs(root, prefs)` | 每台设备自己的界面偏好(文字大小、密度三档 13/14/16px、正文宽度、发送键、时间戳、工具默认展开、代码换行、侧栏、聊天区高度、拖过的输入框高 / 侧栏宽),`applyPrefs` 只写 CSS 变量与 class |
+| `renderPrefsPanel(el, prefs, {onChange, classes, fields})` | 偏好控件;`classes` 可把结构类名映射到宿主设计系统的开关 / 胶囊 |
+| `isSendKey(e, prefs) / sendHint(prefs) / placePopover(anchor, pop) / attachDrag(handle, onMove, onEnd) / fmtTime / fmtRelative` | 发送键判定、fixed 弹层定位(窄屏由样式改成底部抽屉)、拖拽改高 / 改宽 |
 
 ## HTTP API
 
