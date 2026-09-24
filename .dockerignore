@@ -1,0 +1,14 @@
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+*.egg-info
+build
+dist
+tests
+deploy
+scripts
+*.db
+*.db-*
+claude-bridge-files

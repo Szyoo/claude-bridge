@@ -9,3 +9,5 @@ dist/
 *.db-wal
 *.db-shm
 claude-bridge-files/
+.env
+logs/
