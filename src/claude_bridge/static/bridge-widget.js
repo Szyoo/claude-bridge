@@ -713,7 +713,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   el.innerHTML = `
     <div class="bridge ${o.showThreads ? '' : 'no-side'}${o.fill ? ' fill' : ''}">
-      ${o.showThreads ? `<aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="new">${esc(S.newThread)}</button><div class="bridge-threads"></div>${o.sideFoot ? `<div class="bridge-side-foot">${o.sideFoot}</div>` : ''}<div class="bridge-side-grip" title="拖动调整宽度"></div></aside><div class="bridge-side-scrim" data-act="side-close"></div>` : ''}
+      ${o.showThreads ? `<aside class="bridge-side">${o.sideHead ? `<div class="bridge-side-head">${o.sideHead}</div>` : ''}<button type="button" class="bridge-btn bridge-new" data-act="new">${esc(S.newThread)}</button><div class="bridge-threads"></div>${o.sideFoot ? `<div class="bridge-side-foot">${o.sideFoot}</div>` : ''}<div class="bridge-side-grip" title="拖动调整宽度"></div></aside><div class="bridge-side-scrim" data-act="side-close"></div>` : ''}
       <div class="bridge-main">
         <div class="bridge-top">
           ${o.showThreads ? '<button type="button" class="bridge-icon" data-act="side" title="对话列表">☰</button>' : ''}

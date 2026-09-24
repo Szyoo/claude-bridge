@@ -37,11 +37,19 @@
 
     function unmount() { widget?.destroy(); widget = null; clearTimeout(poll); poll = null; }
 
-    function mountChat(scope, extra = '') {
+    function mountChat(scope, extra = '', proj = null) {
       unmount();
+      // Code: the sidebar is this project's sessions, headed by the project itself
+      const code = proj ? {
+        sideHead: `<div class="bp-side-proj"><span class="ic">${FOLDER}</span><div class="who"><div class="n">${esc(proj.name)}</div>`
+          + `<div class="d">${esc([proj.info?.branch, proj.source ? proj.source.replace(/^https?:\/\//, '').replace(/\.git$/, '') : '本地项目'].filter(Boolean).join(' · '))}</div></div>`
+          + `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-home title="切换 / 新建项目">切换</button></div>`,
+        strings: { newThread: '＋ 新会话', threadTitle: '新会话', del: '删除会话', delConfirm: '删除这个会话？记录会一起删除，项目里的文件不受影响。',
+          empty: `在 ${proj.name} 里开始：描述你想让 Claude 做的事` },
+      } : {};
       widget = mountBridgeWidget(app, client, {
         scope, title: 'claude-bridge', fill: true, topStart: toggle() + extra, sideFoot: '<div class="bp-me"></div>',
-        placeholder: scope ? '让 Claude 读代码、改文件、跑命令' : '输入消息',
+        placeholder: scope ? '让 Claude 读代码、改文件、跑命令' : '输入消息', ...code,
       });
       renderMe();
     }
@@ -53,7 +61,7 @@
         const p = projects.find(x => x.name === project && x.status === 'ready');
         if (p) {
           document.title = `claude-bridge · ${p.name}`;
-          return mountChat(`code:${p.name}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>▾</i></button>`);
+          return mountChat(`code:${p.name}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>▾</i></button>`, p);
         }
         project = null; store.set('bridge_project', null);
       }
