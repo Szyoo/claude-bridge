@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from claude_bridge.client import BridgeClient, BridgeClientError
-from claude_bridge.worker import Worker, WorkerConfig
+from claude_bridge.worker import Worker, WorkerConfig, load_profiles
 
 
 def env(name: str, default: str = "") -> str:
@@ -83,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--timeout", type=float, default=float(env("CHAT_TIMEOUT", "900")))
     w.add_argument("--no-partial", action="store_true", help="do not pass --include-partial-messages")
     w.add_argument("--worker-name", default=env("WORKER_NAME"))
+    w.add_argument("--profiles", default=env("PROFILES"),
+                   help='JSON {scope: overrides} — e.g. "" (chat) without tools, "code" with full permissions; cwd may use {owner}')
     w.add_argument("-v", "--verbose", action="store_true")
 
     u = sub.add_parser("users", help="manage accounts for serve --multi-user (works on the database directly)")
@@ -126,6 +128,8 @@ def worker_from_args(args: argparse.Namespace) -> Worker:
     )
     if args.worker_name:
         cfg.worker_name = args.worker_name
+    if args.profiles:
+        cfg.profiles = load_profiles(args.profiles)
     return Worker(BridgeClient(args.url, args.token), cfg)
 
 

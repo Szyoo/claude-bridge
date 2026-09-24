@@ -81,6 +81,8 @@ claude-bridge users --db /data/bridge.db list | enable <名字>
   - **Mac 上的 worker**：[`deploy/mac/`](deploy/mac/)，仓库 `.env`（见 `env.example`）+ `bash deploy/mac/install.sh` 装成用户级 LaunchAgent。plist 直接启动 venv 里的 `claude-bridge worker --env-file .env`，不经 shell 脚本：macOS 隐私保护不让 launchd 下的 `/bin/bash` 读 `~/Documents`。
   - 不用 Docker 的通用模板（systemd / Caddy / nginx / launchd）：[`deploy/examples/`](deploy/examples/)。
 
+- **Chat / Code**：页面顶栏切换，各自一套对话列表。worker 用 `--profiles deploy/mac/profiles.json` 按模式给不同的工具和权限：Chat 只能联网搜索；Code 是编程工具（Bash / 读写文件 / 子任务 / 联网）+ `bypassPermissions`，在每人自己的 `~/claude-bridge-work/code/u<id>/` 里工作。两种模式都带 `--strict-mcp-config`，本机的 MCP 连接器（邮箱、日历、Slack…）一律不加载；Artifact、云端定时任务等挂在你 claude.ai 账号上的工具也不给。
+
 嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。
 
 ## 嵌入现有 FastAPI 应用

@@ -397,3 +397,16 @@ print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "r
     assert (tmp_path / "calls.txt").read_text().count("/usage --output-format json --no-session-persistence") == 1
     Worker(client, WorkerConfig(claude_bin=str(script), usage_probe_interval=0)).maybe_probe_usage()
     assert len(client.limits) == 1
+
+
+def test_chat_and_code_modes_are_separate_scopes(app, agent):
+    alice = login(app, "alice")
+    assert alice.post("/api/send", json={"text": "x", "scope": "other"}).status_code == 400
+    chat = alice.post("/api/send", json={"text": "chat"}).json()
+    code = alice.post("/api/send", json={"text": "code", "scope": "code"}).json()
+    assert chat["thread"] != code["thread"]
+    assert [t["id"] for t in alice.get("/api/threads?scope=code").json()["items"]] == [code["thread"]]
+    assert code["thread"] not in [t["id"] for t in alice.get("/api/threads?scope=").json()["items"]]
+    jobs = [agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"] for _ in range(2)]
+    uid = str(alice.get("/api/me").json()["user"]["id"])
+    assert [(j["payload"]["scope"], j["payload"]["owner"]) for j in jobs] == [("", uid), ("code", uid)]

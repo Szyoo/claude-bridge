@@ -221,7 +221,8 @@ class BridgeService:
             return {"job_id": existing["id"], "thread": thread_id, "agent_online": self.agent_online(), "job": job_frame(existing)}
         if kind == "compact" and self.config.check_quota:  # /context is local and free; /compact asks the model
             self.config.check_quota(principal)
-        payload = {"thread": thread_id, "session_id": th["session_id"], "settings": self.settings(principal.owner)}
+        payload = {"thread": thread_id, "session_id": th["session_id"], "settings": self.settings(principal.owner),
+                   "scope": th.get("scope") or "", "owner": principal.owner}
         jid = self.store.enqueue_job(kind, payload)
         job = self.store.get_job(jid) or {"id": jid, "kind": kind, "status": "queued"}
         self._pub(thread_id, "job", job_frame(job))
@@ -286,6 +287,8 @@ class BridgeService:
                 "text": text,
                 "settings": self.settings(owner),
                 "session_id": th.get("session_id"),
+                "scope": th.get("scope") or "",
+                "owner": owner,
                 **({"files": user_msg["files"]} if attached else {}),
                 **(extra_payload or {}),
             }

@@ -429,3 +429,65 @@ def test_hooks_default_noops(bad):
     assert h.build_context(thread_id="t", is_new_session=True, payload={}) == ""
     assert h.env({}) == {} and h.system_prompt({}) is None
     h.tick()
+
+
+# ---------------- per-scope profiles ----------------
+
+
+def test_profiles_pick_tools_permissions_and_per_owner_cwd(tmp_path):
+    import json as _json
+
+    from claude_bridge.worker import ChatRunner, WorkerProfile, load_profiles
+
+    pf = tmp_path / "profiles.json"
+    pf.write_text(_json.dumps({
+        "_comment": "ignored",
+        "": {"cwd": str(tmp_path / "chat" / "{owner}"), "tools": ["WebSearch", "WebFetch"],
+             "allowed_tools": ["WebSearch", "WebFetch"], "strict_mcp": True},
+        "code": {"cwd": str(tmp_path / "code" / "{owner}"), "permission_mode": "bypassPermissions"},
+    }))
+    profiles = load_profiles(pf)
+    assert set(profiles) == {"", "code"} and profiles["code"].permission_mode == "bypassPermissions"
+    with pytest.raises(ValueError):
+        WorkerProfile.from_dict({"nope": 1})
+
+    worker, _ = make_worker(tmp_path, HAPPY, profiles=profiles, allowed_tools=["Read"])
+    chat = worker.config_for({"scope": "", "owner": "3"})
+    assert chat.cwd == tmp_path / "chat" / "u3" and chat.cwd.is_dir()
+    cmd, _ = worker.build_chat_command("hi", None, {}, "", cfg=chat)
+    assert cmd[cmd.index("--tools") + 1] == "WebSearch,WebFetch" and "--strict-mcp-config" in cmd
+    assert cmd[cmd.index("--allowedTools") + 1: cmd.index("--allowedTools") + 3] == ["WebSearch", "WebFetch"]
+    assert "--permission-mode" not in cmd
+
+    code = worker.config_for({"scope": "code", "owner": "../../etc"})  # the owner never escapes the base dir
+    assert code.cwd == tmp_path / "code" / "uetc"
+    cmd, _ = worker.build_chat_command("hi", None, {}, "", cfg=code)
+    assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions" and "--tools" not in cmd
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read"  # inherited from the base config
+
+    assert worker.config_for({"scope": "other"}) is worker.config  # no profile → base config
+    assert worker.config_for({"scope": "code"}).cwd == tmp_path / "code" / "shared"
+
+    job = chat_job()
+    job["payload"].update(scope="code", owner="5")
+    assert ChatRunner(worker, job).cfg.cwd == tmp_path / "code" / "u5"
+
+    empty = worker.build_chat_command("hi", None, {}, "", cfg=worker.config_for({"scope": ""}))[0]
+    worker.config.profiles[""].tools = []
+    none = worker.build_chat_command("hi", None, {}, "", cfg=worker.config_for({"scope": ""}))[0]
+    assert "--tools" in empty and none[none.index("--tools") + 1] == ""
+
+
+def test_session_jobs_resume_in_the_profile_cwd(tmp_path):
+    from claude_bridge.worker import WorkerProfile
+
+    worker, client = make_worker(tmp_path, HAPPY, profiles={"code": WorkerProfile(cwd=str(tmp_path / "code" / "{owner}"))})
+    seen = {}
+
+    def fake_report(session_id, settings=None, cfg=None):
+        seen["cwd"] = cfg.cwd
+        return {"used": 1, "window": 10, "pct": 10, "categories": []}
+
+    worker.context_report = fake_report
+    worker.run_session_job({"id": 9, "kind": "context", "payload": {"thread": "t", "session_id": "s", "scope": "code", "owner": "2"}})
+    assert seen["cwd"] == tmp_path / "code" / "u2" and client.finished[-1]["ok"] is True

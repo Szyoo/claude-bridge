@@ -55,6 +55,7 @@
 .bridge [hidden], .bridge-pop[hidden], .bridge-menu[hidden], .bridge-scrim[hidden] { display: none !important; }
 .bridge.no-side, .bridge.side-hidden { grid-template-columns: 1fr; }
 .bridge.fill { height: 100%; }
+.bridge-side-scrim { display: none; }
 .bridge.side-hidden .bridge-side { display: none; }
 .bridge-tiny { font-size: .857em; }
 .bridge-muted { color: var(--bridge-muted); }
@@ -271,6 +272,8 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
   .bridge, .bridge.side-hidden { grid-template-columns: 1fr; }
   .bridge-side, .bridge.side-hidden .bridge-side { display: none; }
   .bridge.side-open .bridge-side { display: flex; position: absolute; inset: 0 25% 0 0; z-index: 3; box-shadow: var(--bridge-shadow-pop); }
+  /* the drawer covers the ☰ that opened it: tapping the uncovered strip (or Esc) closes it */
+  .bridge.side-open .bridge-side-scrim { display: block; position: absolute; inset: 0; z-index: 2; background: rgba(0, 0, 0, .28); }
   .bridge-side-grip { display: none; }
   .bridge-input { font-size: max(16px, 1em); } /* iOS zooms into inputs smaller than 16px */
   .bridge-bar [data-set="effort"] { display: none; }

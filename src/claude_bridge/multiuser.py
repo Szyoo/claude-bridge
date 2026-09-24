@@ -25,6 +25,8 @@ from claude_bridge.service import BridgeConfig
 from claude_bridge.standalone import client_ip
 from claude_bridge.store import BridgeStore
 
+# the page's two modes; the worker maps each scope to a profile (tools, permissions, per-user directory)
+SCOPES = ("", "code")  # "" = Chat, "code" = Code
 RENEW_AFTER = 86400  # a page load reissues the cookie once it is a day old: active users never see the login again
 
 LOGIN_ERRORS = {
@@ -96,6 +98,7 @@ def create_multiuser_app(
     store = BridgeStore(db_path)
     accounts = Accounts(store, secret=secret, session_days=session_days, tz=tz)
     cfg = config or BridgeConfig(
+        scopes=SCOPES,
         new_thread_notice="新对话已开始，Claude 不再记得之前的内容。",
         files_dir=files_dir or Path(db_path).resolve().parent / "claude-bridge-files",
     )
