@@ -22,6 +22,7 @@ from claude_bridge.models import (
     JobEventsIn,
     JobFinishIn,
     JobNextIn,
+    ProjectIn,
     SendIn,
     SettingsIn,
     ThreadIn,
@@ -202,6 +203,20 @@ def create_bridge(
     @browser.post("/threads/{thread_id}/compact", status_code=202)
     def compact_thread(thread_id: str, p: Principal = Depends(who)):
         return _svc(service.request_session_job, thread_id, "compact", p)
+
+    # Code-mode projects (BridgeConfig.projects): each is a directory on the worker's machine
+    @browser.get("/projects")
+    def list_projects(p: Principal = Depends(who)):
+        service.requeue_stale()
+        return {"items": _svc(service.projects, p.owner), "agent": service.agent_status()}
+
+    @browser.post("/projects", status_code=202)
+    def create_project(body: ProjectIn, p: Principal = Depends(who)):
+        return _svc(service.create_project, p.owner, body.name, body.clone_url)
+
+    @browser.delete("/projects/{name}")
+    def delete_project(name: str, p: Principal = Depends(who)):
+        return _svc(service.delete_project, p.owner, name)
 
     @browser.get("/settings")
     def get_settings(p: Principal = Depends(who)):

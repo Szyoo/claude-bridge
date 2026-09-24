@@ -12,6 +12,7 @@ import logging
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -37,6 +38,8 @@ log = logging.getLogger(__name__)
 
 VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 SESSION_KINDS = ("context", "compact")  # built-in jobs that act on an existing Claude session
+PROJECT_KIND = "project"  # create (git init / git clone) or delete a Code-mode project directory
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 @dataclass
@@ -44,7 +47,8 @@ class WorkerProfile:
     """Per-scope overrides (e.g. a "chat" scope without tools, a "code" scope with a sandbox). None = inherit.
 
     `cwd` may contain `{owner}` (the thread owner's id, "shared" when there is none) so every user gets their own
-    directory; it is created on demand. Session jobs (/context, /compact) use the same cwd as the chat, because
+    directory, and `{project}` for scopes of the form "<profile>:<project>" (Code mode: "code:myrepo"); it is
+    created on demand. Session jobs (/context, /compact) use the same cwd as the chat, because
     claude keeps sessions per project directory and `--resume` only finds them there.
     """
 
@@ -114,6 +118,7 @@ class WorkerConfig:
     settings: dict[str, Any] | str | None = None
     add_dirs: list[str] = field(default_factory=list)
     strict_mcp: bool = False
+    project_timeout: float = 900.0  # git clone of a big repository
 
 
 class Hooks:
@@ -165,7 +170,10 @@ class Worker:
 
     @property
     def kinds(self) -> list[str]:
-        return list(self.config.kinds) if self.config.kinds else ["chat", *SESSION_KINDS, *self.handlers]
+        if self.config.kinds:
+            return list(self.config.kinds)
+        has_projects = any("{project}" in (p.cwd or "") for p in self.config.profiles.values())
+        return ["chat", *SESSION_KINDS, *([PROJECT_KIND] if has_projects else []), *self.handlers]
 
     # ---------------- loop ----------------
 
@@ -173,6 +181,8 @@ class Worker:
         if threading.current_thread() is threading.main_thread():
             for sig in (signal.SIGTERM, signal.SIGINT):
                 signal.signal(sig, lambda *_: self.request_stop())
+        if self.config.cwd:
+            Path(self.config.cwd).expanduser().mkdir(parents=True, exist_ok=True)
         log.info("worker %s started (claude=%s cwd=%s kinds=%s)", self.config.worker_name, self.config.claude_bin, self.config.cwd, self.kinds)
         backoff = 2.0
         while not self.stopping:
@@ -216,6 +226,8 @@ class Worker:
                 self.run_chat(job)
             elif kind in SESSION_KINDS:
                 self.run_session_job(job)
+            elif kind == PROJECT_KIND:
+                self.run_project_job(job)
             elif kind in self.handlers:
                 out = self.handlers[kind](job, self)
                 result = out if isinstance(out, str) or out is None else json.dumps(out, ensure_ascii=False)
@@ -259,15 +271,99 @@ class Worker:
     def config_for(self, payload: dict[str, Any] | None) -> WorkerConfig:
         """The worker config with the job's scope profile applied (cwd resolved per owner and created)."""
         payload = payload or {}
-        prof = self.config.profiles.get(str(payload.get("scope") or ""))
+        scope = str(payload.get("scope") or "")
+        base, _, project = scope.partition(":")
+        prof = self.config.profiles.get(scope) or (self.config.profiles.get(base) if project else None)
         if prof is None:
             return self.config
         over = {f.name: getattr(prof, f.name) for f in fields(prof) if getattr(prof, f.name) is not None}
         if "cwd" in over:
-            cwd = Path(os.path.expanduser(str(over["cwd"]).replace("{owner}", _owner_dir(payload.get("owner")))))
+            cwd = self.profile_dir(str(over["cwd"]), payload.get("owner"), project)
             cwd.mkdir(parents=True, exist_ok=True)
             over["cwd"] = cwd
         return replace(self.config, **over)
+
+    @staticmethod
+    def profile_dir(template: str, owner: Any, project: str = "") -> Path:
+        if "{project}" in template and not PROJECT_NAME_RE.match(project or ""):
+            raise ValueError(f"bad or missing project name {project!r}")
+        return Path(os.path.expanduser(template.replace("{owner}", _owner_dir(owner)).replace("{project}", project or "")))
+
+    # ---------------- Code-mode projects ----------------
+
+    def _project_path(self, payload: dict[str, Any]) -> Path:
+        base, _, project = str(payload.get("scope") or "").partition(":")
+        prof = self.config.profiles.get(base)
+        if not prof or not prof.cwd or "{project}" not in prof.cwd or project != payload.get("name"):
+            raise RuntimeError("worker 没有配置项目目录（profile 的 cwd 里需要 {project}）")
+        path = self.profile_dir(prof.cwd, payload.get("owner"), project)
+        parent = path.parent.resolve()
+        if path.is_symlink() or path.resolve().parent != parent or path.name != project:
+            raise RuntimeError("项目路径不安全")
+        return path
+
+    def _run_git(self, cmd: list[str], job_id: int, cwd: Path | None = None) -> str:
+        """Run git with heartbeats (a clone can outlast the stale-job timeout); never prompts for credentials."""
+        env = {**self._session_env(), "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true", "SSH_ASKPASS": "true",
+               "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"}
+        proc = subprocess.Popen(cmd, cwd=str(cwd) if cwd else None, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, start_new_session=True)
+        out: list[str] = []
+        reader = threading.Thread(target=lambda: out.append(proc.stdout.read() if proc.stdout else ""), daemon=True)
+        reader.start()
+        deadline = time.monotonic() + self.config.project_timeout
+        while True:
+            try:
+                proc.wait(timeout=max(0.1, min(self.config.session_heartbeat, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                cancel = time.monotonic() >= deadline
+                try:
+                    cancel = cancel or bool((self.client.post_events(job_id) or {}).get("cancel"))
+                except BridgeClientError as e:
+                    log.warning("project heartbeat failed: %s", e)
+                if cancel:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    proc.wait(timeout=10)
+                    raise RuntimeError("超时或已取消") from None
+        reader.join(timeout=5)
+        text = (out[0] if out else "").strip()
+        if proc.returncode != 0:
+            raise RuntimeError(text[-400:] or f"{cmd[1]} 失败（exit {proc.returncode}）")
+        return text
+
+    def run_project_job(self, job: dict[str, Any]) -> None:
+        p = job.get("payload") or {}
+        path: Path | None = None
+        created = False
+        try:
+            path = self._project_path(p)
+            if p.get("action") == "delete":
+                if path.exists():
+                    shutil.rmtree(path)
+                self._safe_finish(job["id"], ok=True, result=json.dumps({"path": str(path)}))
+                return
+            if path.exists() and any(path.iterdir()):
+                raise RuntimeError("目录已存在且不是空的")
+            created = not path.exists()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            url = str(p.get("clone_url") or "")
+            if url:
+                self._run_git(["git", "clone", "--", url, str(path)], job["id"])
+            else:
+                path.mkdir(exist_ok=True)
+                self._run_git(["git", "init", "-b", "main"], job["id"], cwd=path)
+            branch = self._run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"], job["id"], cwd=path) if url else "main"
+            info = {"path": str(path), "branch": branch, "cloned": bool(url)}
+            self._safe_finish(job["id"], ok=True, result=json.dumps(info, ensure_ascii=False))
+        except Exception as e:
+            log.warning("project job #%s failed: %s", job["id"], e)
+            if created and path is not None and path.exists():  # leave no half-made directory behind
+                shutil.rmtree(path, ignore_errors=True)
+            self._safe_finish(job["id"], ok=False, error=str(e)[:500], error_kind="worker")
 
     # ---------------- session commands (/context, /compact) ----------------
 

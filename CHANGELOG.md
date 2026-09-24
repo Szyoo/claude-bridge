@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.3.3 — 2026-09-24
+
+- **Code 模式按项目工作**：每人一片独立空间，项目 = 其中的一个目录（通常是 git 仓库）。切到 Code 先选项目；没有项目时引导「克隆 Git 仓库」（https / ssh / git@）或「新建空项目」（`git init`），完成后自动打开；顶栏显示当前项目，点它回到项目页。每个项目有自己的对话列表（scope `code:<项目>`），Claude 在项目目录里读写文件、跑命令
+- 服务端 `bridge_projects` 表 + `GET/POST/DELETE /projects`（`BridgeConfig(projects=True)`）；新建 / 克隆 / 删除作为 `project` 任务交给 worker 执行（带心跳，不弹凭据输入，失败时清理半成品目录）；`BridgeConfig.scopes` 可以是 `(scope, owner) -> bool`
+- worker profile 的 `cwd` 支持 `{project}`（scope `<profile>:<项目>`）；启动时创建基础工作目录
+
 ## v0.3.2 — 2026-09-24
 
 - **Chat / Code 两种模式**：页面顶栏切换，各自一套对话列表（scope `""` / `code`）；任务带上 thread 的 `scope` 与 `owner`

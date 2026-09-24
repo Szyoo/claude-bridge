@@ -21,12 +21,12 @@ from claude_bridge.auth import COOKIE_NAME, LoginLimiter
 from claude_bridge.errors import BridgeError
 from claude_bridge.principal import Principal
 from claude_bridge.server import create_bridge, static_dir
-from claude_bridge.service import BridgeConfig
+from claude_bridge.service import PROJECT_SCOPE_PREFIX, BridgeConfig
 from claude_bridge.standalone import client_ip
 from claude_bridge.store import BridgeStore
 
-# the page's two modes; the worker maps each scope to a profile (tools, permissions, per-user directory)
-SCOPES = ("", "code")  # "" = Chat, "code" = Code
+# the page's two modes: "" = Chat; "code:<project>" = Code in one of the user's project directories.
+# The worker maps each scope to a profile (tools, permissions, per-user / per-project directory).
 RENEW_AFTER = 86400  # a page load reissues the cookie once it is a day old: active users never see the login again
 
 LOGIN_ERRORS = {
@@ -97,8 +97,14 @@ def create_multiuser_app(
 ) -> FastAPI:
     store = BridgeStore(db_path)
     accounts = Accounts(store, secret=secret, session_days=session_days, tz=tz)
+    def scope_ok(scope: str, owner: str) -> bool:
+        if scope == "":
+            return True
+        return scope.startswith(PROJECT_SCOPE_PREFIX) and bridge.service.project_ready(owner, scope[len(PROJECT_SCOPE_PREFIX):])
+
     cfg = config or BridgeConfig(
-        scopes=SCOPES,
+        scopes=scope_ok,
+        projects=True,
         new_thread_notice="新对话已开始，Claude 不再记得之前的内容。",
         files_dir=files_dir or Path(db_path).resolve().parent / "claude-bridge-files",
     )

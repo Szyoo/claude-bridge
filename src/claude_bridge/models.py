@@ -35,6 +35,11 @@ class ThreadPatchIn(BaseModel):
     pinned: bool | None = None
 
 
+class ProjectIn(BaseModel):
+    name: str = Field("", max_length=64)  # empty with a clone_url = the repository's name
+    clone_url: str = Field("", max_length=500)
+
+
 class SettingsIn(BaseModel):
     model: str | None = None
     effort: str | None = None

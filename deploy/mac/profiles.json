@@ -1,17 +1,36 @@
 {
-  "_comment": "worker 按对话的 scope 选用：\"\" = Chat，\"code\" = Code。cwd 里的 {owner} 换成每个用户自己的目录（u<id>）。改完重跑 deploy/mac/install.sh。",
+  "_comment": "worker 按对话的 scope 选用：\"\" = Chat，\"code:<项目>\" = Code（用 \"code\" 这一项）。cwd 里 {owner} 换成用户目录（u<id>），{project} 换成项目名。改完重跑 deploy/mac/install.sh。",
   "": {
     "cwd": "~/claude-bridge-work/chat/{owner}",
-    "tools": ["WebSearch", "WebFetch"],
-    "allowed_tools": ["WebSearch", "WebFetch"],
+    "tools": [
+      "WebSearch",
+      "WebFetch"
+    ],
+    "allowed_tools": [
+      "WebSearch",
+      "WebFetch"
+    ],
     "strict_mcp": true,
     "system_prompt": "这是网页上的聊天对话：没有文件和命令行工具，需要最新信息时可以联网搜索（WebSearch / WebFetch）。"
   },
   "code": {
-    "cwd": "~/claude-bridge-work/code/{owner}",
-    "tools": ["Task", "Bash", "Read", "Edit", "Write", "NotebookEdit", "Monitor", "TaskStop", "WebSearch", "WebFetch", "EnterWorktree", "ExitWorktree"],
+    "cwd": "~/claude-bridge-work/code/{owner}/{project}",
+    "tools": [
+      "Task",
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Monitor",
+      "TaskStop",
+      "WebSearch",
+      "WebFetch",
+      "EnterWorktree",
+      "ExitWorktree"
+    ],
     "permission_mode": "bypassPermissions",
     "strict_mcp": true,
-    "system_prompt": "这是网页上的编程会话：当前目录是这位用户自己的工作目录，项目和文件放在这里。"
+    "system_prompt": "这是网页上的编程会话：当前目录就是用户选中的项目（通常是 git 仓库），在这里读写文件、跑命令。"
   }
 }
