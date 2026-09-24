@@ -28,6 +28,10 @@ log = logging.getLogger(__name__)
 DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
 DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
 SESSION_JOB_KINDS = ("context", "compact")  # jobs that act on a thread's Claude session; the page shows their progress
+PROJECT_JOB_KIND = "project"  # create (git init / git clone) or delete a Code-mode project directory on the worker
+PROJECT_SCOPE_PREFIX = "code:"  # a project's threads live in scope "code:<name>"
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+CLONE_URL_RE = re.compile(r"^(https?://|ssh://|git@)[^\s]+$")
 # the subscription's rolling windows as the CLI reports them (rate_limit_event / `/usage`)
 LIMIT_WINDOWS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 
@@ -76,7 +80,8 @@ def sniff_image(data: bytes) -> tuple[str, str] | None:
 
 @dataclass
 class BridgeConfig:
-    scopes: tuple[str, ...] | None = None  # None = any scope string is accepted
+    # None = any scope string; a tuple = those; a callable (scope, owner) -> bool decides (e.g. "code:<project>")
+    scopes: tuple[str, ...] | Callable[[str, str], bool] | None = None
     default_thread: Callable[[str], str] = _default_thread
     default_settings: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_SETTINGS))
     model_choices: list[dict[str, str]] = field(default_factory=lambda: [{"id": "", "label": "默认"}])
@@ -97,6 +102,7 @@ class BridgeConfig:
     orphan_seconds: int = 86400  # uploads never sent are removed after this long
     # called before a chat / compact is queued; raise QuotaExceeded (or any BridgeError) to refuse it
     check_quota: Callable[[Principal], None] | None = None
+    projects: bool = False  # Code-mode projects (GET/POST/DELETE /projects); needs a worker that handles "project" jobs
 
 
 class BridgeService:
@@ -121,9 +127,13 @@ class BridgeService:
 
     # ---------------- threads ----------------
 
-    def _check_scope(self, scope: str) -> None:
-        if self.config.scopes is not None and scope not in self.config.scopes:
-            raise BadRequest(f"未知 scope {scope!r}")
+    def _check_scope(self, scope: str, owner: str = "") -> None:
+        allowed = self.config.scopes
+        if allowed is None:
+            return
+        ok = allowed(scope, owner) if callable(allowed) else scope in allowed
+        if not ok:
+            raise BadRequest(f"未知 scope {scope!r}" if not scope.startswith(PROJECT_SCOPE_PREFIX) else "项目不存在或还没准备好")
 
     @staticmethod
     def meta_key(owner: str, key: str) -> str:
@@ -138,7 +148,7 @@ class BridgeService:
         return th
 
     def current_thread(self, scope: str = "", owner: str = "") -> str:
-        self._check_scope(scope)
+        self._check_scope(scope, owner)
         key = self.meta_key(owner, f"current_thread:{scope}")
         cur = self.store.get_meta(key)
         if cur:
@@ -152,7 +162,7 @@ class BridgeService:
         return tid
 
     def new_thread(self, scope: str = "", key: str = "", title: str = "", *, select: bool = True, owner: str = "") -> str:
-        self._check_scope(scope)
+        self._check_scope(scope, owner)
         tid = uuid.uuid4().hex[:12]
         self.store.create_thread(tid, scope=scope, key=key, title=title, owner=owner)
         if self.config.new_thread_notice:
@@ -165,7 +175,7 @@ class BridgeService:
         return self.store.find_thread(scope, key, owner)
 
     def select_thread(self, scope: str, thread_id: str, owner: str = "") -> None:
-        self._check_scope(scope)
+        self._check_scope(scope, owner)
         self.own_thread(thread_id, owner)
         self.store.set_meta(self.meta_key(owner, f"current_thread:{scope}"), thread_id)
 
@@ -257,7 +267,7 @@ class BridgeService:
         if thread_id:
             tid = thread_id
         elif key:
-            self._check_scope(scope)
+            self._check_scope(scope, owner)
             tid = self.store.find_thread(scope, key, owner) or self.new_thread(scope, key, select=False, owner=owner)
         elif new_thread:
             tid = self.new_thread(scope, owner=owner)
@@ -593,6 +603,9 @@ class BridgeService:
         with self.store.transaction():
             self.store.finish_job(job_id, status, body.result, body.error)
             job = self.store.get_job(job_id) or job
+            if job["kind"] == PROJECT_JOB_KIND:
+                self._finish_project_job(job, status, body)
+                return
             msg = self.store.message_by_job(job_id)
             thread = job["payload"].get("thread") or (msg["thread"] if msg else None)
             if msg and msg["status"] in INFLIGHT:
@@ -640,6 +653,84 @@ class BridgeService:
         size = f"：{_fmt_tokens(meta.get('pre_tokens'))} → {_fmt_tokens(meta.get('post_tokens'))}" if meta.get("pre_tokens") else ""
         msg = self.store.add_message(thread, "system", f"已压缩会话历史{size}。之后 Claude 看到的是摘要，更早的细节可能记不清。")
         self._pub(thread, "message", msg)
+
+    # ---------------- Code-mode projects ----------------
+
+    def _projects_on(self) -> None:
+        if not self.config.projects:
+            raise NotFound("未开启项目")
+
+    def project_ready(self, owner: str, name: str) -> bool:
+        p = self.store.get_project(owner, name)
+        return bool(p and p["status"] == "ready")
+
+    def projects(self, owner: str) -> list[dict[str, Any]]:
+        self._projects_on()
+        return self.store.projects(owner)
+
+    def create_project(self, owner: str, name: str = "", clone_url: str = "") -> dict[str, Any]:
+        """Queue `git init` (empty) or `git clone <url>` into the owner's space; the page polls the row's status."""
+        self._projects_on()
+        url = (clone_url or "").strip()
+        if url and not CLONE_URL_RE.match(url):
+            raise BadRequest("只支持 https:// 、ssh:// 或 git@ 开头的仓库地址")
+        name = (name or "").strip() or (re.sub(r"\.git$", "", url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]) if url else "")
+        if not PROJECT_NAME_RE.match(name):
+            raise BadRequest("项目名 1–64 位：字母、数字、. _ -，不能以符号开头")
+        old = self.store.get_project(owner, name)
+        if old and old["status"] != "failed":
+            raise BadRequest("已有同名项目")
+        if old:
+            self.store.delete_project_row(owner, name)
+        self.store.add_project(owner, name, url)
+        jid = self.store.enqueue_job(PROJECT_JOB_KIND, {"action": "create", "owner": owner, "name": name, "clone_url": url,
+                                                        "scope": PROJECT_SCOPE_PREFIX + name})
+        self.store.update_project(owner, name, job_id=jid)
+        return {"project": self.store.get_project(owner, name), "agent_online": self.agent_online()}
+
+    def delete_project(self, owner: str, name: str) -> dict[str, Any]:
+        """Removes the project's conversations now and asks the worker to delete the directory."""
+        self._projects_on()
+        p = self.store.get_project(owner, name)
+        if not p:
+            raise NotFound("没有这个项目")
+        scope = PROJECT_SCOPE_PREFIX + name
+        for tid in self.store.threads_in_scope(owner, scope):
+            if self.store.inflight(tid):
+                raise ChatBusy("这个项目里还有回答没结束")
+        for tid in self.store.threads_in_scope(owner, scope):
+            self.store.delete_thread(tid)
+            self._unlink(self.store.delete_thread_files(tid))
+            self.store.set_meta(f"context:{tid}", None)
+        self.store.set_meta(self.meta_key(owner, f"current_thread:{scope}"), None)
+        if p["status"] == "failed":  # nothing was created on disk (or it was cleaned up): just drop the row
+            self.store.delete_project_row(owner, name)
+            return {"deleted": True}
+        self.store.update_project(owner, name, status="deleting", error=None)
+        jid = self.store.enqueue_job(PROJECT_JOB_KIND, {"action": "delete", "owner": owner, "name": name, "scope": scope})
+        self.store.update_project(owner, name, job_id=jid)
+        return {"deleted": False, "project": self.store.get_project(owner, name)}
+
+    def _finish_project_job(self, job: dict[str, Any], status: str, body: JobFinishIn) -> None:
+        p = job.get("payload") or {}
+        owner, name = str(p.get("owner") or ""), str(p.get("name") or "")
+        row = self.store.get_project(owner, name)
+        if not row or row.get("job_id") != job["id"]:
+            return  # superseded (deleted and re-created meanwhile)
+        if p.get("action") == "delete":
+            if status == "done":
+                self.store.delete_project_row(owner, name)
+            else:
+                self.store.update_project(owner, name, status="failed", error=body.error or "删除失败")
+            return
+        if status == "done":
+            try:
+                info = json.loads(body.result or "{}") or {}
+            except json.JSONDecodeError:
+                info = {}
+            self.store.update_project(owner, name, status="ready", error=None, info=info)
+        else:
+            self.store.update_project(owner, name, status="failed", error=body.error or ("已取消" if status == "cancelled" else "创建失败"))
 
     # ---------------- usage ledger / account limits ----------------
 
@@ -719,6 +810,8 @@ class BridgeService:
         n = 0
         for job in self.store.stale_running(self.config.stale_seconds):
             self.store.finish_job(job["id"], "failed", None, "helper 心跳超时")
+            if job["kind"] == PROJECT_JOB_KIND:
+                self._finish_project_job(job, "failed", JobFinishIn(ok=False, error="helper 心跳超时"))
             if job["kind"] in SESSION_JOB_KINDS and job["payload"].get("thread"):
                 self._pub(job["payload"]["thread"], "job", job_frame(self.store.get_job(job["id"]) or job))
             n += 1

@@ -110,6 +110,20 @@ CREATE TABLE IF NOT EXISTS bridge_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_owner ON bridge_usage(owner, created_at);
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_time ON bridge_usage(created_at);
+
+-- Code-mode projects: directories on the worker's machine (git init / git clone), one row per owner + name
+CREATE TABLE IF NOT EXISTS bridge_projects (
+  owner      TEXT NOT NULL DEFAULT '',
+  name       TEXT NOT NULL,
+  source     TEXT NOT NULL DEFAULT '',
+  status     TEXT NOT NULL DEFAULT 'creating' CHECK (status IN ('creating','ready','failed','deleting')),
+  error      TEXT,
+  info       TEXT NOT NULL DEFAULT '{}',
+  job_id     INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (owner, name)
+);
 """
 
 # indexes on migrated columns: created after MIGRATIONS so an old file has the column by then
@@ -636,7 +650,7 @@ class BridgeStore:
 
     def reassign_owner(self, src: str, dst: str) -> None:
         with self.transaction():
-            for table in ("bridge_threads", "bridge_files", "bridge_usage"):
+            for table in ("bridge_threads", "bridge_files", "bridge_usage", "bridge_projects"):
                 self._x(f"UPDATE {table} SET owner=? WHERE owner=?", (dst, src))
 
     def delete_owner(self, owner: str) -> list[str]:
@@ -648,5 +662,50 @@ class BridgeStore:
             names = [r["fname"] for r in self._q("SELECT fname FROM bridge_files WHERE owner=?", (owner,))]
             self._x("DELETE FROM bridge_files WHERE owner=?", (owner,))
             self._x("DELETE FROM bridge_usage WHERE owner=?", (owner,))
+            self._x("DELETE FROM bridge_projects WHERE owner=?", (owner,))
             self._x("DELETE FROM bridge_meta WHERE key LIKE ?", (f"u{owner}:%",))
         return names
+
+    # ---------------- projects ----------------
+
+    @staticmethod
+    def _project(row: dict[str, Any]) -> dict[str, Any]:
+        row = dict(row)
+        try:
+            row["info"] = json.loads(row.get("info") or "{}")
+        except json.JSONDecodeError:
+            row["info"] = {}
+        return row
+
+    def projects(self, owner: str) -> list[dict[str, Any]]:
+        rows = self._q(
+            """SELECT p.*, (SELECT COUNT(*) FROM bridge_threads t WHERE t.owner=p.owner AND t.scope='code:'||p.name) AS threads,
+                      (SELECT MAX(t.updated_at) FROM bridge_threads t WHERE t.owner=p.owner AND t.scope='code:'||p.name) AS last_used
+               FROM bridge_projects p WHERE p.owner=? ORDER BY COALESCE(last_used, p.created_at) DESC""",
+            (owner,),
+        )
+        return [self._project(r) for r in rows]
+
+    def get_project(self, owner: str, name: str) -> dict[str, Any] | None:
+        row = self._one("SELECT * FROM bridge_projects WHERE owner=? AND name=?", (owner, name))
+        return self._project(row) if row else None
+
+    def add_project(self, owner: str, name: str, source: str) -> dict[str, Any]:
+        now = _now()
+        self._x(
+            "INSERT INTO bridge_projects(owner, name, source, status, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+            (owner, name, source, "creating", now, now),
+        )
+        return self.get_project(owner, name) or {}
+
+    def update_project(self, owner: str, name: str, **fields: Any) -> None:
+        if "info" in fields:
+            fields["info"] = json.dumps(fields["info"] or {}, ensure_ascii=False)
+        cols = ", ".join(f"{k}=?" for k in fields)
+        self._x(f"UPDATE bridge_projects SET {cols}, updated_at=? WHERE owner=? AND name=?", (*fields.values(), _now(), owner, name))
+
+    def delete_project_row(self, owner: str, name: str) -> None:
+        self._x("DELETE FROM bridge_projects WHERE owner=? AND name=?", (owner, name))
+
+    def threads_in_scope(self, owner: str, scope: str) -> list[str]:
+        return [r["id"] for r in self._q("SELECT id FROM bridge_threads WHERE owner=? AND scope=?", (owner, scope))]

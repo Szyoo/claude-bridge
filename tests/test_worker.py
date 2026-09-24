@@ -491,3 +491,48 @@ def test_session_jobs_resume_in_the_profile_cwd(tmp_path):
     worker.context_report = fake_report
     worker.run_session_job({"id": 9, "kind": "context", "payload": {"thread": "t", "session_id": "s", "scope": "code", "owner": "2"}})
     assert seen["cwd"] == tmp_path / "code" / "u2" and client.finished[-1]["ok"] is True
+
+
+def test_project_jobs_init_clone_and_delete(tmp_path):
+    import subprocess as sp
+
+    from claude_bridge.worker import WorkerProfile
+
+    origin = tmp_path / "origin.git"
+    sp.run(["git", "init", "-q", "--bare", "-b", "trunk", str(origin)], check=True)
+    seed = tmp_path / "seed"
+    sp.run(["git", "clone", "-q", str(origin), str(seed)], check=True, capture_output=True)
+    (seed / "README").write_text("hi")
+    sp.run(["git", "-C", str(seed), "add", "."], check=True)
+    sp.run(["git", "-C", str(seed), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], check=True)
+    sp.run(["git", "-C", str(seed), "push", "-q", "origin", "HEAD:trunk"], check=True, capture_output=True)
+
+    base = tmp_path / "code"
+    worker, client = make_worker(tmp_path, HAPPY, profiles={"code": WorkerProfile(cwd=str(base / "{owner}" / "{project}"))})
+    assert "project" in worker.kinds
+
+    def job(jid, **payload):
+        return {"id": jid, "kind": "project", "payload": {"owner": "4", "scope": f"code:{payload['name']}", **payload}}
+
+    worker.run_project_job(job(1, action="create", name="empty", clone_url=""))
+    assert client.finished[-1]["ok"] and (base / "u4" / "empty" / ".git").is_dir()
+
+    # the worker itself clones anything git can reach; the server only lets https / ssh / git@ URLs through
+    worker.run_project_job(job(2, action="create", name="repo", clone_url=str(origin)))
+    info = json.loads(client.finished[-1]["result"])
+    assert client.finished[-1]["ok"] and info["branch"] == "trunk" and (base / "u4" / "repo" / "README").read_text() == "hi"
+
+    worker.run_project_job(job(3, action="create", name="repo", clone_url=str(origin)))  # not empty any more
+    assert not client.finished[-1]["ok"] and "不是空的" in client.finished[-1]["error"]
+
+    worker.run_project_job(job(4, action="create", name="broken", clone_url=str(tmp_path / "missing.git")))
+    assert not client.finished[-1]["ok"] and not (base / "u4" / "broken").exists()
+
+    worker.run_project_job(job(5, action="create", name="../escape", clone_url=""))
+    assert not client.finished[-1]["ok"] and not (base / "escape").exists()
+
+    worker.run_project_job(job(6, action="delete", name="repo"))
+    assert client.finished[-1]["ok"] and not (base / "u4" / "repo").exists() and (base / "u4" / "empty").exists()
+
+    chat = worker.config_for({"scope": "code:empty", "owner": "4"})
+    assert chat.cwd == base / "u4" / "empty"

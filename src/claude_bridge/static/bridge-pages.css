@@ -83,3 +83,26 @@ body.bridge-page { margin: 0; min-height: 100vh; background: var(--bridge-bg); c
 .bp-mode { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--bridge-user); flex: none; }
 .bp-mode button { border: 0; background: transparent; color: var(--bridge-muted); font: inherit; font-size: .857em; font-weight: 600; padding: 3px 10px; border-radius: 6px; cursor: pointer; }
 .bp-mode button[aria-selected="true"] { background: var(--bridge-panel); color: var(--bridge-fg); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+
+/* Code mode: project button in the chat top bar */
+.bp-proj { display: inline-flex; align-items: center; gap: 5px; max-width: 40vw; border: 1px solid var(--bridge-border); background: var(--bridge-panel); color: var(--bridge-fg); font: inherit; font-size: .857em; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer; flex: none; }
+.bp-proj span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-proj i { font-style: normal; color: var(--bridge-muted); font-size: .8em; }
+.bp-proj:hover { background: var(--bridge-hover); }
+
+/* Code mode: project picker page */
+.bp-home { min-height: 100%; height: 100%; overflow: auto; background: var(--bridge-bg); color: var(--bridge-fg); font-family: var(--bridge-font); font-size: 14px; line-height: 1.5; box-sizing: border-box; }
+.bp-home-top { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--bridge-border); background: var(--bridge-panel); min-height: 42px; box-sizing: border-box; }
+.bp-home-top .grow { flex: 1; }
+.bp-home-top .bp-me a.me { padding: 2px 8px; }
+.bp-home h1 { font-size: 20px; margin: 8px 0 4px; }
+.bp-home [hidden] { display: none !important; }
+.bp-projects { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.bp-project { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--bridge-border); border-radius: 10px; background: var(--bridge-panel); }
+.bp-project.ready { cursor: pointer; }
+.bp-project.ready:hover, .bp-project.ready:focus-visible { border-color: var(--bridge-accent); outline: none; }
+.bp-project .ic { color: var(--bridge-muted); font-size: 18px; display: flex; }
+.bp-project .who { flex: 1; min-width: 0; }
+.bp-project .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-project .d { font-size: 12px; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-project .d.err { color: var(--bridge-err); white-space: normal; }

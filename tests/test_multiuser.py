@@ -399,14 +399,56 @@ print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "r
     assert len(client.limits) == 1
 
 
-def test_chat_and_code_modes_are_separate_scopes(app, agent):
-    alice = login(app, "alice")
-    assert alice.post("/api/send", json={"text": "x", "scope": "other"}).status_code == 400
-    chat = alice.post("/api/send", json={"text": "chat"}).json()
-    code = alice.post("/api/send", json={"text": "code", "scope": "code"}).json()
-    assert chat["thread"] != code["thread"]
-    assert [t["id"] for t in alice.get("/api/threads?scope=code").json()["items"]] == [code["thread"]]
-    assert code["thread"] not in [t["id"] for t in alice.get("/api/threads?scope=").json()["items"]]
-    jobs = [agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"] for _ in range(2)]
+def next_job(agent, kind):
+    return agent.post("/api/agent/jobs/next", json={"kinds": [kind], "wait": 0}).json()["job"]
+
+
+def test_code_projects_lifecycle_and_scopes(app, agent):
+    alice, bob = login(app, "alice"), login(app, "bob")
     uid = str(alice.get("/api/me").json()["user"]["id"])
-    assert [(j["payload"]["scope"], j["payload"]["owner"]) for j in jobs] == [("", uid), ("code", uid)]
+    assert alice.get("/api/projects").json()["items"] == []
+    for bad in ({"clone_url": "file:///Users/szyyw/secret"}, {"clone_url": "/etc"}, {"name": ".hidden"}, {"name": "a b"}, {}):
+        assert alice.post("/api/projects", json=bad).status_code == 400, bad
+
+    r = alice.post("/api/projects", json={"clone_url": "https://github.com/Szyoo/claude-bridge.git"})
+    assert r.status_code == 202 and r.json()["project"]["name"] == "claude-bridge" and r.json()["project"]["status"] == "creating"
+    assert alice.post("/api/projects", json={"name": "claude-bridge"}).status_code == 400  # taken
+    job = next_job(agent, "project")
+    assert job["payload"] == {"action": "create", "owner": uid, "name": "claude-bridge",
+                              "clone_url": "https://github.com/Szyoo/claude-bridge.git", "scope": "code:claude-bridge"}
+    # not ready yet: its scope is refused
+    assert alice.post("/api/send", json={"text": "x", "scope": "code:claude-bridge"}).status_code == 400
+    agent.post(f"/api/agent/jobs/{job['id']}/finish", json={"ok": True, "result": json.dumps({"branch": "main"})})
+    proj = alice.get("/api/projects").json()["items"][0]
+    assert proj["status"] == "ready" and proj["info"]["branch"] == "main" and proj["threads"] == 0
+
+    # a project's conversations are their own scope; Chat is separate; other users can't use the project
+    chat = alice.post("/api/send", json={"text": "chat"}).json()
+    code = alice.post("/api/send", json={"text": "code", "scope": "code:claude-bridge"}).json()
+    assert chat["thread"] != code["thread"]
+    assert [t["id"] for t in alice.get("/api/threads?scope=code:claude-bridge").json()["items"]] == [code["thread"]]
+    assert bob.post("/api/send", json={"text": "x", "scope": "code:claude-bridge"}).status_code == 400
+    assert bob.get("/api/projects").json()["items"] == []
+    assert alice.post("/api/send", json={"text": "x", "scope": "code"}).status_code == 400
+    jobs = [next_job(agent, "chat") for _ in range(2)]
+    assert [(j["payload"]["scope"], j["payload"]["owner"]) for j in jobs] == [("", uid), ("code:claude-bridge", uid)]
+    for j in jobs:
+        agent.post(f"/api/agent/jobs/{j['id']}/finish", json={"ok": True, "result": "{}", "session_id": "s"})
+
+    # a failed create can be retried under the same name
+    alice.post("/api/projects", json={"name": "scratch"})
+    j = next_job(agent, "project")
+    agent.post(f"/api/agent/jobs/{j['id']}/finish", json={"ok": False, "error": "boom"})
+    assert {p["name"]: p["status"] for p in alice.get("/api/projects").json()["items"]}["scratch"] == "failed"
+    assert alice.post("/api/projects", json={"name": "scratch"}).status_code == 202
+
+    # delete: conversations go at once, the row after the worker removed the directory
+    r = alice.delete("/api/projects/claude-bridge").json()
+    assert r["deleted"] is False and r["project"]["status"] == "deleting"
+    assert alice.get(f"/api/threads/{code['thread']}").status_code == 404
+    next_job(agent, "project")  # the retried "scratch" create
+    d = next_job(agent, "project")
+    assert d["payload"]["action"] == "delete"
+    agent.post(f"/api/agent/jobs/{d['id']}/finish", json={"ok": True, "result": "{}"})
+    assert "claude-bridge" not in [p["name"] for p in alice.get("/api/projects").json()["items"]]
+    assert bob.delete("/api/projects/scratch").status_code == 404
