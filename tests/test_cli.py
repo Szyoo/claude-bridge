@@ -53,3 +53,18 @@ def test_parser_defaults(monkeypatch):
     monkeypatch.setenv("CLAUDE_BRIDGE_PORT", "9000")
     a = cli.build_parser().parse_args(["serve"])
     assert a.port == 9000 and a.host == "127.0.0.1" and a.db == "claude-bridge.db" and a.no_auth is False
+
+
+def test_env_file_feeds_flag_defaults(tmp_path, monkeypatch):
+    from claude_bridge.cli import _pop_env_file, build_parser
+
+    monkeypatch.delenv("CLAUDE_BRIDGE_URL", raising=False)
+    monkeypatch.delenv("CLAUDE_BRIDGE_AGENT_TOKEN", raising=False)
+    monkeypatch.setenv("CLAUDE_BRIDGE_MODEL", "from-env")
+    f = tmp_path / ".env"
+    f.write_text('# comment\nCLAUDE_BRIDGE_URL=https://b.example\nexport CLAUDE_BRIDGE_AGENT_TOKEN="t0k"\nCLAUDE_BRIDGE_MODEL=from-file\n\n')
+    argv = _pop_env_file(["worker", "--env-file", str(f), "--once"])
+    assert argv == ["worker", "--once"]
+    args = build_parser().parse_args(argv)
+    assert args.url == "https://b.example" and args.token == "t0k"
+    assert args.model == "from-env"  # the real environment wins over the file

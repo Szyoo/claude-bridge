@@ -1,0 +1,10 @@
+# 追加到 vultr-jp 的 /opt/ingress/Caddyfile。
+# 前提：Cloudflare DNS 已添加 A 记录（灰云 / DNS-only）：claude.szyyw.xyz → 167.179.76.194
+# 改完跑 /opt/ingress/sync-caddy-aliases.sh --apply（或等 */5 cron），
+# 否则 portal 的健康检查会因 hairpin NAT 误报红点。
+# SSE 不需要额外配置：Caddy 对 text/event-stream 自动逐帧刷新。
+
+claude.szyyw.xyz {
+	reverse_proxy claude-bridge:8770
+	encode zstd gzip
+}

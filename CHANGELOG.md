@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.3.1 — 2026-09-24
+
+- `--env-file PATH`：先从 KEY=VALUE 文件读 `CLAUDE_BRIDGE_*`（已设置的环境变量优先），令牌不必写进 plist / unit 文件
+- 部署：`Dockerfile` + `deploy/vps/`（compose 只挂 ingress 网络、显式项目名）+ `scripts/deploy-vps.sh`；`deploy/mac/` 的 LaunchAgent 与安装脚本；通用模板移到 `deploy/examples/`
+
 ## v0.3.0 — 2026-09-24
 
 - **多用户模式** `serve --multi-user`：用户名 + 密码登录（PBKDF2），365 天自动续期的登录态，改密码 / 重置 / 停用即刻让其它设备登出；每人的线程、上传、当前对话、设置互相隔离；`/admin` 分发账户（自动生成初始密码）、改角色、停用、删除；`/account` 自助改用户名 / 显示名 / 密码、看用量；`claude-bridge users add|list|passwd|enable`；部署模板 `deploy/`（systemd / Caddy / nginx / launchd）

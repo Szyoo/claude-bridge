@@ -16,8 +16,8 @@
 不在 PyPI，按 tag 装（`vX.Y.Z` 见 [tags](https://github.com/Szyoo/claude-bridge/tags) / [CHANGELOG](CHANGELOG.md)）：
 
 ```bash
-pip install "claude-bridge @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.0.tar.gz"
-pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.0.tar.gz"   # 独立运行还需要 uvicorn
+pip install "claude-bridge @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.1.tar.gz"
+pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.1.tar.gz"   # 独立运行还需要 uvicorn
 ```
 
 或者**把 `src/ pyproject.toml README.md CHANGELOG.md LICENSE` 拷进宿主仓库**（vendoring）（例如 `packages/claude-bridge/`，只读），用一个更新脚本从 tag 覆盖，再 `pip install -e packages/claude-bridge`——宿主的构建和部署就不需要访问 GitHub。
@@ -53,7 +53,7 @@ claude-bridge status    # 服务端可达性 + claude --version + claude auth st
 | `CLAUDE_BRIDGE_MODEL` / `_MAX_TURNS` / `_PERMISSION_MODE` / `_CHAT_TIMEOUT` / `_CLAUDE_BIN` | 同名 CLI 参数 | `""` / 40 / — / 900 / `claude` |
 | `CLAUDE_BRIDGE_MULTI_USER` / `_TZ` | `1` = `serve --multi-user`（见下）/ 配额提示里重置时间用的时区 | — / 系统时区 |
 
-命令行 flag 覆盖环境变量;`worker --once` 只处理一个任务就退出(调试用),`serve --no-auth` 关掉登录(本地调试)。
+命令行 flag 覆盖环境变量,`--env-file PATH`(任意位置)先从 KEY=VALUE 文件读入(已有的环境变量优先);`worker --once` 只处理一个任务就退出(调试用),`serve --no-auth` 关掉登录(本地调试)。
 
 ## 多用户模式（给熟人分发账户）
 
@@ -76,7 +76,10 @@ claude-bridge users --db /data/bridge.db list | enable <名字>
   - **保护线**：账户整体 5 小时 / 每周用量到 N% 时暂停所有普通用户，给自己留余量。账户用量来自每轮的 `rate_limit_event`，外加 worker 每 10 分钟一次零费用的 `claude -p "/usage"`（`WorkerConfig(usage_probe_interval=...)`，0 关闭），所以你在本机其它地方用的也算进去；
   - 管理员不受任何限制；超额时发送返回 429，页面提示原因和重置时间。
 - worker 一次处理一个任务。人多排队时可以在同一台机器上多开几个 `claude-bridge worker`（领任务是原子的）。
-- 部署模板在 [`deploy/`](deploy/)：VPS 上的 systemd 单元（`claude-bridge.service`）、HTTPS 反代（`Caddyfile` / `nginx.conf`），Mac 上跑 worker 的 launchd（`com.claude-bridge.worker.plist`）。
+- 部署：
+  - **Docker + 共用 Caddy**（现在 `claude.szyyw.xyz` 的形态）：[`Dockerfile`](Dockerfile) + [`deploy/vps/`](deploy/vps/)（compose 不映射端口、只挂 ingress 网络，`.env` 见 `env.example`），`bash scripts/deploy-vps.sh` 一键 rsync → 构建 → 健康检查。首次部署先建管理员：`docker compose run --rm -T bridge claude-bridge users add <名字> --admin`（服务端没有管理员时拒绝启动）。
+  - **Mac 上的 worker**：[`deploy/mac/`](deploy/mac/)，仓库 `.env`（见 `env.example`）+ `bash deploy/mac/install.sh` 装成用户级 LaunchAgent。plist 直接启动 venv 里的 `claude-bridge worker --env-file .env`，不经 shell 脚本：macOS 隐私保护不让 launchd 下的 `/bin/bash` 读 `~/Documents`。
+  - 不用 Docker 的通用模板（systemd / Caddy / nginx / launchd）：[`deploy/examples/`](deploy/examples/)。
 
 嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。
 

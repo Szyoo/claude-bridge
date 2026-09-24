@@ -19,12 +19,43 @@ def env(name: str, default: str = "") -> str:
     return os.environ.get(f"CLAUDE_BRIDGE_{name}", default)
 
 
+def load_env_file(path: str) -> None:
+    """KEY=VALUE lines (# comments, optional quotes) into os.environ; variables already set win."""
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip().removeprefix("export ").strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+def _pop_env_file(argv: list[str]) -> list[str]:
+    """`--env-file PATH` anywhere on the line is applied before the parser reads its env defaults."""
+    out, i = [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--env-file" and i + 1 < len(argv):
+            load_env_file(argv[i + 1])
+            i += 2
+            continue
+        if a.startswith("--env-file="):
+            load_env_file(a.split("=", 1)[1])
+        else:
+            out.append(a)
+        i += 1
+    return out
+
+
 def _split_tools(raw: str) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="claude-bridge", description="web chat → local claude -p bridge")
+    p = argparse.ArgumentParser(prog="claude-bridge", description="web chat → local claude -p bridge",
+                                epilog="--env-file PATH (anywhere): read CLAUDE_BRIDGE_* from a KEY=VALUE file first")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("serve", help="run the standalone server (login + chat page + API)")
@@ -236,6 +267,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = _pop_env_file(list(sys.argv[1:] if argv is None else argv))
     args = build_parser().parse_args(argv)
     return {"serve": cmd_serve, "worker": cmd_worker, "users": cmd_users, "status": cmd_status}[args.cmd](args)
 

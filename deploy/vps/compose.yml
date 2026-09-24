@@ -1,0 +1,29 @@
+# vultr-jp 部署：对外只经 Caddy（ingress 网络），刻意不写任何 ports:
+# Docker 的 iptables 会绕过 ufw，publish 端口 = 直接暴露公网，勿改。
+# 显式项目名：别的项目也在 deploy/vps 下，默认都叫 vps，会互相当成 orphan。
+name: claude-bridge
+
+services:
+  bridge:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: claude-bridge
+    restart: unless-stopped
+    env_file:
+      # format: raw 禁用 compose 变量插值 —— 令牌里若有 $ 会被吃掉
+      - path: ./.env
+        format: raw
+    volumes:
+      - bridge_data:/data
+    networks:
+      - ingress
+
+networks:
+  ingress:
+    external: true
+    # 实机上该网络由 /opt/ingress 的 compose 项目创建，实际名称带项目前缀
+    name: ingress_ingress
+
+volumes:
+  bridge_data:

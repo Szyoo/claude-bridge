@@ -1,7 +1,7 @@
 # /etc/systemd/system/claude-bridge.service — the server on the VPS (multi-user)
 #   sudo useradd -r -m -d /var/lib/claude-bridge claude-bridge
 #   sudo -u claude-bridge python3 -m venv /var/lib/claude-bridge/venv
-#   sudo -u claude-bridge /var/lib/claude-bridge/venv/bin/pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.0.tar.gz"
+#   sudo -u claude-bridge /var/lib/claude-bridge/venv/bin/pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.1.tar.gz"
 #   sudo -u claude-bridge /var/lib/claude-bridge/venv/bin/claude-bridge users --db /var/lib/claude-bridge/bridge.db add <你> --admin
 #   sudo install -m 600 /dev/null /etc/claude-bridge.env   # then put CLAUDE_BRIDGE_AGENT_TOKEN=... in it
 #   sudo systemctl enable --now claude-bridge

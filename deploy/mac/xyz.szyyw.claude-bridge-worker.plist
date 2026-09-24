@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mac mini 常驻 worker：claude-bridge worker（执行 claude -p）。用户级 LaunchAgent（GUI 域），由 deploy/mac/install.sh 安装。
+  路径按仓库位置渲染，勿手改；配置在仓库 .env（--env-file 读，令牌不进 plist），日志在 logs/worker.log。
+  直接启动 venv 里的程序而不是 shell 脚本：macOS 隐私保护不让 launchd 下的 /bin/bash 读 ~/Documents。
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>xyz.szyyw.claude-bridge-worker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/claude-bridge</string>
+        <string>worker</string>
+        <string>--env-file</string>
+        <string>__REPO__/.env</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd 的 PATH 很短，claude / node 装在用户目录与 homebrew 下 -->
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/worker.log</string>
+</dict>
+</plist>
