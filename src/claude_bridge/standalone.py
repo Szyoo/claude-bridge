@@ -13,7 +13,7 @@ from claude_bridge.service import BridgeConfig
 from claude_bridge.store import BridgeStore
 
 
-def _client_ip(request: Request) -> str:
+def client_ip(request: Request) -> str:
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
         return fwd.split(",")[0].strip()
@@ -65,7 +65,7 @@ def create_standalone_app(
 
     @app.post("/login")
     def login(request: Request, password: str = Form("")):
-        ip = _client_ip(request)
+        ip = client_ip(request)
         if auth.is_limited(ip):
             raise HTTPException(status_code=429, detail="尝试太多，一分钟后再试")
         if not auth.check_password(password):

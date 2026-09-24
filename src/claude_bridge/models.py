@@ -92,6 +92,13 @@ class AgentModelsIn(BaseModel):
     pinned: list[ModelEntry] = Field(default_factory=list, max_length=100)
 
 
+class AgentLimitsIn(BaseModel):
+    """Whole percentages from `claude -p "/usage"`; None when the CLI did not show that window."""
+
+    five_hour_pct: float | None = Field(None, ge=0, le=1000)
+    seven_day_pct: float | None = Field(None, ge=0, le=1000)
+
+
 class AgentChatIn(BaseModel):
     text: str = Field(min_length=1)
     scope: str = ""

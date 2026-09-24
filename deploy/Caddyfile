@@ -1,0 +1,4 @@
+# Caddy gets and renews the HTTPS certificate by itself. SSE needs no special handling.
+bridge.example.com {
+	reverse_proxy 127.0.0.1:8770
+}

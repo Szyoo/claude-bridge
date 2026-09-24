@@ -17,6 +17,7 @@ from claude_bridge.broker import Broker
 from claude_bridge.errors import BridgeError
 from claude_bridge.models import (
     AgentChatIn,
+    AgentLimitsIn,
     AgentModelsIn,
     JobEventsIn,
     JobFinishIn,
@@ -28,6 +29,7 @@ from claude_bridge.models import (
     ThreadPatchIn,
     ThreadSelectIn,
 )
+from claude_bridge.principal import ANONYMOUS, Principal, as_principal
 from claude_bridge.service import BridgeConfig, BridgeService
 from claude_bridge.sse import SSE_HEADERS, event_stream
 from claude_bridge.store import BridgeStore
@@ -84,43 +86,52 @@ def create_bridge(
     if agent_auth is None:
         agent_auth = bearer_auth(agent_token or "")
 
-    browser = APIRouter(dependencies=[Depends(browser_auth)] if browser_auth else [])
+    # browser_auth may return a Principal (multi-user hosts); whatever else it returns means the shared namespace
+    if browser_auth is None:
+        def who() -> Principal:
+            return ANONYMOUS
+    else:
+        def who(result: Any = Depends(browser_auth)) -> Principal:
+            return as_principal(result)
+
+    browser = APIRouter(dependencies=[Depends(who)])
     agent = APIRouter(dependencies=[Depends(agent_auth)])
 
     # ---------------- browser ----------------
 
     @browser.get("/threads")
-    def list_threads(scope: str = Query("")):
-        current = _svc(service.current_thread, scope)
-        return {"items": store.threads(scope), "current": current, "scope": scope}
+    def list_threads(scope: str = Query(""), p: Principal = Depends(who)):
+        current = _svc(service.current_thread, scope, p.owner)
+        return {"items": store.threads(scope, p.owner), "current": current, "scope": scope}
 
     @browser.post("/threads", status_code=201)
-    def create_thread(body: ThreadIn | None = None):
+    def create_thread(body: ThreadIn | None = None, p: Principal = Depends(who)):
         body = body or ThreadIn()
-        return {"thread": _svc(service.new_thread, body.scope, body.key, body.title)}
+        return {"thread": _svc(service.new_thread, body.scope, body.key, body.title, owner=p.owner)}
 
     @browser.get("/threads/find")
-    def find_thread(scope: str = Query(""), key: str = Query(...)):
-        return {"thread": service.find_thread(scope, key)}
+    def find_thread(scope: str = Query(""), key: str = Query(...), p: Principal = Depends(who)):
+        return {"thread": service.find_thread(scope, key, p.owner)}
 
     @browser.get("/threads/{thread_id}")
-    def get_thread(thread_id: str):
+    def get_thread(thread_id: str, p: Principal = Depends(who)):
+        _svc(service.own_thread, thread_id, p.owner)
         snap = _svc(service.snapshot, thread_id)
         return {k: snap[k] for k in ("thread", "messages", "inflight", "agent", "jobs")}
 
     @browser.post("/threads/{thread_id}/select")
-    def select_thread(thread_id: str, body: ThreadSelectIn | None = None):
-        _svc(service.select_thread, (body.scope if body else ""), thread_id)
+    def select_thread(thread_id: str, body: ThreadSelectIn | None = None, p: Principal = Depends(who)):
+        _svc(service.select_thread, (body.scope if body else ""), thread_id, p.owner)
         return {"thread": thread_id}
 
     @browser.patch("/threads/{thread_id}")
-    def patch_thread(thread_id: str, body: ThreadPatchIn):
-        _svc(service.patch_thread, thread_id, title=body.title, pinned=body.pinned)
+    def patch_thread(thread_id: str, body: ThreadPatchIn, p: Principal = Depends(who)):
+        _svc(service.patch_thread, thread_id, title=body.title, pinned=body.pinned, owner=p.owner)
         return {"ok": True}
 
     @browser.delete("/threads/{thread_id}")
-    def delete_thread(thread_id: str, scope: str | None = Query(None)):
-        return _svc(service.delete_thread, thread_id, scope)
+    def delete_thread(thread_id: str, scope: str | None = Query(None), p: Principal = Depends(who)):
+        return _svc(service.delete_thread, thread_id, scope, p.owner)
 
     @browser.get("/threads/{thread_id}/messages")
     def list_messages(
@@ -128,26 +139,27 @@ def create_bridge(
         after: int = Query(0, ge=0),
         limit: int = Query(200, ge=1, le=1000),
         events: int = Query(1),
+        p: Principal = Depends(who),
     ):
-        if not store.get_thread(thread_id):
-            raise HTTPException(status_code=404, detail="没有这个对话")
+        _svc(service.own_thread, thread_id, p.owner)
         items = store.messages(thread_id, after_id=after, limit=limit, with_events=bool(events), tail=after == 0)
         inflight = store.inflight(thread_id)
         return {"items": items, "inflight": inflight["id"] if inflight else None}
 
     @browser.post("/threads/{thread_id}/messages", status_code=201)
-    def send_to_thread(thread_id: str, body: ThreadMessageIn):
-        return _svc(service.start_chat, body.text, thread_id=thread_id, files=body.files)
+    def send_to_thread(thread_id: str, body: ThreadMessageIn, p: Principal = Depends(who)):
+        return _svc(service.start_chat, body.text, thread_id=thread_id, files=body.files, principal=p)
 
     @browser.post("/send", status_code=201)
-    def send(body: SendIn):
+    def send(body: SendIn, p: Principal = Depends(who)):
         return _svc(
-            service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread, files=body.files
+            service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread, files=body.files,
+            principal=p,
         )
 
     # image upload: the request body is the image itself (no multipart dependency); ?name= is an optional label
     @browser.post("/files", status_code=201)
-    async def upload_file(request: Request, name: str = Query("", max_length=80)):
+    async def upload_file(request: Request, name: str = Query("", max_length=80), p: Principal = Depends(who)):
         if not service.uploads_enabled:
             raise HTTPException(status_code=404, detail="未开启图片上传")
         data = bytearray()
@@ -155,22 +167,22 @@ def create_bridge(
             data += chunk
             if len(data) > config.max_file_bytes:
                 raise HTTPException(status_code=413, detail=f"图片超过 {config.max_file_bytes / 1048576:.0f} MB 上限")
-        return await run_in_threadpool(_svc, service.save_upload, bytes(data), name)
+        return await run_in_threadpool(_svc, service.save_upload, bytes(data), name, p.owner)
 
-    def _file_response(file_id: str) -> FileResponse:
-        path, mime = _svc(service.file_for_download, file_id)
+    def _file_response(file_id: str, owner: str | None) -> FileResponse:
+        path, mime = _svc(service.file_for_download, file_id, owner)
         return FileResponse(path, media_type=mime, headers=FILE_HEADERS)
 
     @browser.get("/files/{file_id}")
-    def get_file(file_id: str):
-        return _file_response(file_id)
+    def get_file(file_id: str, p: Principal = Depends(who)):
+        return _file_response(file_id, p.owner)
 
     @browser.get("/threads/{thread_id}/stream")
     async def stream(
-        thread_id: str, request: Request, after: int = Query(0, ge=0), last_event_id: int = Query(0, ge=0)
+        thread_id: str, request: Request, after: int = Query(0, ge=0), last_event_id: int = Query(0, ge=0),
+        p: Principal = Depends(who),
     ):
-        if not await run_in_threadpool(store.get_thread, thread_id):
-            raise HTTPException(status_code=404, detail="没有这个对话")
+        await run_in_threadpool(_svc, service.own_thread, thread_id, p.owner)
         # browsers send the header on auto-reconnect; the query form is for hand-made reconnects
         raw = request.headers.get("last-event-id", "")
         last_event_id = int(raw) if raw.isdigit() else last_event_id
@@ -180,21 +192,21 @@ def create_bridge(
         return StreamingResponse(gen, media_type="text/event-stream", headers=SSE_HEADERS)
 
     @browser.post("/messages/{message_id}/cancel")
-    def cancel(message_id: int):
-        return _svc(service.cancel, message_id)
+    def cancel(message_id: int, p: Principal = Depends(who)):
+        return _svc(service.cancel, message_id, p.owner)
 
     @browser.post("/threads/{thread_id}/context", status_code=202)
-    def refresh_context(thread_id: str):
-        return _svc(service.request_session_job, thread_id, "context")
+    def refresh_context(thread_id: str, p: Principal = Depends(who)):
+        return _svc(service.request_session_job, thread_id, "context", p)
 
     @browser.post("/threads/{thread_id}/compact", status_code=202)
-    def compact_thread(thread_id: str):
-        return _svc(service.request_session_job, thread_id, "compact")
+    def compact_thread(thread_id: str, p: Principal = Depends(who)):
+        return _svc(service.request_session_job, thread_id, "compact", p)
 
     @browser.get("/settings")
-    def get_settings():
+    def get_settings(p: Principal = Depends(who)):
         return {
-            "chat": service.settings(),
+            "chat": service.settings(p.owner),
             "models": service.model_choices(),
             "models_info": service.models_info(),
             "bridge": service.versions(),
@@ -205,17 +217,23 @@ def create_bridge(
         }
 
     @browser.put("/settings")
-    def put_settings(body: SettingsIn):
-        return {"chat": _svc(service.save_settings, body.model_dump(exclude_unset=True))}
+    def put_settings(body: SettingsIn, p: Principal = Depends(who)):
+        return {"chat": _svc(service.save_settings, body.model_dump(exclude_unset=True), p.owner)}
 
+    # the shared namespace sees every job (host job kinds included); a user only the jobs on their own threads
     @browser.get("/jobs")
-    def list_jobs(limit: int = Query(20, ge=1, le=200)):
+    def list_jobs(limit: int = Query(20, ge=1, le=200), p: Principal = Depends(who)):
         service.requeue_stale()
-        return {"items": store.recent_jobs(limit), "agent": service.agent_status()}
+        return {"items": store.recent_jobs(limit, p.owner or None), "agent": service.agent_status()}
 
     @browser.get("/jobs/{job_id}")
-    def get_job(job_id: int):
+    def get_job(job_id: int, p: Principal = Depends(who)):
         job = store.get_job(job_id)
+        if job and p.owner:
+            tid = (job.get("payload") or {}).get("thread")
+            th = store.get_thread(tid) if isinstance(tid, str) else None
+            if not th or th.get("owner") != p.owner:
+                job = None
         if not job:
             raise HTTPException(status_code=404, detail="没有这个任务")
         return job
@@ -259,7 +277,12 @@ def create_bridge(
 
     @agent.get("/files/{file_id}")
     def a_get_file(file_id: str):
-        return _file_response(file_id)
+        return _file_response(file_id, None)
+
+    # the worker's periodic zero-cost `claude /usage`: account-wide 5h / weekly utilization
+    @agent.post("/limits")
+    def a_report_limits(body: AgentLimitsIn):
+        return service.save_usage_probe(body.model_dump())
 
     # the worker validates these pinned ids against its local CLI and reports what it supports
     @agent.get("/models")

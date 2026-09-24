@@ -16,8 +16,8 @@
 不在 PyPI，按 tag 装（`vX.Y.Z` 见 [tags](https://github.com/Szyoo/claude-bridge/tags) / [CHANGELOG](CHANGELOG.md)）：
 
 ```bash
-pip install "claude-bridge @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.2.0.tar.gz"
-pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.2.0.tar.gz"   # 独立运行还需要 uvicorn
+pip install "claude-bridge @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.0.tar.gz"
+pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.0.tar.gz"   # 独立运行还需要 uvicorn
 ```
 
 或者**把 `src/ pyproject.toml README.md CHANGELOG.md LICENSE` 拷进宿主仓库**（vendoring）（例如 `packages/claude-bridge/`，只读），用一个更新脚本从 tag 覆盖，再 `pip install -e packages/claude-bridge`——宿主的构建和部署就不需要访问 GitHub。
@@ -51,8 +51,34 @@ claude-bridge status    # 服务端可达性 + claude --version + claude auth st
 | `CLAUDE_BRIDGE_ALLOWED_TOOLS` | 逗号分隔的 `--allowedTools` | 空(不加参数) |
 | `CLAUDE_BRIDGE_SYSTEM_PROMPT` / `_FILE` | `--append-system-prompt` | — |
 | `CLAUDE_BRIDGE_MODEL` / `_MAX_TURNS` / `_PERMISSION_MODE` / `_CHAT_TIMEOUT` / `_CLAUDE_BIN` | 同名 CLI 参数 | `""` / 40 / — / 900 / `claude` |
+| `CLAUDE_BRIDGE_MULTI_USER` / `_TZ` | `1` = `serve --multi-user`（见下）/ 配额提示里重置时间用的时区 | — / 系统时区 |
 
 命令行 flag 覆盖环境变量;`worker --once` 只处理一个任务就退出(调试用),`serve --no-auth` 关掉登录(本地调试)。
+
+## 多用户模式（给熟人分发账户）
+
+`serve --multi-user`：用户名 + 密码登录，每个人的对话、上传、「当前对话」和设置各自独立；管理员在 `/admin` 分发账户、设配额；每个人在 `/account` 自己改用户名 / 显示名 / 密码、看自己的用量。
+
+```bash
+# 先建第一个管理员（直接写数据库；单口令时代的旧对话会归到这个账户）
+claude-bridge users --db /data/bridge.db add me --admin          # 交互输入密码；非终端时自动生成并打印
+CLAUDE_BRIDGE_AGENT_TOKEN=共享令牌 CLAUDE_BRIDGE_DB=/data/bridge.db CLAUDE_BRIDGE_TZ=Asia/Tokyo \
+claude-bridge serve --multi-user --host 127.0.0.1 --port 8770     # 前面放 nginx / Caddy 做 HTTPS
+claude-bridge users --db /data/bridge.db passwd me               # 忘了密码：重设（该用户所有设备登出）
+claude-bridge users --db /data/bridge.db list | enable <名字>
+```
+
+- **登录态**：签名 cookie 有效期 365 天，每打开一次页面（满一天后）自动续期，经常用的人不会被要求重新登录。改密码、管理员重置密码、停用账户会让该用户其他设备上的登录立刻失效。cookie 签名密钥不设 `CLAUDE_BRIDGE_SECRET` 时自动生成并存在数据库里，重启不掉登录。
+- **隔离**：别人的线程、消息、SSE、上传的图片、任务一律 404；管理员也看不到别人的对话内容，只看得到用量。所有人共用 worker 的 `cwd` / `--allowedTools`（worker 仍然是你那台机器上的 `claude`）。
+- **配额 = 订阅额度的百分比**：CLI 只报整个账号 5 小时 / 每周窗口的用量（整数 %，一轮对话通常不到 1%，没法直接拆到人头上），所以：
+  - 每轮的等价费用 `total_cost_usd`（精确）记到 `bridge_usage` 账本里（`/compact` 也记；删对话不退额度），按账户真实窗口的起点累计；
+  - 管理员填「5 小时 100% ≈ $X」「每周 100% ≈ $Y」，个人用量 = 费用 ÷ X，按人设 5 小时 / 每周上限（%）。页面给出估值：本窗口经 bridge 的花费 ÷ 账户用量（你在 bridge 之外用得越多，真实值越高于估值）；
+  - **保护线**：账户整体 5 小时 / 每周用量到 N% 时暂停所有普通用户，给自己留余量。账户用量来自每轮的 `rate_limit_event`，外加 worker 每 10 分钟一次零费用的 `claude -p "/usage"`（`WorkerConfig(usage_probe_interval=...)`，0 关闭），所以你在本机其它地方用的也算进去；
+  - 管理员不受任何限制；超额时发送返回 429，页面提示原因和重置时间。
+- worker 一次处理一个任务。人多排队时可以在同一台机器上多开几个 `claude-bridge worker`（领任务是原子的）。
+- 部署模板在 [`deploy/`](deploy/)：VPS 上的 systemd 单元（`claude-bridge.service`）、HTTPS 反代（`Caddyfile` / `nginx.conf`），Mac 上跑 worker 的 launchd（`com.claude-bridge.worker.plist`）。
+
+嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。
 
 ## 嵌入现有 FastAPI 应用
 
@@ -152,7 +178,7 @@ SSE 帧:`snapshot`(首帧:线程(含 `context` 构成)+ 消息 + 进行中的消
 
 ## 数据表
 
-`bridge_threads / bridge_messages / bridge_events / bridge_jobs / bridge_meta`,建表幂等,可与宿主共用一个 SQLite 文件(共享连接时不改任何 PRAGMA 和 `row_factory`)。心跳超过 `stale_seconds`(默认 120 s)的运行中任务会被判失败并把关联消息置为 `error`,不会出现永远「正在回答」的线程。
+`bridge_threads / bridge_messages / bridge_events / bridge_jobs / bridge_meta / bridge_files / bridge_usage`（多用户模式另有 `bridge_users`）；线程和上传带 `owner` 列（旧库启动时自动加列），建表幂等,可与宿主共用一个 SQLite 文件(共享连接时不改任何 PRAGMA 和 `row_factory`)。心跳超过 `stale_seconds`(默认 120 s)的运行中任务会被判失败并把关联消息置为 `error`,不会出现永远「正在回答」的线程。
 
 ## 测试
 

@@ -38,6 +38,18 @@ def parse_token_count(text: str) -> int | None:
     return int(round(n))
 
 
+_USAGE_SESSION_RE = re.compile(r"Current session:\s*(\d+(?:\.\d+)?)%\s*used", re.I)
+_USAGE_WEEK_RE = re.compile(r"Current week \(all models\):\s*(\d+(?:\.\d+)?)%\s*used", re.I)
+
+
+def parse_usage_report(text: str) -> dict[str, float] | None:
+    """`claude -p "/usage"` on a subscription → {five_hour_pct, seven_day_pct}; None when it shows no limits (API key)."""
+    s, w = _USAGE_SESSION_RE.search(text or ""), _USAGE_WEEK_RE.search(text or "")
+    if not s and not w:
+        return None
+    return {"five_hour_pct": float(s.group(1)) if s else None, "seven_day_pct": float(w.group(1)) if w else None}
+
+
 def parse_context_report(md: str) -> dict[str, Any]:
     """Parse the Markdown that `claude -p "/context"` returns into {model, used, window, pct, categories}."""
     out: dict[str, Any] = {"model": None, "used": None, "window": None, "pct": None, "categories": [], "autocompact_pct": None}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ~/Library/LaunchAgents/com.claude-bridge.worker.plist — the worker on the Mac that is logged into claude.
+     Fill in the paths / URL / token, then:  launchctl load -w ~/Library/LaunchAgents/com.claude-bridge.worker.plist
+     Logs: /tmp/claude-bridge-worker.log. A LaunchAgent (not a daemon) so it runs as you and sees your claude login. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.claude-bridge.worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.venvs/claude-bridge/bin/claude-bridge</string>
+    <string>worker</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_BRIDGE_URL</key><string>https://bridge.example.com</string>
+    <key>CLAUDE_BRIDGE_AGENT_TOKEN</key><string>SAME-TOKEN-AS-THE-SERVER</string>
+    <key>CLAUDE_BRIDGE_CWD</key><string>/Users/YOU/claude-bridge-work</string>
+    <key>CLAUDE_BRIDGE_CLAUDE_BIN</key><string>/Users/YOU/.local/bin/claude</string>
+    <key>PATH</key><string>/Users/YOU/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/claude-bridge-worker.log</string>
+  <key>StandardErrorPath</key><string>/tmp/claude-bridge-worker.log</string>
+</dict>
+</plist>

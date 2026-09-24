@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>claude-bridge · 登录</title>
+  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+</head>
+<body class="bridge-root bridge-page">
+  <main class="bp-login">
+    <form class="bp-card" method="post" action="/login">
+      <h1>claude-bridge</h1>
+      <label class="bp-field"><span>用户名</span>
+        <input class="bp-input" name="username" value="{{username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus /></label>
+      <label class="bp-field"><span>密码</span>
+        <input class="bp-input" type="password" name="password" autocomplete="current-password" required /></label>
+      <div class="bp-err" role="alert">{{error}}</div>
+      <button type="submit" class="bridge-btn bridge-btn-primary">登录</button>
+      <p class="bp-help">账户由管理员分发。登录一次后这台设备会一直保持登录。</p>
+    </form>
+  </main>
+  <script>
+    // with a remembered username, put the cursor on the password
+    const u = document.querySelector('[name=username]');
+    if (u.value) document.querySelector('[name=password]').focus();
+  </script>
+</body>
+</html>
