@@ -65,6 +65,9 @@ class BridgeClient:
     def report_models(self, report: dict[str, Any]) -> None:
         self._call("POST", "/models", json=report)
 
+    def report_limits(self, report: dict[str, Any]) -> None:
+        self._call("POST", "/limits", json=report)
+
     def next_job(self, worker: str, kinds: list[str], wait: int = 25) -> dict[str, Any] | None:
         body = {"worker": worker, "kinds": kinds, "wait": wait}
         return (self._call("POST", "/jobs/next", json=body, timeout=wait + 15) or {}).get("job")

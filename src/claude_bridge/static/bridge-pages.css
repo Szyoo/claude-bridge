@@ -1,0 +1,80 @@
+/* Pages around the chat in `serve --multi-user`: login, account, admin. Built on the widget's --bridge-* tokens. */
+body.bridge-page [hidden] { display: none !important; }
+body.bridge-page { margin: 0; min-height: 100vh; background: var(--bridge-bg); color: var(--bridge-fg); font-family: var(--bridge-font); font-size: 14px; line-height: 1.5; }
+.bp-wrap { max-width: 960px; margin: 0 auto; padding: 20px 16px 48px; box-sizing: border-box; }
+.bp-wrap.narrow { max-width: 560px; }
+.bp-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.bp-head h1 { font-size: 18px; margin: 0; flex: 1; min-width: 0; }
+.bp-head a, .bp-link { color: var(--bridge-accent); text-decoration: none; font-size: 13px; }
+.bp-head a:hover, .bp-link:hover { text-decoration: underline; }
+.bp-card { background: var(--bridge-panel); border: 1px solid var(--bridge-border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.bp-card h2 { font-size: 15px; margin: 0 0 4px; }
+.bp-card > .bp-help { margin: 0 0 14px; }
+.bp-help { color: var(--bridge-muted); font-size: 12.5px; }
+.bp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.bp-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.bp-field > span { font-size: 12.5px; color: var(--bridge-muted); }
+.bp-input, .bp-select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--bridge-border); border-radius: 8px; background: var(--bridge-bg); color: var(--bridge-fg); font: inherit; }
+.bp-input:focus, .bp-select:focus { outline: 2px solid color-mix(in srgb, var(--bridge-accent) 40%, transparent); outline-offset: 0; border-color: var(--bridge-accent); }
+.bp-inline { display: flex; align-items: center; gap: 6px; }
+.bp-inline .bp-input { width: 9em; }
+.bp-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 4px; }
+.bp-err { color: var(--bridge-err); font-size: 13px; min-height: 1.2em; }
+.bp-tag { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--bridge-user); color: var(--bridge-muted); vertical-align: 1px; }
+.bp-tag.admin { background: color-mix(in srgb, var(--bridge-accent) 15%, transparent); color: var(--bridge-accent); }
+.bp-tag.off { background: color-mix(in srgb, var(--bridge-err) 14%, transparent); color: var(--bridge-err); }
+
+/* usage meters */
+.bp-meter { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bp-meter-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.bp-meter-top b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bp-bar { position: relative; height: 6px; border-radius: 3px; background: var(--bridge-user); overflow: hidden; }
+.bp-bar > i { position: absolute; inset: 0 auto 0 0; background: var(--bridge-accent); border-radius: 3px; }
+.bp-bar.warn > i { background: #d9922e; }
+.bp-bar.full > i { background: var(--bridge-err); }
+.bp-bar > s { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--bridge-fg); opacity: .55; text-decoration: none; }
+.bp-meter-sub { font-size: 11.5px; color: var(--bridge-muted); }
+.bp-blocked { margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px; background: color-mix(in srgb, var(--bridge-err) 10%, transparent); color: var(--bridge-err); }
+
+/* admin: user rows (a table on wide screens, cards on phones) */
+.bp-users { display: flex; flex-direction: column; }
+.bp-user { display: grid; grid-template-columns: minmax(140px, 1.3fr) 1fr 1fr minmax(96px, .7fr) auto; gap: 14px; align-items: center; padding: 12px 0; border-top: 1px solid var(--bridge-border); }
+.bp-user:first-child { border-top: 0; }
+.bp-user.head { font-size: 12px; color: var(--bridge-muted); padding: 0 0 6px; }
+.bp-user .who { min-width: 0; }
+.bp-user .who .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-user .who .d { font-size: 12px; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-user .seen { font-size: 12px; color: var(--bridge-muted); }
+.bp-user .ops { display: flex; gap: 4px; justify-content: flex-end; }
+.bp-user.is-off .who, .bp-user.is-off .bp-meter { opacity: .55; }
+@media (max-width: 720px) {
+  .bp-user { grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .bp-user.head { display: none; }
+  .bp-user .who { grid-column: 1 / -1; }
+  .bp-user .seen { grid-column: 1; }
+  .bp-user .ops { grid-column: 2; }
+}
+
+/* dialogs */
+.bp-dialog { border: 1px solid var(--bridge-border); border-radius: 12px; padding: 0; background: var(--bridge-panel); color: var(--bridge-fg); width: min(440px, calc(100vw - 32px)); box-shadow: var(--bridge-shadow-pop); }
+.bp-dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.bp-dialog form { padding: 18px; }
+.bp-dialog h3 { margin: 0 0 14px; font-size: 16px; }
+.bp-secret { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
+.bp-secret code { flex: 1; padding: 10px 12px; border-radius: 8px; background: var(--bridge-bg); border: 1px solid var(--bridge-border); font-family: var(--bridge-mono); font-size: 15px; letter-spacing: .04em; user-select: all; overflow-wrap: anywhere; }
+
+/* login */
+.bp-login { display: grid; place-items: center; min-height: 100vh; padding: 16px; box-sizing: border-box; }
+.bp-login form { width: min(360px, 100%); }
+.bp-login h1 { font-size: 18px; margin: 0 0 16px; }
+.bp-login .bridge-btn { width: 100%; padding: .6em; margin: 4px 0 12px; }
+.bp-login .bp-help { margin: 0; }
+
+/* the user block at the bottom of the chat sidebar */
+.bp-me { display: flex; align-items: center; gap: 6px; }
+.bp-me a.me { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 6px 8px; border-radius: var(--chat-radius, 6px); color: var(--bridge-fg); text-decoration: none; }
+.bp-me a.me:hover { background: var(--bridge-hover); }
+.bp-me .n { font-weight: 600; font-size: .928em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-me .u { font-size: .786em; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-me .u.full { color: var(--bridge-err); }
+.bp-me form { margin: 0; }

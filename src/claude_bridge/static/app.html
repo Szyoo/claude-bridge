@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>claude-bridge</title>
+  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+  <style>
+    body { margin: 0; }
+    #app { height: 100vh; height: 100dvh; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.12/marked.min.js" defer></script>
+</head>
+<body class="bridge-root">
+  <div id="app"></div>
+  <script type="module">
+    import { BridgeClient } from '/static/bridge/bridge-client.js';
+    import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
+    import { api, esc, fmtPct } from '/static/bridge/bridge-pages.js';
+
+    const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
+    mountBridgeWidget(document.getElementById('app'), client, { scope: '', title: 'claude-bridge', fill: true, sideFoot: '<div class="bp-me"></div>' });
+
+    // who is signed in + how much of their share is left, at the bottom of the thread list
+    const box = document.querySelector('.bp-me');
+    async function renderMe() {
+      let d;
+      try { d = await api('GET', '/api/me'); } catch { return; }
+      const u = d.user, us = d.usage;
+      const parts = [['five_hour', '5h'], ['seven_day', '周']]
+        .filter(([k]) => us[k].limit_pct != null && us[k].used_pct != null)
+        .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}/${fmtPct(us[k].limit_pct)}`);
+      const sub = us.blocked ? '额度已用完' : u.role === 'admin' ? '管理员' : (parts.join(' · ') || '账户设置');
+      box.innerHTML = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
+        + `<span class="n">${esc(u.display_name || u.username)}</span><span class="u${us.blocked ? ' full' : ''}">${esc(sub)}</span></a>`
+        + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin" style="text-decoration:none">管理</a>' : '')
+        + '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>';
+    }
+    renderMe();
+    setInterval(renderMe, 120000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) renderMe(); });
+  </script>
+</body>
+</html>

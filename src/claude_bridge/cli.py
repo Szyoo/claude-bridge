@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import os
 import shutil
@@ -32,6 +33,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--db", default=env("DB", "claude-bridge.db"))
     s.add_argument("--files", default=env("FILES", ""), help="where uploaded images are stored (default: next to the db)")
     s.add_argument("--no-auth", action="store_true", help="disable the password login (local debugging)")
+    s.add_argument("--multi-user", action="store_true", default=env("MULTI_USER") == "1",
+                   help="username + password accounts, per-user history, quotas, /admin (create users with `claude-bridge users`)")
+    s.add_argument("--tz", default=env("TZ"), help="timezone for reset times in quota messages, e.g. Asia/Tokyo (default: system)")
 
     w = sub.add_parser("worker", help="run the machine-side worker that executes claude -p")
     w.add_argument("--once", action="store_true", help="handle at most one job, then exit")
@@ -49,6 +53,21 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--no-partial", action="store_true", help="do not pass --include-partial-messages")
     w.add_argument("--worker-name", default=env("WORKER_NAME"))
     w.add_argument("-v", "--verbose", action="store_true")
+
+    u = sub.add_parser("users", help="manage accounts for serve --multi-user (works on the database directly)")
+    u.add_argument("--db", default=env("DB", "claude-bridge.db"))
+    us = u.add_subparsers(dest="users_cmd", required=True)
+    ua = us.add_parser("add", help="create an account")
+    ua.add_argument("username")
+    ua.add_argument("--admin", action="store_true")
+    ua.add_argument("--display-name", default="")
+    ua.add_argument("--password", help="default: prompt (or generate when stdin is not a terminal)")
+    us.add_parser("list", help="list accounts")
+    up = us.add_parser("passwd", help="set a new password (signs that user out everywhere)")
+    up.add_argument("username")
+    up.add_argument("--password", help="default: prompt (or generate when stdin is not a terminal)")
+    ue = us.add_parser("enable", help="re-enable a disabled account")
+    ue.add_argument("username")
 
     st = sub.add_parser("status", help="check the server and the local claude login")
     st.add_argument("--url", default=env("URL"))
@@ -90,6 +109,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
     local = args.host in ("127.0.0.1", "localhost", "::1")
     secure_env = env("COOKIE_SECURE")
     cookie_secure = (secure_env == "1") if secure_env else not local
+    if args.multi_user:
+        from claude_bridge.accounts import Accounts
+        from claude_bridge.multiuser import create_multiuser_app
+        from claude_bridge.store import BridgeStore
+
+        store = BridgeStore(args.db)
+        n = Accounts(store, secret=env("SECRET")).count(role="admin", active=True)
+        store.close()
+        if not n:
+            print(f"还没有管理员账户，先运行：claude-bridge users --db {args.db} add <用户名> --admin", file=sys.stderr)
+            return 1
+        app = create_multiuser_app(
+            db_path=args.db, agent_token=env("AGENT_TOKEN"), secret=env("SECRET"), cookie_secure=cookie_secure,
+            files_dir=args.files or None, tz=args.tz,
+        )
+        print(f"claude-bridge serving on http://{args.host}:{args.port}  db={args.db}  [multi-user]")
+        uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)
+        return 0
     app = create_standalone_app(
         db_path=args.db,
         password=env("PASSWORD"),
@@ -113,6 +150,64 @@ def cmd_worker(args: argparse.Namespace) -> int:
         return 0
     worker.run_forever()
     return 0
+
+
+def _ask_password(given: str | None) -> tuple[str, bool]:
+    """(password, generated): the flag, else a prompt on a terminal, else a generated one to print."""
+    from claude_bridge.accounts import generate_password
+
+    if given:
+        return given, False
+    if sys.stdin.isatty():
+        first = getpass.getpass("新密码（留空则自动生成）：")
+        if not first:
+            return generate_password(), True
+        if getpass.getpass("再输一次：") != first:
+            raise SystemExit("两次输入不一致")
+        return first, False
+    return generate_password(), True
+
+
+def cmd_users(args: argparse.Namespace) -> int:
+    from claude_bridge.accounts import Accounts
+    from claude_bridge.errors import BridgeError
+    from claude_bridge.store import BridgeStore
+
+    store = BridgeStore(args.db)
+    accounts = Accounts(store, secret=env("SECRET"))
+    try:
+        if args.users_cmd == "list":
+            for u in accounts.users():
+                flags = " [停用]" if u["disabled"] else ""
+                print(f"{u['id']:>4}  {u['username']:<20} {u['role']:<6} {u['display_name'] or '':<16} "
+                      f"最近 {u['last_seen_at'] or '—'}{flags}")
+            return 0
+        if args.users_cmd == "add":
+            password, generated = _ask_password(args.password)
+            first = accounts.count() == 0
+            user = accounts.create(args.username, password, role="admin" if args.admin else "user",
+                                   display_name=args.display_name)
+            print(f"已创建 {user['username']}（{user['role']}）" + ("，原来的对话已归到这个账户" if first and args.admin else ""))
+            if generated:
+                print(f"初始密码：{password}")
+            return 0
+        user = accounts.by_name(args.username)
+        if not user:
+            print(f"没有用户 {args.username}", file=sys.stderr)
+            return 1
+        if args.users_cmd == "passwd":
+            password, generated = _ask_password(args.password)
+            accounts.set_password(user["id"], password)
+            print(f"已重设 {user['username']} 的密码，其它设备上的登录已失效" + (f"\n新密码：{password}" if generated else ""))
+        elif args.users_cmd == "enable":
+            accounts.update(user["id"], {"disabled": False})
+            print(f"已启用 {user['username']}")
+        return 0
+    except BridgeError as e:
+        print(e.detail, file=sys.stderr)
+        return 1
+    finally:
+        store.close()
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -142,7 +237,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return {"serve": cmd_serve, "worker": cmd_worker, "status": cmd_status}[args.cmd](args)
+    return {"serve": cmd_serve, "worker": cmd_worker, "users": cmd_users, "status": cmd_status}[args.cmd](args)
 
 
 if __name__ == "__main__":

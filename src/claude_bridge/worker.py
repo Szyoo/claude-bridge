@@ -25,7 +25,13 @@ from typing import Any
 
 from claude_bridge._version import __version__
 from claude_bridge.client import BridgeClient, BridgeClientError
-from claude_bridge.stream_json import StreamState, describe_tool, iter_stream, parse_context_report
+from claude_bridge.stream_json import (
+    StreamState,
+    describe_tool,
+    iter_stream,
+    parse_context_report,
+    parse_usage_report,
+)
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +63,8 @@ class WorkerConfig:
     model_probe: bool = True
     model_probe_interval: float = 6 * 3600
     version_check_interval: float = 600
+    # account-wide 5h / weekly utilization via the zero-cost `claude -p "/usage"` (0 = off); feeds the server's quotas
+    usage_probe_interval: float = 600
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
@@ -107,6 +115,7 @@ class Worker:
         self._next_probe = 0.0          # monotonic time of the next model probe
         self._next_version_check = 0.0
         self._probed_version: str | None = None
+        self._next_usage_probe = 0.0
 
     @property
     def kinds(self) -> list[str]:
@@ -123,6 +132,7 @@ class Worker:
         while not self.stopping:
             try:
                 self.maybe_probe_models()
+                self.maybe_probe_usage()
                 try:
                     self.hooks.tick()
                 except Exception:
@@ -283,6 +293,28 @@ class Worker:
         if block:
             self._probe_thread.join()
 
+    # ---------------- subscription usage (`/usage`) ----------------
+
+    def probe_usage(self) -> dict[str, float] | None:
+        text = self._slash("/usage")
+        return parse_usage_report(text) if text else None
+
+    def maybe_probe_usage(self) -> None:
+        """Every `usage_probe_interval`: local command, no tokens, ~1 s. Servers without /limits just log a warning."""
+        interval = self.config.usage_probe_interval
+        now = time.monotonic()
+        if not interval or now < self._next_usage_probe:
+            return
+        self._next_usage_probe = now + interval
+        try:
+            report = self.probe_usage()
+            if report:
+                self.client.report_limits(report)
+        except BridgeClientError as e:
+            log.warning("usage report failed: %s", e)
+        except Exception:
+            log.exception("usage probe failed")
+
     def context_report(self, session_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """`claude -p "/context" --resume` is computed locally: no API call, no cost, ~1 s."""
         cfg = self.config
@@ -364,6 +396,7 @@ class Worker:
             raise RuntimeError(f"压缩失败：{result.get('result')}")
         if meta is None:
             raise RuntimeError("claude 没有报告压缩结果（compact_boundary）")
+        meta["cost_usd"] = result.get("total_cost_usd")  # summarising calls the model; the server books it
         return meta
 
     def run_session_job(self, job: dict[str, Any]) -> None:

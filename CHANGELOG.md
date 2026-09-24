@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.3.0 — 2026-09-24
+
+- **多用户模式** `serve --multi-user`：用户名 + 密码登录（PBKDF2），365 天自动续期的登录态，改密码 / 重置 / 停用即刻让其它设备登出；每人的线程、上传、当前对话、设置互相隔离；`/admin` 分发账户（自动生成初始密码）、改角色、停用、删除；`/account` 自助改用户名 / 显示名 / 密码、看用量；`claude-bridge users add|list|passwd|enable`；部署模板 `deploy/`（systemd / Caddy / nginx / launchd）
+- **配额按订阅额度的百分比**：每轮等价费用记入 `bridge_usage` 账本，按账户真实的 5 小时 / 每周窗口累计，经管理员的「100% ≈ $X」换算成百分比，按人设上限；账户整体用量到保护线时暂停普通用户；worker 每 10 分钟零费用 `claude -p "/usage"` 上报账户用量（`POST /api/agent/limits`），`/compact` 的费用也记账
+- 核心库：`Principal`（`browser_auth` 可返回它来按 owner 隔离）、`BridgeConfig.check_quota`、`QuotaExceeded`；组件新增 `fill`（铺满整页，隐藏聊天区高度偏好）与 `sideFoot`（侧栏底部插槽）
+
 ## v0.2.0 — 2026-09-24
 
 - **发图片**：`POST /files`（请求体即图片，按魔数认 PNG / JPEG / GIF / WebP）、发送时 `files: [id]` 绑定到用户消息；worker 遇到带图的消息改用 `claude -p --input-format stream-json` 把图片直接放进用户消息。浏览器端 `planImage / prepareImages / mountAttachments`：只做尺寸上限不压画质（长边 > 2000px 等比缩，长截图切段）

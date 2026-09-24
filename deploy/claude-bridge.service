@@ -1,0 +1,32 @@
+# /etc/systemd/system/claude-bridge.service — the server on the VPS (multi-user)
+#   sudo useradd -r -m -d /var/lib/claude-bridge claude-bridge
+#   sudo -u claude-bridge python3 -m venv /var/lib/claude-bridge/venv
+#   sudo -u claude-bridge /var/lib/claude-bridge/venv/bin/pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.0.tar.gz"
+#   sudo -u claude-bridge /var/lib/claude-bridge/venv/bin/claude-bridge users --db /var/lib/claude-bridge/bridge.db add <你> --admin
+#   sudo install -m 600 /dev/null /etc/claude-bridge.env   # then put CLAUDE_BRIDGE_AGENT_TOKEN=... in it
+#   sudo systemctl enable --now claude-bridge
+[Unit]
+Description=claude-bridge server (multi-user)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=claude-bridge
+WorkingDirectory=/var/lib/claude-bridge
+EnvironmentFile=/etc/claude-bridge.env
+Environment=CLAUDE_BRIDGE_DB=/var/lib/claude-bridge/bridge.db
+Environment=CLAUDE_BRIDGE_MULTI_USER=1
+Environment=CLAUDE_BRIDGE_TZ=Asia/Tokyo
+# behind Caddy / nginx on the same host: listen on loopback only; cookies are Secure because the proxy speaks HTTPS
+Environment=CLAUDE_BRIDGE_COOKIE_SECURE=1
+ExecStart=/var/lib/claude-bridge/venv/bin/claude-bridge serve --host 127.0.0.1 --port 8770
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/claude-bridge
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

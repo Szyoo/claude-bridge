@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>claude-bridge · 管理</title>
+  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+</head>
+<body class="bridge-root bridge-page">
+  <main class="bp-wrap">
+    <header class="bp-head">
+      <h1>管理</h1>
+      <a href="/account">我的账户</a>
+      <a href="/">← 回到聊天</a>
+    </header>
+
+    <form class="bp-card" id="quota">
+      <h2>订阅额度</h2>
+      <p class="bp-help">整个 Claude 订阅的用量来自 helper 本机的 <code>claude</code>（每轮对话结束时，外加每 10 分钟一次零费用的 <code>/usage</code>），你自己在别处用的也算在内。
+        每个人的份额按各自的等价费用折算：填上「100% ≈ $X」后，按人上限才生效。</p>
+      <div class="bp-grid" id="windows"></div>
+      <div class="bp-actions"><button type="submit" class="bridge-btn bridge-btn-primary">保存额度设置</button></div>
+    </form>
+
+    <section class="bp-card">
+      <div class="bp-head" style="margin-bottom:8px">
+        <h2 style="flex:1">用户</h2>
+        <button type="button" class="bridge-btn bridge-btn-primary" id="new-user">新建用户</button>
+      </div>
+      <div class="bp-users" id="users"></div>
+    </section>
+  </main>
+
+  <dialog class="bp-dialog" id="user-dialog">
+    <form method="dialog" id="user-form">
+      <h3></h3>
+      <label class="bp-field"><span>用户名</span><input class="bp-input" name="username" autocapitalize="none" spellcheck="false" required maxlength="32" /></label>
+      <label class="bp-field"><span>显示名</span><input class="bp-input" name="display_name" maxlength="40" placeholder="可留空" /></label>
+      <label class="bp-field"><span>角色</span>
+        <select class="bp-select" name="role"><option value="user">普通用户</option><option value="admin">管理员（不受额度限制，可进这个页面）</option></select></label>
+      <div class="bp-grid" style="gap:0 12px">
+        <label class="bp-field"><span>5 小时份额上限（%）</span><input class="bp-input" name="limit_5h_pct" type="number" min="0" max="100" step="0.5" placeholder="不限" /></label>
+        <label class="bp-field"><span>每周份额上限（%）</span><input class="bp-input" name="limit_7d_pct" type="number" min="0" max="100" step="0.5" placeholder="不限" /></label>
+      </div>
+      <label class="bp-field" data-create><span>初始密码</span><input class="bp-input" name="password" type="text" autocomplete="off" placeholder="留空自动生成" /></label>
+      <label class="bp-field"><span>备注（只有管理员看得到）</span><input class="bp-input" name="note" maxlength="200" /></label>
+      <div class="bp-actions" data-edit style="justify-content:flex-start;margin-bottom:12px">
+        <button type="button" class="bridge-btn bridge-tiny" data-op="reset">重置密码</button>
+        <button type="button" class="bridge-btn bridge-tiny" data-op="toggle"></button>
+        <button type="button" class="bridge-btn bridge-tiny bridge-btn-danger" data-op="delete">删除用户</button>
+      </div>
+      <div class="bp-err"></div>
+      <div class="bp-actions">
+        <button type="button" class="bridge-btn" value="cancel" data-op="cancel">取消</button>
+        <button type="submit" class="bridge-btn bridge-btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="bp-dialog" id="secret-dialog">
+    <form method="dialog">
+      <h3>密码</h3>
+      <p class="bp-help" id="secret-for"></p>
+      <div class="bp-secret"><code id="secret"></code><button type="button" class="bridge-btn" id="copy">复制</button></div>
+      <p class="bp-help">只显示这一次，请直接发给对方；对方登录后可以在「我的账户」里自己改。</p>
+      <div class="bp-actions"><button class="bridge-btn bridge-btn-primary">好</button></div>
+    </form>
+  </dialog>
+
+  <script type="module">
+    import { api, esc, toast, fmtUsd, fmtPct, fmtWhen, fmtSeen, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    const $ = (s, el = document) => el.querySelector(s);
+    const CAP = { five_hour: 'cap_5h_usd', seven_day: 'cap_7d_usd' };
+    const GUARD = { five_hour: 'guard_5h_pct', seven_day: 'guard_7d_pct' };
+    const SOURCE = { probe: '/usage', turn: '对话' };
+    let data = null, editing = null;
+
+    function ago(epoch) {
+      if (!epoch) return '';
+      const m = (Date.now() / 1000 - epoch) / 60;
+      return m < 1 ? '刚刚' : m < 60 ? `${Math.round(m)} 分钟前` : `${Math.round(m / 60)} 小时前`;
+    }
+
+    // ---------- subscription ----------
+    function renderWindows() {
+      const q = data.quota;
+      $('#windows').innerHTML = WINDOWS.map(([k, label]) => {
+        const a = data.account[k];
+        const seen = a.observed_at ? `${ago(a.observed_at)}（${SOURCE[a.source] || a.source || '?'}）` : '还没有数据：helper 上线或有人发消息后出现';
+        const sub = [`经 bridge 花费 ${fmtUsd(a.bridge_cost_usd)}`, a.resets_at ? `重置 ${esc(fmtWhen(a.resets_at))}` : '', `更新于 ${esc(seen)}`].filter(Boolean).join('<br>');
+        const est = a.estimate_cap_usd;
+        return `<div>
+          ${meterHtml({ label: `账户${label}用量`, used: a.utilization_pct, limit: a.guard_pct, sub })}
+          <label class="bp-field" style="margin-top:12px"><span>${label} 100% ≈ 多少美元等价</span>
+            <span class="bp-inline">$<input class="bp-input" name="${CAP[k]}" type="number" min="0" step="0.01" value="${q[CAP[k]] ?? ''}" placeholder="${est ? `估 ≥ ${est}` : '未设置'}" />
+            ${est ? `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-est="${CAP[k]}" data-v="${est}">用估值</button>` : ''}</span></label>
+          <p class="bp-help" style="margin:-6px 0 10px">${est
+            ? `估值 = 本窗口经 bridge 的花费 ÷ 账户用量；你在 bridge 之外用得越多，真实值就越高于估值。`
+            : '账户用量 ≥ 5% 且 bridge 有花费后，这里会给出估值。'}</p>
+          <label class="bp-field"><span>保护线：账户${label}用到</span>
+            <span class="bp-inline"><input class="bp-input" name="${GUARD[k]}" type="number" min="0" max="100" step="1" value="${q[GUARD[k]] ?? ''}" placeholder="不设" />% 时暂停普通用户</span></label>
+        </div>`;
+      }).join('');
+      for (const b of document.querySelectorAll('[data-est]')) b.addEventListener('click', () => { $(`[name="${b.dataset.est}"]`).value = b.dataset.v; });
+    }
+
+    $('#quota').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target, num = (n) => f[n].value === '' ? null : Number(f[n].value);
+      try {
+        const d = await api('PUT', '/api/admin/quota', Object.fromEntries([...Object.values(CAP), ...Object.values(GUARD)].map(n => [n, num(n)])));
+        Object.assign(data, d); renderWindows(); toast('已保存'); load();
+      } catch (err) { toast(err.message, true); }
+    });
+
+    // ---------- users ----------
+    function renderUsers() {
+      const noCap = !data.quota.cap_5h_usd && !data.quota.cap_7d_usd;
+      const rows = data.items.map(u => {
+        const tags = [u.role === 'admin' ? '<span class="bp-tag admin">管理员</span>' : '', u.disabled ? '<span class="bp-tag off">已停用</span>' : '',
+          u.id === data.me ? '<span class="bp-tag">我</span>' : ''].join(' ');
+        const meters = u.role === 'admin'
+          ? WINDOWS.map(([k, l]) => meterHtml({ label: l, used: null, right: fmtUsd(u.usage[k].cost_usd), sub: `${u.usage[k].turns} 次 · 不限` })).join('')
+          : WINDOWS.map(([k, l]) => userMeter(u.usage[k], l)).join('');
+        return `<div class="bp-user${u.disabled ? ' is-off' : ''}">
+          <div class="who"><div class="n">${esc(u.display_name || u.username)} ${tags}</div>
+            <div class="d">${esc(u.username)}${u.note ? ` · ${esc(u.note)}` : ''}</div>
+            ${u.usage.blocked ? `<div class="d" style="color:var(--bridge-err)">${esc(u.usage.blocked)}</div>` : ''}</div>
+          ${meters}
+          <div class="seen">${esc(fmtSeen(u.last_seen_at))}</div>
+          <div class="ops"><button type="button" class="bridge-btn bridge-tiny" data-edit="${u.id}">编辑</button></div>
+        </div>`;
+      });
+      $('#users').innerHTML = `<div class="bp-user head"><div>用户</div><div>5 小时</div><div>本周</div><div>最近</div><div></div></div>${rows.join('')}`
+        + (noCap && data.items.some(u => u.role !== 'admin' && (u.limit_5h_pct != null || u.limit_7d_pct != null))
+          ? '<p class="bp-help" style="margin-top:10px">⚠ 还没填「100% ≈ $X」，按人份额上限暂不生效（只有保护线生效）。</p>' : '');
+      for (const b of document.querySelectorAll('[data-edit]')) b.addEventListener('click', () => openUser(data.items.find(u => u.id === Number(b.dataset.edit))));
+    }
+
+    const dlg = $('#user-dialog'), form = $('#user-form');
+    function openUser(u) {
+      editing = u || null;
+      form.reset();
+      $('h3', form).textContent = u ? `编辑 ${u.username}` : '新建用户';
+      $('[data-create]', form).hidden = !!u;
+      $('[data-edit]', form).hidden = !u;
+      $('.bp-err', form).textContent = '';
+      if (u) {
+        for (const n of ['username', 'display_name', 'role', 'note']) form[n].value = u[n] ?? '';
+        form.limit_5h_pct.value = u.limit_5h_pct ?? '';
+        form.limit_7d_pct.value = u.limit_7d_pct ?? '';
+        $('[data-op="toggle"]', form).textContent = u.disabled ? '启用账户' : '停用账户';
+      }
+      dlg.showModal();
+    }
+    $('#new-user').addEventListener('click', () => openUser(null));
+    $('[data-op="cancel"]', form).addEventListener('click', () => dlg.close());
+
+    function showSecret(user, password) {
+      $('#secret-for').textContent = `${user} 的${editing ? '新' : '初始'}密码：`;
+      $('#secret').textContent = password;
+      $('#secret-dialog').showModal();
+    }
+    $('#copy').addEventListener('click', () => copyText($('#secret').textContent));
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const num = (n) => form[n].value === '' ? null : Number(form[n].value);
+      const body = { username: form.username.value.trim(), display_name: form.display_name.value.trim(), role: form.role.value,
+        limit_5h_pct: num('limit_5h_pct'), limit_7d_pct: num('limit_7d_pct'), note: form.note.value.trim() };
+      try {
+        if (editing) {
+          await api('PATCH', `/api/admin/users/${editing.id}`, body);
+          dlg.close(); toast('已保存');
+        } else {
+          const r = await api('POST', '/api/admin/users', { ...body, password: form.password.value });
+          dlg.close();
+          if (r.password) showSecret(r.user.username, r.password); else toast('已创建');
+        }
+        load();
+      } catch (err) { $('.bp-err', form).textContent = err.message; }
+    });
+
+    form.addEventListener('click', async (e) => {
+      const op = e.target.closest('[data-op]')?.dataset.op;
+      if (!editing || !['reset', 'toggle', 'delete'].includes(op)) return;
+      const u = editing;
+      try {
+        if (op === 'reset') {
+          if (!confirm(`给 ${u.username} 生成一个新密码？对方所有设备会被登出。`)) return;
+          const r = await api('POST', `/api/admin/users/${u.id}/password`, {});
+          dlg.close(); showSecret(u.username, r.password);
+        } else if (op === 'toggle') {
+          if (!u.disabled && !confirm(`停用 ${u.username}？对方会立即被登出，记录保留，之后可以再启用。`)) return;
+          await api('PATCH', `/api/admin/users/${u.id}`, { disabled: !u.disabled });
+          dlg.close(); toast(u.disabled ? '已启用' : '已停用');
+        } else if (op === 'delete') {
+          if (prompt(`删除 ${u.username} 及其全部对话和上传的图片，无法恢复。\n输入用户名确认：`) !== u.username) return;
+          await api('DELETE', `/api/admin/users/${u.id}`);
+          dlg.close(); toast('已删除');
+        }
+        load();
+      } catch (err) { $('.bp-err', form).textContent = err.message; }
+    });
+
+    async function load() {
+      data = await api('GET', '/api/admin/users');
+      renderUsers();
+      if (!document.activeElement?.closest('#quota')) renderWindows();
+    }
+    load().catch(e => toast(e.message, true));
+    setInterval(() => { if (!document.hidden && !dlg.open) load().catch(() => {}); }, 60000);
+  </script>
+</body>
+</html>

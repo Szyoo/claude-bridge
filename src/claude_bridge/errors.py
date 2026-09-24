@@ -21,3 +21,7 @@ class NotFound(BridgeError):
 
 class ChatBusy(BridgeError):
     status = 409
+
+
+class QuotaExceeded(BridgeError):
+    status = 429

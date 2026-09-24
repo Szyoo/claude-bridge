@@ -28,6 +28,34 @@ def bearer_auth(token: str | Callable[[], str | None]) -> Callable[[Request], No
     return dependency
 
 
+class LoginLimiter:
+    """At most `attempts` failed logins per key (IP, username) within `window` seconds."""
+
+    def __init__(self, attempts: int = _MAX_ATTEMPTS, window: float = _WINDOW_SECONDS) -> None:
+        self.attempts = attempts
+        self.window = window
+        self._hits: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def is_limited(self, key: str) -> bool:
+        now = time.time()
+        with self._lock:
+            hits = [t for t in self._hits.get(key, []) if now - t < self.window]
+            if hits:
+                self._hits[key] = hits
+            else:
+                self._hits.pop(key, None)
+            return len(hits) >= self.attempts
+
+    def record_failure(self, key: str) -> None:
+        with self._lock:
+            self._hits.setdefault(key, []).append(time.time())
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._hits.pop(key, None)
+
+
 class PasswordAuth:
     """Single-user password → signed session cookie `<exp>.<hmac>`; per-IP login rate limit."""
 
@@ -36,8 +64,7 @@ class PasswordAuth:
         self.disabled = disabled
         self.session_seconds = session_days * 86400
         self._key = (secret or secrets.token_hex(32)).encode()
-        self._attempts: dict[str, list[float]] = {}
-        self._lock = threading.Lock()
+        self._limiter = LoginLimiter()
 
     @property
     def configured(self) -> bool:
@@ -64,19 +91,13 @@ class PasswordAuth:
         return hmac.new(self._key, payload.encode(), sha256).hexdigest()
 
     def is_limited(self, ip: str) -> bool:
-        now = time.time()
-        with self._lock:
-            hits = [t for t in self._attempts.get(ip, []) if now - t < _WINDOW_SECONDS]
-            self._attempts[ip] = hits
-            return len(hits) >= _MAX_ATTEMPTS
+        return self._limiter.is_limited(ip)
 
     def record_failure(self, ip: str) -> None:
-        with self._lock:
-            self._attempts.setdefault(ip, []).append(time.time())
+        self._limiter.record_failure(ip)
 
     def clear_failures(self, ip: str) -> None:
-        with self._lock:
-            self._attempts.pop(ip, None)
+        self._limiter.clear(ip)
 
     def dependency(self) -> Callable[[Request], None]:
         def dep(request: Request) -> None:

@@ -23,6 +23,7 @@ JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bridge_threads (
   id         TEXT PRIMARY KEY,
+  owner      TEXT NOT NULL DEFAULT '',
   scope      TEXT NOT NULL DEFAULT '',
   key        TEXT NOT NULL DEFAULT '',
   title      TEXT NOT NULL DEFAULT '',
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS bridge_meta (
 -- uploaded images: bytes live on disk as <files_dir>/<fname>; message_id is NULL until the message is sent
 CREATE TABLE IF NOT EXISTS bridge_files (
   id         TEXT PRIMARY KEY,
+  owner      TEXT NOT NULL DEFAULT '',
   thread     TEXT,
   message_id INTEGER,
   name       TEXT NOT NULL DEFAULT '',
@@ -91,14 +93,44 @@ CREATE TABLE IF NOT EXISTS bridge_files (
 );
 CREATE INDEX IF NOT EXISTS idx_bridge_files_msg ON bridge_files(message_id);
 CREATE INDEX IF NOT EXISTS idx_bridge_files_thread ON bridge_files(thread);
+
+-- what each finished turn cost, by owner; kept when a thread is deleted so quotas can't be reset that way
+CREATE TABLE IF NOT EXISTS bridge_usage (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner         TEXT NOT NULL DEFAULT '',
+  thread        TEXT,
+  message_id    INTEGER,
+  job_id        INTEGER,
+  kind          TEXT NOT NULL DEFAULT 'chat',
+  cost_usd      REAL NOT NULL DEFAULT 0,
+  input_tokens  INTEGER,
+  output_tokens INTEGER,
+  model         TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_usage_owner ON bridge_usage(owner, created_at);
+CREATE INDEX IF NOT EXISTS idx_bridge_usage_time ON bridge_usage(created_at);
+"""
+
+# indexes on migrated columns: created after MIGRATIONS so an old file has the column by then
+POST_MIGRATION = """
+CREATE INDEX IF NOT EXISTS idx_bridge_threads_owner ON bridge_threads(owner, scope, key);
 """
 
 # (table, column, DDL) — applied when the column is missing; the usual idiom for hosts that share the file.
-MIGRATIONS: list[tuple[str, str, str]] = []
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("bridge_threads", "owner", "ALTER TABLE bridge_threads ADD COLUMN owner TEXT NOT NULL DEFAULT ''"),
+    ("bridge_files", "owner", "ALTER TABLE bridge_files ADD COLUMN owner TEXT NOT NULL DEFAULT ''"),
+]
 
 
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def utc_text(ts: float) -> str:
+    """Epoch seconds → the `YYYY-MM-DD HH:MM:SS` UTC text every created_at column uses."""
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def auto_title(text: str, limit: int = 30) -> str:
@@ -159,6 +191,7 @@ class BridgeStore:
                 cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")]
                 if col not in cols:
                     self.conn.execute(ddl)
+            self.conn.executescript(POST_MIGRATION)
 
     def close(self) -> None:
         if self._owns_conn:
@@ -215,11 +248,13 @@ class BridgeStore:
 
     # ---------------- threads ----------------
 
-    def create_thread(self, thread_id: str, *, scope: str = "", key: str = "", title: str = "") -> dict[str, Any]:
+    def create_thread(
+        self, thread_id: str, *, scope: str = "", key: str = "", title: str = "", owner: str = ""
+    ) -> dict[str, Any]:
         now = _now()
         self._x(
-            "INSERT INTO bridge_threads(id, scope, key, title, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-            (thread_id, scope, key, title, now, now),
+            "INSERT INTO bridge_threads(id, owner, scope, key, title, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+            (thread_id, owner, scope, key, title, now, now),
         )
         return self.get_thread(thread_id) or {}
 
@@ -227,15 +262,15 @@ class BridgeStore:
         row = self._one("SELECT * FROM bridge_threads WHERE id=?", (thread_id,))
         return self._thread(row) if row else None
 
-    def find_thread(self, scope: str, key: str) -> str | None:
+    def find_thread(self, scope: str, key: str, owner: str = "") -> str | None:
         row = self._one(
-            "SELECT id FROM bridge_threads WHERE scope=? AND key=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (scope, key),
+            "SELECT id FROM bridge_threads WHERE owner=? AND scope=? AND key=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (owner, scope, key),
         )
         return row["id"] if row else None
 
-    def threads(self, scope: str | None = None) -> list[dict[str, Any]]:
-        where, params = ("WHERE t.scope=?", (scope,)) if scope is not None else ("", ())
+    def threads(self, scope: str | None = None, owner: str = "") -> list[dict[str, Any]]:
+        where, params = ("WHERE t.owner=? AND t.scope=?", (owner, scope)) if scope is not None else ("WHERE t.owner=?", (owner,))
         rows = self._q(
             f"""
             SELECT t.*,
@@ -358,10 +393,10 @@ class BridgeStore:
 
     # ---------------- files ----------------
 
-    def add_file(self, file_id: str, *, name: str, mime: str, size: int, fname: str) -> dict[str, Any]:
+    def add_file(self, file_id: str, *, name: str, mime: str, size: int, fname: str, owner: str = "") -> dict[str, Any]:
         cur = self._x(
-            "INSERT INTO bridge_files(id, name, mime, size, fname, created_at) VALUES(?,?,?,?,?,?) RETURNING *",
-            (file_id, name, mime, size, fname, _now()),
+            "INSERT INTO bridge_files(id, owner, name, mime, size, fname, created_at) VALUES(?,?,?,?,?,?,?) RETURNING *",
+            (file_id, owner, name, mime, size, fname, _now()),
         )
         return dict(cur.fetchone())
 
@@ -529,8 +564,18 @@ class BridgeStore:
             (status, result, error, _now(), job_id),
         )
 
-    def recent_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
-        return [_job(r) for r in self._q("SELECT * FROM bridge_jobs ORDER BY id DESC LIMIT ?", (limit,))]
+    def recent_jobs(self, limit: int = 20, owner: str | None = None) -> list[dict[str, Any]]:
+        """`owner` given: only jobs that target one of that owner's threads."""
+        if owner is None:
+            return [_job(r) for r in self._q("SELECT * FROM bridge_jobs ORDER BY id DESC LIMIT ?", (limit,))]
+        return [
+            _job(r)
+            for r in self._q(
+                "SELECT * FROM bridge_jobs WHERE json_extract(payload, '$.thread') IN "
+                "(SELECT id FROM bridge_threads WHERE owner=?) ORDER BY id DESC LIMIT ?",
+                (owner, limit),
+            )
+        ]
 
     def count_jobs(self, status: str) -> int:
         row = self._one("SELECT COUNT(*) AS n FROM bridge_jobs WHERE status=?", (status,))
@@ -556,3 +601,52 @@ class BridgeStore:
                 (f"-{int(seconds)} seconds",),
             )
         ]
+
+    # ---------------- usage ledger ----------------
+
+    def add_usage(
+        self,
+        owner: str,
+        *,
+        cost_usd: float,
+        thread: str | None = None,
+        message_id: int | None = None,
+        job_id: int | None = None,
+        kind: str = "chat",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        model: str | None = None,
+    ) -> None:
+        self._x(
+            "INSERT INTO bridge_usage(owner, thread, message_id, job_id, kind, cost_usd, input_tokens, output_tokens, model, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (owner, thread, message_id, job_id, kind, float(cost_usd or 0), input_tokens, output_tokens, model, _now()),
+        )
+
+    def usage_totals(self, since: str, owner: str | None = None) -> dict[str, dict[str, Any]]:
+        """{owner: {cost_usd, turns}} for rows at or after `since` (UTC text)."""
+        where, params = ("created_at >= ?", (since,)) if owner is None else ("created_at >= ? AND owner=?", (since, owner))
+        rows = self._q(
+            f"SELECT owner, COALESCE(SUM(cost_usd), 0) AS cost_usd, COUNT(*) AS turns FROM bridge_usage WHERE {where} GROUP BY owner",
+            params,
+        )
+        return {r["owner"]: {"cost_usd": float(r["cost_usd"]), "turns": int(r["turns"])} for r in rows}
+
+    # ---------------- owners ----------------
+
+    def reassign_owner(self, src: str, dst: str) -> None:
+        with self.transaction():
+            for table in ("bridge_threads", "bridge_files", "bridge_usage"):
+                self._x(f"UPDATE {table} SET owner=? WHERE owner=?", (dst, src))
+
+    def delete_owner(self, owner: str) -> list[str]:
+        """Everything an owner has (threads, messages, events, uploads, usage). Returns file names to unlink."""
+        with self.transaction():
+            tids = [r["id"] for r in self._q("SELECT id FROM bridge_threads WHERE owner=?", (owner,))]
+            for tid in tids:
+                self.delete_thread(tid)
+            names = [r["fname"] for r in self._q("SELECT fname FROM bridge_files WHERE owner=?", (owner,))]
+            self._x("DELETE FROM bridge_files WHERE owner=?", (owner,))
+            self._x("DELETE FROM bridge_usage WHERE owner=?", (owner,))
+            self._x("DELETE FROM bridge_meta WHERE key LIKE ?", (f"u{owner}:%",))
+        return names

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>claude-bridge · 账户</title>
+  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+</head>
+<body class="bridge-root bridge-page">
+  <main class="bp-wrap narrow">
+    <header class="bp-head">
+      <h1>我的账户</h1>
+      <a href="/admin" data-admin hidden>管理</a>
+      <a href="/">← 回到聊天</a>
+    </header>
+
+    <section class="bp-card">
+      <h2>用量</h2>
+      <p class="bp-help">按你在这个订阅里的份额计算，窗口与 Claude 账户的 5 小时 / 每周额度同步重置。</p>
+      <div class="bp-grid" id="usage"></div>
+      <div id="blocked"></div>
+    </section>
+
+    <form class="bp-card" id="profile">
+      <h2>资料</h2>
+      <p class="bp-help">用户名用来登录；显示名只出现在界面上。</p>
+      <label class="bp-field"><span>用户名</span><input class="bp-input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32" /></label>
+      <label class="bp-field"><span>显示名</span><input class="bp-input" name="display_name" maxlength="40" placeholder="可留空" /></label>
+      <div class="bp-actions"><button type="submit" class="bridge-btn bridge-btn-primary">保存</button></div>
+    </form>
+
+    <form class="bp-card" id="password">
+      <h2>修改密码</h2>
+      <p class="bp-help">改完后其它设备需要重新登录，这台设备保持登录。</p>
+      <label class="bp-field"><span>当前密码</span><input class="bp-input" type="password" name="current" autocomplete="current-password" required /></label>
+      <label class="bp-field"><span>新密码（至少 8 位）</span><input class="bp-input" type="password" name="new" autocomplete="new-password" minlength="8" required /></label>
+      <label class="bp-field"><span>再输一次</span><input class="bp-input" type="password" name="again" autocomplete="new-password" minlength="8" required /></label>
+      <div class="bp-actions"><button type="submit" class="bridge-btn bridge-btn-primary">修改密码</button></div>
+    </form>
+
+    <form method="post" action="/logout" class="bp-actions"><button type="submit" class="bridge-btn">退出登录</button></form>
+  </main>
+
+  <script type="module">
+    import { api, esc, toast, fmtWhen, userMeter, WINDOWS } from '/static/bridge/bridge-pages.js';
+    const $ = (s) => document.querySelector(s);
+    const profile = $('#profile'), pw = $('#password');
+
+    async function load() {
+      const d = await api('GET', '/api/me');
+      const u = d.user, us = d.usage;
+      profile.username.value = u.username;
+      profile.display_name.value = u.display_name || '';
+      $('[data-admin]').hidden = u.role !== 'admin';
+      $('#usage').innerHTML = u.role === 'admin'
+        ? '<p class="bp-help">管理员不受额度限制。整个订阅的用量在「管理」页。</p>'
+        : WINDOWS.map(([k, label]) => {
+          const w = us[k], reset = fmtWhen(w.resets_at);
+          return `<div>${userMeter(w, label)}${reset ? `<div class="bp-meter-sub">重置：${esc(reset)}</div>` : ''}</div>`;
+        }).join('');
+      $('#blocked').innerHTML = us.blocked ? `<div class="bp-blocked">${esc(us.blocked)}</div>` : '';
+    }
+
+    profile.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await api('PATCH', '/api/me', { username: profile.username.value.trim(), display_name: profile.display_name.value.trim() });
+        toast('已保存'); load();
+      } catch (err) { toast(err.message, true); }
+    });
+
+    pw.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (pw.new.value !== pw.again.value) { toast('两次输入的新密码不一致', true); return; }
+      try {
+        await api('POST', '/api/me/password', { current: pw.current.value, new: pw.new.value });
+        pw.reset(); toast('密码已修改');
+      } catch (err) { toast(err.message, true); }
+    });
+
+    load().catch(e => toast(e.message, true));
+  </script>
+</body>
+</html>

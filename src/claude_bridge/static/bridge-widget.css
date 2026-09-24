@@ -54,6 +54,7 @@
 .bridge { display: grid; grid-template-columns: var(--chat-side-w, 240px) 1fr; height: var(--chat-height, 100%); min-height: 0; position: relative; }
 .bridge [hidden], .bridge-pop[hidden], .bridge-menu[hidden], .bridge-scrim[hidden] { display: none !important; }
 .bridge.no-side, .bridge.side-hidden { grid-template-columns: 1fr; }
+.bridge.fill { height: 100%; }
 .bridge.side-hidden .bridge-side { display: none; }
 .bridge-tiny { font-size: .857em; }
 .bridge-muted { color: var(--bridge-muted); }
@@ -71,6 +72,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-thread .p { color: var(--bridge-muted); font-size: .857em; }
 .bridge-thread .m { color: var(--bridge-muted); font-size: .786em; }
 .bridge-thread .pin { color: var(--bridge-accent); margin-right: 4px; }
+.bridge-side-foot { margin-top: auto; border-top: 1px solid var(--bridge-border); padding-top: 8px; }
 
 /* ---------- main column ---------- */
 .bridge-main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; }
