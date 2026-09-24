@@ -1,0 +1,17 @@
+{
+  "_comment": "worker 按对话的 scope 选用：\"\" = Chat，\"code\" = Code。cwd 里的 {owner} 换成每个用户自己的目录（u<id>）。改完重跑 deploy/mac/install.sh。",
+  "": {
+    "cwd": "~/claude-bridge-work/chat/{owner}",
+    "tools": ["WebSearch", "WebFetch"],
+    "allowed_tools": ["WebSearch", "WebFetch"],
+    "strict_mcp": true,
+    "system_prompt": "这是网页上的聊天对话：没有文件和命令行工具，需要最新信息时可以联网搜索（WebSearch / WebFetch）。"
+  },
+  "code": {
+    "cwd": "~/claude-bridge-work/code/{owner}",
+    "tools": ["Task", "Bash", "Read", "Edit", "Write", "NotebookEdit", "Monitor", "TaskStop", "WebSearch", "WebFetch", "EnterWorktree", "ExitWorktree"],
+    "permission_mode": "bypassPermissions",
+    "strict_mcp": true,
+    "system_prompt": "这是网页上的编程会话：当前目录是这位用户自己的工作目录，项目和文件放在这里。"
+  }
+}

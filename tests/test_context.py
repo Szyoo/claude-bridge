@@ -68,7 +68,7 @@ def test_chat_finish_carries_context_report(tmp_path, monkeypatch):
     worker, client = make_worker(tmp_path, HAPPY)
     calls = []
 
-    def fake_report(session_id, settings=None):
+    def fake_report(session_id, settings=None, cfg=None):
         calls.append((session_id, settings.get("model")))
         return parse_context_report(REPORT)
 

@@ -19,7 +19,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,45 @@ log = logging.getLogger(__name__)
 
 VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 SESSION_KINDS = ("context", "compact")  # built-in jobs that act on an existing Claude session
+
+
+@dataclass
+class WorkerProfile:
+    """Per-scope overrides (e.g. a "chat" scope without tools, a "code" scope with a sandbox). None = inherit.
+
+    `cwd` may contain `{owner}` (the thread owner's id, "shared" when there is none) so every user gets their own
+    directory; it is created on demand. Session jobs (/context, /compact) use the same cwd as the chat, because
+    claude keeps sessions per project directory and `--resume` only finds them there.
+    """
+
+    cwd: str | None = None
+    tools: list[str] | None = None            # --tools: the built-in tools that exist at all ([] = none)
+    allowed_tools: list[str] | None = None    # --allowedTools: run without asking
+    disallowed_tools: list[str] | None = None
+    permission_mode: str | None = None
+    settings: dict[str, Any] | str | None = None  # --settings (JSON object or a file path), e.g. a sandbox block
+    system_prompt: str | None = None          # replaces WorkerConfig.system_prompt for this scope
+    add_dirs: list[str] | None = None
+    strict_mcp: bool | None = None            # --strict-mcp-config with no servers: ignore the machine's MCP config
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> WorkerProfile:
+        known = {f.name for f in fields(cls)}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(f"unknown profile keys: {sorted(unknown)}")
+        return cls(**d)
+
+
+def load_profiles(path: str | Path) -> dict[str, WorkerProfile]:
+    """JSON `{scope: {profile keys}}`; the scope "" is the default chat."""
+    raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    return {str(k): WorkerProfile.from_dict(v) for k, v in raw.items() if not str(k).startswith("_")}
+
+
+def _owner_dir(owner: Any) -> str:
+    o = re.sub(r"[^A-Za-z0-9_-]", "", str(owner or ""))
+    return f"u{o}" if o else "shared"
 
 
 @dataclass
@@ -68,6 +107,13 @@ class WorkerConfig:
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
+    # scope → overrides; jobs carry their thread's scope and owner. Built-in knobs below are the fallback.
+    profiles: dict[str, WorkerProfile] = field(default_factory=dict)
+    tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None
+    settings: dict[str, Any] | str | None = None
+    add_dirs: list[str] = field(default_factory=list)
+    strict_mcp: bool = False
 
 
 class Hooks:
@@ -208,6 +254,21 @@ class Worker:
         finally:
             self._current = None
 
+    # ---------------- per-scope profiles ----------------
+
+    def config_for(self, payload: dict[str, Any] | None) -> WorkerConfig:
+        """The worker config with the job's scope profile applied (cwd resolved per owner and created)."""
+        payload = payload or {}
+        prof = self.config.profiles.get(str(payload.get("scope") or ""))
+        if prof is None:
+            return self.config
+        over = {f.name: getattr(prof, f.name) for f in fields(prof) if getattr(prof, f.name) is not None}
+        if "cwd" in over:
+            cwd = Path(os.path.expanduser(str(over["cwd"]).replace("{owner}", _owner_dir(payload.get("owner")))))
+            cwd.mkdir(parents=True, exist_ok=True)
+            over["cwd"] = cwd
+        return replace(self.config, **over)
+
     # ---------------- session commands (/context, /compact) ----------------
 
     def _session_env(self) -> dict[str, str]:
@@ -315,9 +376,11 @@ class Worker:
         except Exception:
             log.exception("usage probe failed")
 
-    def context_report(self, session_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def context_report(
+        self, session_id: str, settings: dict[str, Any] | None = None, cfg: WorkerConfig | None = None
+    ) -> dict[str, Any] | None:
         """`claude -p "/context" --resume` is computed locally: no API call, no cost, ~1 s."""
-        cfg = self.config
+        cfg = cfg or self.config
         model = ((settings or {}).get("model") or cfg.model or "").strip()
         cmd = [cfg.claude_bin, "-p", "/context", "--output-format", "json", "--resume", session_id]
         if model:
@@ -340,10 +403,13 @@ class Worker:
             log.warning("/context unavailable: %s", e)
             return None
 
-    def compact_session(self, session_id: str, settings: dict[str, Any] | None = None, job_id: int | None = None) -> dict[str, Any]:
+    def compact_session(
+        self, session_id: str, settings: dict[str, Any] | None = None, job_id: int | None = None,
+        cfg: WorkerConfig | None = None,
+    ) -> dict[str, Any]:
         """`claude -p "/compact" --resume`: asks the model to summarise the history; returns compact_metadata.
         Long histories take minutes, so while it runs we heartbeat the job (and stop if the server asks us to)."""
-        cfg = self.config
+        cfg = cfg or self.config
         model = ((settings or {}).get("model") or cfg.model or "").strip()
         cmd = [cfg.claude_bin, "-p", "/compact", "--output-format", "stream-json", "--verbose", "--resume", session_id]
         if model:
@@ -407,9 +473,10 @@ class Worker:
             self._safe_finish(job["id"], ok=False, error="这个对话还没有 Claude 会话", error_kind="worker")
             return
         out: dict[str, Any] = {}
+        cfg = self.config_for(p)
         if job["kind"] == "compact":
-            out["compact"] = self.compact_session(sid, settings, job_id=job["id"])
-        report = self.context_report(sid, settings)
+            out["compact"] = self.compact_session(sid, settings, job_id=job["id"], cfg=cfg)
+        report = self.context_report(sid, settings, cfg)
         if job["kind"] == "context" and report is None:
             self._safe_finish(job["id"], ok=False, error="取不到上下文报告（claude /context 失败）", error_kind="claude")
             return
@@ -418,10 +485,10 @@ class Worker:
 
     def build_chat_command(
         self, prompt: str, session_id: str | None, settings: dict[str, Any], system_prompt: str,
-        *, input_json: bool = False,
+        *, input_json: bool = False, cfg: WorkerConfig | None = None,
     ) -> tuple[list[str], bool]:
         """`input_json`: the user turn is written to stdin as one stream-json message (used when it carries images)."""
-        cfg = self.config
+        cfg = cfg or self.config
         model = (settings.get("model") or cfg.model or "").strip()
         effort = (settings.get("effort") or "").strip().lower()
         max_turns = int(settings.get("max_turns") or cfg.max_turns)
@@ -433,8 +500,18 @@ class Worker:
         if cfg.include_partial:
             cmd.append("--include-partial-messages")
         cmd += ["--max-turns", str(max(1, min(max_turns, 100)))]
+        if cfg.tools is not None:  # [] → `--tools ""`: no built-in tools at all
+            cmd += ["--tools", ",".join(cfg.tools)]
         if cfg.allowed_tools:
             cmd += ["--allowedTools", *cfg.allowed_tools]
+        if cfg.disallowed_tools:
+            cmd += ["--disallowedTools", *cfg.disallowed_tools]
+        if cfg.settings:
+            cmd += ["--settings", cfg.settings if isinstance(cfg.settings, str) else json.dumps(cfg.settings)]
+        if cfg.add_dirs:
+            cmd += ["--add-dir", *[os.path.expanduser(d) for d in cfg.add_dirs]]
+        if cfg.strict_mcp:
+            cmd += ["--strict-mcp-config"]
         if system_prompt:
             cmd += ["--append-system-prompt", system_prompt]
         if model:
@@ -562,7 +639,7 @@ class ChatRunner:
     def __init__(self, worker: Worker, job: dict[str, Any]) -> None:
         self.worker = worker
         self.job = job
-        self.cfg = worker.config
+        self.cfg = worker.config_for(job.get("payload"))
         self.proc: subprocess.Popen[str] | None = None
         self.kill_reason: str | None = None
         self._kill_lock = threading.Lock()
@@ -601,7 +678,9 @@ class ChatRunner:
                 prompt = ctx + text
         system_prompt = self.worker.hooks.system_prompt(p) or self.cfg.system_prompt
         images = self._load_images(p.get("files") or [])
-        cmd, via_stdin = self.worker.build_chat_command(prompt, session_id, settings, system_prompt, input_json=bool(images))
+        cmd, via_stdin = self.worker.build_chat_command(
+            prompt, session_id, settings, system_prompt, input_json=bool(images), cfg=self.cfg
+        )
         stdin_data = stream_json_user_message(prompt, images) if images else prompt
         env = {**os.environ, **self.cfg.extra_env, **self.worker.hooks.env(p)}
         self.state = StreamState(
@@ -760,7 +839,7 @@ class ChatRunner:
         self.emitter.add_event("usage", st.usage_data())
         self.emitter.final_flush()
         # refresh the session's context breakdown (local, free) so the UI shows the post-turn composition
-        report = self.worker.context_report(st.session_id, settings) if st.session_id else None
+        report = self.worker.context_report(st.session_id, settings, cfg=self.cfg) if st.session_id else None
         summary["context"] = report
         self.worker._safe_finish(
             jid, ok=True, result=json.dumps(summary, ensure_ascii=False), session_id=st.session_id, context=report

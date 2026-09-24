@@ -21,11 +21,36 @@
     import { api, esc, fmtPct } from '/static/bridge/bridge-pages.js';
 
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
-    mountBridgeWidget(document.getElementById('app'), client, { scope: '', title: 'claude-bridge', fill: true, sideFoot: '<div class="bp-me"></div>' });
+    const app = document.getElementById('app');
+
+    // Chat / Code: each is its own thread list (scope); the worker gives them different tools and directories
+    const MODES = { '': { label: 'Chat', placeholder: '输入消息' }, code: { label: 'Code', placeholder: '让 Claude 写代码、跑命令、改文件' } };
+    const load = () => { try { const m = localStorage.getItem('bridge_mode'); return m in MODES ? m : ''; } catch { return ''; } };
+    let mode = load(), widget = null;
+    const toggle = () => `<span class="bp-mode" role="tablist">${Object.entries(MODES).map(([k, m]) =>
+      `<button type="button" role="tab" data-mode="${k}" aria-selected="${k === mode}">${m.label}</button>`).join('')}</span>`;
+
+    function mount() {
+      widget?.destroy();
+      widget = mountBridgeWidget(app, client, {
+        scope: mode, title: 'claude-bridge', fill: true, placeholder: MODES[mode].placeholder,
+        topStart: toggle(), sideFoot: '<div class="bp-me"></div>',
+      });
+      document.title = `claude-bridge · ${MODES[mode].label}`;
+      renderMe();
+    }
+    app.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-mode]');
+      if (!b || b.dataset.mode === mode) return;
+      mode = b.dataset.mode;
+      try { localStorage.setItem('bridge_mode', mode); } catch {}
+      mount();
+    });
 
     // who is signed in + how much of their share is left, at the bottom of the thread list
-    const box = document.querySelector('.bp-me');
     async function renderMe() {
+      const box = document.querySelector('.bp-me');
+      if (!box) return;
       let d;
       try { d = await api('GET', '/api/me'); } catch { return; }
       const u = d.user, us = d.usage;
@@ -38,7 +63,7 @@
         + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin" style="text-decoration:none">管理</a>' : '')
         + '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>';
     }
-    renderMe();
+    mount();
     setInterval(renderMe, 120000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) renderMe(); });
   </script>

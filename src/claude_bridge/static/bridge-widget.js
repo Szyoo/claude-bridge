@@ -713,10 +713,11 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   el.innerHTML = `
     <div class="bridge ${o.showThreads ? '' : 'no-side'}${o.fill ? ' fill' : ''}">
-      ${o.showThreads ? `<aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="new">${esc(S.newThread)}</button><div class="bridge-threads"></div>${o.sideFoot ? `<div class="bridge-side-foot">${o.sideFoot}</div>` : ''}<div class="bridge-side-grip" title="拖动调整宽度"></div></aside>` : ''}
+      ${o.showThreads ? `<aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="new">${esc(S.newThread)}</button><div class="bridge-threads"></div>${o.sideFoot ? `<div class="bridge-side-foot">${o.sideFoot}</div>` : ''}<div class="bridge-side-grip" title="拖动调整宽度"></div></aside><div class="bridge-side-scrim" data-act="side-close"></div>` : ''}
       <div class="bridge-main">
         <div class="bridge-top">
           ${o.showThreads ? '<button type="button" class="bridge-icon" data-act="side" title="对话列表">☰</button>' : ''}
+          ${o.topStart || ''}
           <span class="bridge-title">${esc(o.title)}</span>
           <span class="bridge-agent"><i class="bridge-dot"></i><span class="txt"></span></span>
           ${o.showThreads ? `<button type="button" class="bridge-icon" data-act="menu" title="更多">⋯</button>
@@ -983,6 +984,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (!act) return;
     try {
       if (act === 'new') { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); root.classList.remove('side-open'); }
+      else if (act === 'side-close') root.classList.remove('side-open');
       else if (act === 'side') { if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open'); else { prefs.sidebar = !prefs.sidebar; usePrefs('sidebar'); } }
       else if (act === 'menu') { const m = menu; const was = m.hidden; closePops(); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
       else if (act === 'prefs' || act === 'ctx') openPop(act, e.target.closest('[data-act]'));
@@ -1000,7 +1002,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   el.addEventListener('change', onSet); pops.prefs.addEventListener('change', onSet);
   // the scrim closes on its own click (closing it on pointerdown would let the tap fall through to what is underneath)
   const offOutside = onOutsidePointer('.bridge-pop, .bridge-menu, .bridge-scrim, [data-act="prefs"], [data-act="ctx"], [data-act="menu"]', closePops);
-  const onKey = (e) => { if (e.key === 'Escape') closePops(); };
+  const onKey = (e) => { if (e.key === 'Escape') { closePops(); root.classList.remove('side-open'); } };
   const onVis = () => { if (document.visibilityState === 'visible') state.sub?.wake(); };
   document.addEventListener('keydown', onKey); document.addEventListener('visibilitychange', onVis);
 
@@ -1013,6 +1015,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     destroy() {
       state.sub?.close(); clearInterval(state.ticker);
       offOutside(); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
+      el.removeEventListener('click', onClick); el.removeEventListener('change', onSet); // the host may mount again into el
       for (const p of Object.values(pops)) p.remove();
       menu?.remove(); scrim.remove(); setScrollLock(false); att.destroy();
       el.innerHTML = '';

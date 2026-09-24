@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.3.2 — 2026-09-24
+
+- **Chat / Code 两种模式**：页面顶栏切换，各自一套对话列表（scope `""` / `code`）；任务带上 thread 的 `scope` 与 `owner`
+- worker **profiles**（`--profiles` / `CLAUDE_BRIDGE_PROFILES`，JSON `{scope: 覆盖项}`）：按 scope 换工作目录（`{owner}` → 每人一个）、`--tools`、`--allowedTools`、权限模式、`--settings`、`--strict-mcp-config`、系统提示词；`/context` `/compact` 在同一目录 `--resume`。`deploy/mac/profiles.json`：Chat 只有联网搜索，Code 是一套编程工具 + `bypassPermissions`，两者都不加载 MCP
+- 手机上侧栏抽屉能收回了（点露出的遮罩或 Esc）；组件 `destroy()` 会移除容器上的监听（同一容器重新挂载不再重复响应）；新增 `topStart` 插槽
+
 ## v0.3.1 — 2026-09-24
 
 - `--env-file PATH`：先从 KEY=VALUE 文件读 `CLAUDE_BRIDGE_*`（已设置的环境变量优先），令牌不必写进 plist / unit 文件
