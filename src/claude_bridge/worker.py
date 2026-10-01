@@ -105,7 +105,7 @@ class WorkerConfig:
     session_heartbeat: float = 15.0  # /compact can take minutes; keep the server from declaring the job dead
     model_probe: bool = True
     model_probe_interval: float = 6 * 3600
-    version_check_interval: float = 600
+    version_check_interval: float = 60  # `claude --version` takes ~10 ms: a CLI update shows up on the page within a minute or two
     # account-wide 5h / weekly utilization via the zero-cost `claude -p "/usage"` (0 = off); feeds the server's quotas
     usage_probe_interval: float = 600
     tool_result_max_chars: int = 4000
@@ -426,7 +426,7 @@ class Worker:
             self._next_probe = time.monotonic() + self.config.model_probe_interval
             log.info("models reported: %d aliases, %d pinned (%s)", len(report["aliases"]), len(report["pinned"]), report["cli_version"])
         except Exception as e:
-            self._next_probe = time.monotonic() + self.config.version_check_interval  # retry later, not every loop
+            self._next_probe = time.monotonic() + max(600, self.config.version_check_interval)  # retry later, not every loop
             log.warning("model probe failed: %s", e)
 
     def maybe_probe_models(self, *, block: bool = False) -> None:
