@@ -46,6 +46,7 @@
       </div>
       <label class="bp-field" data-create><span>初始密码</span><input class="bp-input" name="password" type="text" autocomplete="off" placeholder="留空自动生成" /></label>
       <label class="bp-field"><span>备注（只有管理员看得到）</span><input class="bp-input" name="note" maxlength="200" /></label>
+      <label class="bp-field" data-edit><span>门户用户名（门户 SSO 下按它认人；留空 = 未映射）</span><input class="bp-input" name="portal_user" autocapitalize="none" spellcheck="false" maxlength="64" placeholder="未映射" /></label>
       <div class="bp-actions" data-edit style="justify-content:flex-start;margin-bottom:12px">
         <button type="button" class="bridge-btn bridge-tiny" data-op="reset">重置密码</button>
         <button type="button" class="bridge-btn bridge-tiny" data-op="toggle"></button>
@@ -127,6 +128,7 @@
         return `<div class="bp-user${u.disabled ? ' is-off' : ''}">
           <div class="who"><div class="n">${esc(u.display_name || u.username)} ${tags}</div>
             <div class="d">${esc(u.username)}${u.note ? ` · ${esc(u.note)}` : ''}</div>
+            ${u.portal_user || data.sso ? `<div class="d">门户：${u.portal_user ? esc(u.portal_user) : '未映射'}</div>` : ''}
             ${u.usage.blocked ? `<div class="d" style="color:var(--bridge-err)">${esc(u.usage.blocked)}</div>` : ''}</div>
           ${meters}
           <div class="seen">${esc(fmtSeen(u.last_seen_at))}</div>
@@ -148,10 +150,11 @@
       $('[data-edit]', form).hidden = !u;
       $('.bp-err', form).textContent = '';
       if (u) {
-        for (const n of ['username', 'display_name', 'role', 'note']) form[n].value = u[n] ?? '';
+        for (const n of ['username', 'display_name', 'role', 'note', 'portal_user']) form[n].value = u[n] ?? '';
         form.limit_5h_pct.value = u.limit_5h_pct ?? '';
         form.limit_7d_pct.value = u.limit_7d_pct ?? '';
         $('[data-op="toggle"]', form).textContent = u.disabled ? '启用账户' : '停用账户';
+        $('[data-op="reset"]', form).hidden = !!data.sso;  // portal SSO: nobody logs in with this password
       }
       dlg.showModal();
     }
@@ -173,6 +176,8 @@
       try {
         if (editing) {
           await api('PATCH', `/api/admin/users/${editing.id}`, body);
+          const portal = form.portal_user.value.trim();
+          if (portal !== (editing.portal_user || '')) await api('POST', `/api/admin/users/${editing.id}/portal-user`, { portal_user: portal || null });
           dlg.close(); toast('已保存');
         } else {
           const r = await api('POST', '/api/admin/users', { ...body, password: form.password.value });

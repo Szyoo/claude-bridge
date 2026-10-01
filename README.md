@@ -83,6 +83,16 @@ claude-bridge users --db /data/bridge.db list | enable <名字>
 
 - **Chat / Code**：页面顶栏切换。Code 像平时用 Claude Code 一样先选项目：每人一片独立空间 `~/claude-bridge-work/code/u<id>/`，里面每个项目一个目录（在页面上克隆 Git 仓库或新建空项目，由 worker 执行 `git clone` / `git init`），每个项目有自己的对话列表。worker 用 `--profiles deploy/mac/profiles.json` 按模式给不同的工具和权限：Chat 只能联网搜索；Code 是编程工具（Bash / 读写文件 / 子任务 / 联网）+ `bypassPermissions`，工作目录就是项目目录。两种模式都带 `--strict-mcp-config`，本机的 MCP 连接器（邮箱、日历、Slack…）一律不加载；Artifact、云端定时任务等挂在你 claude.ai 账号上的工具也不给。
 
+### 门户 SSO（`*.szyyw.xyz` 门卫）
+
+`SZYYW_SSO=1`（别名 `CLAUDE_BRIDGE_SSO=1`）时多用户模式改由 [szyyw-auth](https://github.com/Szyoo/szyyw-auth) 契约认人：Caddy 剥掉客户端自带的 `X-User` / `X-Role` / `X-Portal-Sub`，`forward_auth` 到门户，再给已登录的浏览器请求注入真实值。**只在容器没有 publish 端口、站点已挂门卫时才安全。** 未设置时行为与 v0.3.x 完全一致。只影响 `serve --multi-user`；嵌入式宿主（`create_bridge`）不读这些变量，照旧用自己的 `browser_auth`。
+
+- **认人顺序**（每个请求，cookie 不参与）：① `bridge_users.portal_user = X-User`（精确、区分大小写）；② 否则 `username = X-User`（精确大小写）**且该行 `portal_user IS NULL`** → 认领，把 `portal_user` 填成 `X-User` 并写日志；③ 否则看 `SZYYW_SSO_AUTOCREATE`：`1` = 新建一行（用户名 = `X-User`，被占用时 `X-User-2`…；`portal_user` = `X-User`；存储角色 = `X-Role`；不可用的密码；默认不限额），未设 / `0`（默认）= 403「此账号尚未在 claude-bridge 开通，请联系管理员」。已停用的行 403。没有 `X-User` = 未登录（API 401，页面跳门户登录）。
+- **角色**：管理页、管理 API、额度豁免一律按本次请求的 `X-Role`；`bridge_users.role` 不改写（关掉 SSO 后仍按存储的角色）。
+- **登录 / 登出**：`GET /login` → `302 $PORTAL_ORIGIN/login?rd=<https://本站/>`（按 `X-Forwarded-Proto` / `-Host` 拼）；没身份的页面 → 门户登录并回到当前地址；`POST /login`、`POST /api/me/password` → 403；`POST /logout` 清掉本地 cookie 后 303 到 `PORTAL_ORIGIN`（默认 `https://szyyw.xyz`）。
+- **映射**：`bridge_users.portal_user`（可空、唯一；ids 不变，threads / files / usage / projects 的 owner 也不变）。设置方式：`claude-bridge users [--db PATH] map <用户名> <门户用户名>` / `unmap <用户名>`，`users list` 显示 `门户=`；或管理页编辑用户里的「门户用户名」/ `POST /api/admin/users/<id>/portal-user {"portal_user": "名字" | null}`。映射在 SSO 关着时也能设，先映射再开门卫。
+- **不经门卫的路径**：`/api/agent/*`（worker，`Authorization: Bearer`）与 `/api/health`。浏览器的 SSE（`/api/threads/<id>/stream`，EventSource）和图片（`/api/files/<id>`）都是同源请求，带门户 cookie 过门卫，应用从头里认人。
+
 嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。
 
 ## 嵌入现有 FastAPI 应用
