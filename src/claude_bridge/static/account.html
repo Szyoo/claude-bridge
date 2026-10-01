@@ -54,6 +54,10 @@
       profile.username.value = u.username;
       profile.display_name.value = u.display_name || '';
       $('[data-admin]').hidden = u.role !== 'admin';
+      if (d.sso) {  // portal SSO: the password lives in the portal; this site's own one is unused
+        pw.hidden = true;
+        $('#profile .bp-help').textContent = `通过门户登录（${d.sso.portal_user || ''}）；用户名与显示名只出现在这里的界面上。`;
+      }
       $('#usage').innerHTML = u.role === 'admin'
         ? '<p class="bp-help">管理员不受额度限制。整个订阅的用量在「管理」页。</p>'
         : WINDOWS.map(([k, label]) => {

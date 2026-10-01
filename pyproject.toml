@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-bridge"
-version = "0.3.5"
+version = "0.4.0"
 description = "Web chat → job queue → local `claude -p` worker bridge: SSE streaming, tool events, cancel, usage"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-serve = ["uvicorn[standard]>=0.30", "python-multipart>=0.0.9"]
+# szyyw-auth: portal SSO for `serve --multi-user` (SZYYW_SSO=1). Only the server needs it — the worker and the
+# hosts that embed the routers don't. Tarball spec, not git+: the python:slim image has no git.
+serve = [
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "szyyw-auth @ https://github.com/Szyoo/szyyw-auth/archive/refs/tags/v0.1.0.tar.gz#subdirectory=python",
+]
 dev = ["pytest>=8", "httpx>=0.27", "anyio>=4", "ruff>=0.6"]
 
 [project.scripts]

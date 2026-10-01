@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--password", help="default: prompt (or generate when stdin is not a terminal)")
     ue = us.add_parser("enable", help="re-enable a disabled account")
     ue.add_argument("username")
+    um = us.add_parser("map", help="portal SSO: let portal account PORTAL_USER (X-User) act as USERNAME's row")
+    um.add_argument("username")
+    um.add_argument("portal_user")
+    uu = us.add_parser("unmap", help="portal SSO: remove USERNAME's portal mapping")
+    uu.add_argument("username")
 
     st = sub.add_parser("status", help="check the server and the local claude login")
     st.add_argument("--url", default=env("URL"))
@@ -159,7 +164,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
             db_path=args.db, agent_token=env("AGENT_TOKEN"), secret=env("SECRET"), cookie_secure=cookie_secure,
             files_dir=args.files or None, tz=args.tz,
         )
-        print(f"claude-bridge serving on http://{args.host}:{args.port}  db={args.db}  [multi-user]")
+        from claude_bridge.multiuser import sso_from_env
+
+        sso = "  [portal SSO]" if sso_from_env() else ""
+        print(f"claude-bridge serving on http://{args.host}:{args.port}  db={args.db}  [multi-user]{sso}")
         uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)
         return 0
     app = create_standalone_app(
@@ -214,6 +222,8 @@ def cmd_users(args: argparse.Namespace) -> int:
         if args.users_cmd == "list":
             for u in accounts.users():
                 flags = " [停用]" if u["disabled"] else ""
+                if u.get("portal_user"):
+                    flags += f"  门户={u['portal_user']}"
                 print(f"{u['id']:>4}  {u['username']:<20} {u['role']:<6} {u['display_name'] or '':<16} "
                       f"最近 {u['last_seen_at'] or '—'}{flags}")
             return 0
@@ -237,6 +247,11 @@ def cmd_users(args: argparse.Namespace) -> int:
         elif args.users_cmd == "enable":
             accounts.update(user["id"], {"disabled": False})
             print(f"已启用 {user['username']}")
+        elif args.users_cmd in ("map", "unmap"):
+            before = user.get("portal_user")
+            target = args.portal_user if args.users_cmd == "map" else None
+            after = accounts.set_portal_user(user["id"], target)["portal_user"]
+            print(f"{user['username']}（id {user['id']}）门户映射：{before or '—'} → {after or '—'}")
         return 0
     except BridgeError as e:
         print(e.detail, file=sys.stderr)
