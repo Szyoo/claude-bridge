@@ -45,6 +45,24 @@ def _flag(*names: str) -> bool:
     return any(os.environ.get(n, "").strip().lower() in _TRUE for n in names)
 
 
+# Portal SSO only: the shared top-right corner tools of @szyyw/design (app switcher + account menu), vendored under
+# static/vendor/szyyw-design by scripts/update-design.sh. Injected into app / account / admin at serve time so the
+# templates — and every non-SSO response — stay exactly as they were; standalone and the embedded widget never load it.
+CORNER_HEAD = (
+    '<link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/tokens.css" />\n'
+    '  <link rel="preload" href="/static/bridge/vendor/szyyw-design/components.css" as="fetch" crossorigin />\n'
+    '  <script type="module" src="/static/bridge/corner-boot.js"></script>\n'
+)
+
+
+def with_corner_tools(page: str, portal: str) -> str:
+    """Mark `<html>` with data-sso / data-portal (read by corner-boot.js) and load the corner tools in `<head>`.
+    data-scheme="auto": tokens.css otherwise pins color-scheme to dark; auto follows the system like the bridge CSS."""
+    attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}" data-scheme="auto"'
+    page = page.replace('<html lang="zh-CN">', f'<html lang="zh-CN"{attrs}>', 1)
+    return page.replace("</head>", f"  {CORNER_HEAD}</head>", 1)
+
+
 def sso_from_env() -> bool:
     """`SZYYW_SSO` (the platform-wide name, same as szyyw_auth.sso_enabled) or `CLAUDE_BRIDGE_SSO`."""
     return _flag("SZYYW_SSO", "CLAUDE_BRIDGE_SSO")
@@ -237,9 +255,10 @@ def create_multiuser_app(
             return portal_login(request) if sso else RedirectResponse("/login", status_code=303)
         if admin and user["role"] != "admin":
             return RedirectResponse("/", status_code=303)
-        resp = HTMLResponse((pages / name).read_text(encoding="utf-8"))
+        text = (pages / name).read_text(encoding="utf-8")
         if sso:
-            return resp
+            return HTMLResponse(with_corner_tools(text, portal))
+        resp = HTMLResponse(text)
         age = accounts.token_age(request.cookies.get(COOKIE_NAME))
         if age is not None and age > RENEW_AFTER:
             set_session(resp, user)
