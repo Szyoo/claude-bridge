@@ -160,7 +160,7 @@ worker.run_forever()
 
 ### 模型列表
 
-worker 启动后在后台用本地、零费用的 `claude -p "/model" --no-session-persistence` 探测本机 CLI:别名(`opus` / `sonnet` / `haiku` / `fable` / `opus[1m]`…,各自指向这版 CLI 的最新模型)和宿主 `model_choices` 里哪些固定版本本机认得(`/model <id>` 会回 "not found"),`POST /api/agent/models` 上报;之后每 6 小时、以及 `claude --version` 变化时重探。`GET /settings` 的 `models` 优先用上报(带 `group`:「跟随 CLI 最新」/「固定版本」,前端用 `modelOptionsHtml` 渲染成 `<optgroup>`),没上报时退回 `model_choices`;`models_info.source` 说明来源。`WorkerConfig(model_probe=False)` 可关掉。
+worker 启动后在后台用本地、零费用的 `claude -p "/model" --no-session-persistence` 探测本机 CLI:别名(`opus` / `sonnet` / `haiku` / `fable` / `opus[1m]`…,各自指向这版 CLI 的最新模型)和宿主 `model_choices` 里哪些固定版本本机认得(`/model <id>` 会回 "not found"),`POST /api/agent/models` 上报;之后每 6 小时、以及 `claude --version` 变化时重探（每分钟查一次版本，更新 CLI 后一两分钟页面就跟上）。`GET /settings` 的 `models` 优先用上报(带 `group`:「跟随 CLI 最新」/「固定版本」,前端用 `modelOptionsHtml` 渲染成 `<optgroup>`),没上报时退回 `model_choices`;`models_info.source` 说明来源。`WorkerConfig(model_probe=False)` 可关掉。
 
 ## HTTP API
 
