@@ -2,6 +2,14 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.4.1 — 2026-10-02
+
+- **门户 SSO 下的右上角工具**：`serve --multi-user` 在 `SZYYW_SSO=1` 时，app / account / admin 页面加载 [@szyyw/design](https://github.com/Szyoo/szyyw-design) v0.8.0 的应用切换器（`mountAppSwitcher`）与账户菜单（`mountAccountMenu`）；`<html>` 上标 `data-sso="1" data-portal="<PORTAL_ORIGIN>" data-scheme="auto"`（服务端注入，模板不变）
+- 设计包 vendor 到 `src/claude_bridge/static/vendor/szyyw-design/`（`scripts/update-design.sh [tag]`，委托上游 `sync.sh`），随 package-data 打包；`static/corner-boot.js` 负责挂载
+- 样式隔离：`tokens.css` 只定义 `:root` 变量（bridge 用 `--bridge-*`，不冲突），直接 `<link>`；`components.css` 带全局规则（`*`、`body`、`a`、`.btn`…），由 `corner-boot.js` 取回后整份包进 `@scope (body) to (:scope > :not(.corner-tools, .app-switcher, .account-menu))` 作为 adopted stylesheet，只作用于工具位和两个面板；不支持 `@scope` 的浏览器不挂工具
+- SSO 下页面里的「退出」按钮（侧栏 / 项目页顶栏、账户页）去掉：登出由账户菜单完成（门户登出）；`POST /logout` 仍保留（跳回门户）。用量 / 管理入口照旧。顶栏右侧让出工具位的宽度
+- SSO 关闭时页面输出与 v0.4.0 完全相同；standalone 单密码模式与嵌入式组件（`create_bridge` + `bridge-widget.*`）不加载任何设计包文件
+
 ## v0.4.0 — 2026-10-01
 
 - **门户 SSO**（`serve --multi-user`，`SZYYW_SSO=1` / 别名 `CLAUDE_BRIDGE_SSO=1`，默认关）：身份来自 `*.szyyw.xyz` Caddy 门卫注入的 `X-Portal-Sub` / `X-User` / `X-Role`（[szyyw-auth](https://github.com/Szyoo/szyyw-auth) v0.1.0 契约），cookie 不再认人；`/login` 跳门户（`PORTAL_ORIGIN`，默认 `https://szyyw.xyz`，带 `?rd=`），`/logout` 回门户，本地密码登录和改密码关闭；管理权限按每次请求的 `X-Role`，不改写存储的角色。未开启时行为不变
