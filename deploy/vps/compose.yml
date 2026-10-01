@@ -15,8 +15,8 @@ services:
       - path: ./.env
         format: raw
     environment:
-      # 门户 SSO：默认关。开之前先确认 Caddy 的 claude.szyyw.xyz 站点已挂 (sso) 门卫并剥掉客户端的 X-User/X-Role，
-      # 且 bridge_users 已按批准的表设好 portal_user（claude-bridge users map <用户名> <门户用户名>）。
+      # 门户 SSO：默认关。开之前先确认 Caddy 的 claude.szyyw.xyz 站点已挂 (sso) 门卫并剥掉客户端的 X-User/X-Role/X-Portal-Sub，
+      # 且 bridge_users 已按批准的表设好 portal_sub（claude-bridge users map <用户名> <门户ID>；同名行可留给首次登录自动认领）。
       SZYYW_SSO: ${SZYYW_SSO:-0}
       SZYYW_SSO_AUTOCREATE: ${SZYYW_SSO_AUTOCREATE:-0}
       PORTAL_ORIGIN: ${PORTAL_ORIGIN:-https://szyyw.xyz}

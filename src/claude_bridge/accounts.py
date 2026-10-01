@@ -52,12 +52,13 @@ CREATE TABLE IF NOT EXISTS bridge_users (
 );
 """
 
-# portal SSO (multiuser.py, SZYYW_SSO=1): which portal account (X-User) a row belongs to. A nullable column
+# portal SSO (multiuser.py, SZYYW_SSO=1): which portal account a row belongs to, keyed on the portal's stable
+# id (X-Portal-Sub) — portal usernames (X-User) can be renamed, the sub never changes. A nullable column
 # added in place — ids, and with them every owner key in threads / files / usage / projects, stay as they are.
 # SQLite can't ADD COLUMN ... UNIQUE, so uniqueness is a partial-free unique index (NULLs never collide).
-PORTAL_MIGRATION = "ALTER TABLE bridge_users ADD COLUMN portal_user TEXT"
-PORTAL_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_users_portal_user ON bridge_users(portal_user)"
-PORTAL_NAME_MAX = 64
+PORTAL_MIGRATION = "ALTER TABLE bridge_users ADD COLUMN portal_sub TEXT"
+PORTAL_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_users_portal_sub ON bridge_users(portal_sub)"
+PORTAL_SUB_MAX = 64
 SSO_PW_HASH = "!sso"  # not a pbkdf2 string: verify_password() is always False, so the row can't log in locally
 
 DEFAULT_QUOTA: dict[str, Any] = {"cap_5h_usd": None, "cap_7d_usd": None, "guard_5h_pct": None, "guard_7d_pct": None}
@@ -152,7 +153,7 @@ def public_user(row: dict[str, Any], *, admin_view: bool = False) -> dict[str, A
     """What a page may see of an account; the admin's note is only for the admin page."""
     keys = ["id", "username", "display_name", "role", "limit_5h_pct", "limit_7d_pct", "created_at", "last_seen_at"]
     if admin_view:
-        keys += ["note", "portal_user"]
+        keys += ["note", "portal_sub"]
     return {k: row.get(k) for k in keys} | {"disabled": bool(row.get("disabled"))}
 
 
@@ -166,7 +167,7 @@ class Accounts:
         with store.lock:
             store.conn.executescript(SCHEMA)
             cols = [r[1] for r in store.conn.execute("PRAGMA table_info(bridge_users)")]
-            if "portal_user" not in cols:
+            if "portal_sub" not in cols:
                 store.conn.execute(PORTAL_MIGRATION)
             store.conn.execute(PORTAL_INDEX)
         if not secret:  # persisted, so sessions survive restarts without configuring a secret
@@ -187,47 +188,55 @@ class Accounts:
     def by_name(self, username: str) -> dict[str, Any] | None:
         return self.store._one("SELECT * FROM bridge_users WHERE username=?", ((username or "").strip(),))
 
-    def by_portal(self, portal_user: str) -> dict[str, Any] | None:
-        return self.store._one("SELECT * FROM bridge_users WHERE portal_user=?", ((portal_user or "").strip(),))
+    def by_portal(self, portal_sub: str) -> dict[str, Any] | None:
+        return self.store._one("SELECT * FROM bridge_users WHERE portal_sub=?", ((portal_sub or "").strip(),))
 
-    def set_portal_user(self, uid: int, portal_user: str | None) -> dict[str, Any]:
-        """Map (or with None / "" unmap) a row to a portal account. Exact, case-sensitive; one row per portal account."""
+    def set_portal_sub(self, uid: int, portal_sub: str | None) -> dict[str, Any]:
+        """Map (or with None / "" unmap) a row to a portal account by its stable id (X-Portal-Sub).
+        Exact, case-sensitive; one row per portal account."""
         user = self.get(uid)
         if not user:
             raise NotFound("没有这个用户")
-        name = (portal_user or "").strip() or None
-        if name is not None:
-            if len(name) > PORTAL_NAME_MAX or any(c.isspace() for c in name):
-                raise BadRequest(f"门户用户名不能含空白，最长 {PORTAL_NAME_MAX} 位")
-            other = self.by_portal(name)
+        sub = (portal_sub or "").strip() or None
+        if sub is not None:
+            if len(sub) > PORTAL_SUB_MAX or any(c.isspace() for c in sub):
+                raise BadRequest(f"门户 ID 不能含空白，最长 {PORTAL_SUB_MAX} 位")
+            other = self.by_portal(sub)
             if other and other["id"] != uid:
-                raise BadRequest(f"门户用户 {name} 已对应到 {other['username']}（id {other['id']}），先解除那边的映射")
-        self.store._x("UPDATE bridge_users SET portal_user=? WHERE id=?", (name, uid))
+                raise BadRequest(f"门户 ID {sub} 已对应到 {other['username']}（id {other['id']}），先解除那边的映射")
+        self.store._x("UPDATE bridge_users SET portal_sub=? WHERE id=?", (sub, uid))
         return self.get(uid) or user
 
-    def resolve_portal(self, portal_user: str, role: str, *, autocreate: bool = False) -> tuple[dict[str, Any] | None, str]:
+    def resolve_portal(
+        self, portal_sub: str, portal_user: str, role: str, *, autocreate: bool = False
+    ) -> tuple[dict[str, Any] | None, str]:
         """The row a gate identity acts as, and how it was found: "mapped" | "adopted" | "created" | "" (none).
 
-        1. `portal_user = X-User` (exact).
-        2. else `username = X-User` (exact case) but only while that row's portal_user IS NULL — it is then
-           adopted: portal_user is filled in, so the decision is made once and is visible on the admin page.
-        3. else, with `autocreate`, a new row (username = X-User, or X-User-2… when taken), portal_user set,
+        1. `portal_sub = X-Portal-Sub` (exact).
+        2. else `username = X-User` (exact case) but only while that row's portal_sub IS NULL — it is then
+           adopted: portal_sub is filled in with X-Portal-Sub, so the decision is made once (later portal
+           renames don't matter) and is visible on the admin page.
+        3. else, with `autocreate`, a new row (username = X-User, or X-User-2… when taken), portal_sub set,
            stored role = X-Role, an unusable password, default (unlimited) quotas.
+        No sub → nothing (never a username-only match). The local username is never renamed to follow X-User.
         """
+        sub = (portal_sub or "").strip()
         name = (portal_user or "").strip()
-        if not name:
+        if not sub or len(sub) > PORTAL_SUB_MAX or any(c.isspace() for c in sub):
             return None, ""
-        user = self.by_portal(name)
+        user = self.by_portal(sub)
         if user:
             return user, "mapped"
+        if not name:
+            return None, ""
         with self.store.transaction():
             row = self.store._one(
-                "SELECT * FROM bridge_users WHERE username=? COLLATE BINARY AND portal_user IS NULL", (name,)
+                "SELECT * FROM bridge_users WHERE username=? COLLATE BINARY AND portal_sub IS NULL", (name,)
             )
             if row:
-                self.store._x("UPDATE bridge_users SET portal_user=? WHERE id=? AND portal_user IS NULL", (name, row["id"]))
+                self.store._x("UPDATE bridge_users SET portal_sub=? WHERE id=? AND portal_sub IS NULL", (sub, row["id"]))
                 return self.get(row["id"]), "adopted"
-            if not autocreate or len(name) > PORTAL_NAME_MAX:
+            if not autocreate:
                 return None, ""
             base = name if USERNAME_RE.match(name) else ""
             if not base:
@@ -239,8 +248,8 @@ class Accounts:
             else:
                 return None, ""
             cur = self.store._x(
-                "INSERT INTO bridge_users(username, pw_hash, role, portal_user, note) VALUES(?,?,?,?,?) RETURNING *",
-                (candidate, SSO_PW_HASH, role if role in ROLES else "user", name, "门户首次登录自动创建"),
+                "INSERT INTO bridge_users(username, pw_hash, role, portal_sub, note) VALUES(?,?,?,?,?) RETURNING *",
+                (candidate, SSO_PW_HASH, role if role in ROLES else "user", sub, "门户首次登录自动创建"),
             )
             return dict(cur.fetchone()), "created"
 

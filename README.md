@@ -87,10 +87,12 @@ claude-bridge users --db /data/bridge.db list | enable <名字>
 
 `SZYYW_SSO=1`（别名 `CLAUDE_BRIDGE_SSO=1`）时多用户模式改由 [szyyw-auth](https://github.com/Szyoo/szyyw-auth) 契约认人：Caddy 剥掉客户端自带的 `X-User` / `X-Role` / `X-Portal-Sub`，`forward_auth` 到门户，再给已登录的浏览器请求注入真实值。**只在容器没有 publish 端口、站点已挂门卫时才安全。** 未设置时行为与 v0.3.x 完全一致。只影响 `serve --multi-user`；嵌入式宿主（`create_bridge`）不读这些变量，照旧用自己的 `browser_auth`。
 
-- **认人顺序**（每个请求，cookie 不参与）：① `bridge_users.portal_user = X-User`（精确、区分大小写）；② 否则 `username = X-User`（精确大小写）**且该行 `portal_user IS NULL`** → 认领，把 `portal_user` 填成 `X-User` 并写日志；③ 否则看 `SZYYW_SSO_AUTOCREATE`：`1` = 新建一行（用户名 = `X-User`，被占用时 `X-User-2`…；`portal_user` = `X-User`；存储角色 = `X-Role`；不可用的密码；默认不限额），未设 / `0`（默认）= 403「此账号尚未在 claude-bridge 开通，请联系管理员」。已停用的行 403。没有 `X-User` = 未登录（API 401，页面跳门户登录）。
+- **按门户 ID 认人**：门户用户名（`X-User`）用户自己可以改，`X-Portal-Sub`（门户账号的固定 ID，uuid 字符串）不会变，所以映射存的是 sub。
+- **认人顺序**（每个请求，cookie 不参与）：① `bridge_users.portal_sub = X-Portal-Sub`（精确）；② 否则 `username = X-User`（精确大小写）**且该行 `portal_sub IS NULL`** → 认领，把 `portal_sub` 填成 `X-Portal-Sub` 并写日志（之后门户改名也还是这一行）；③ 否则看 `SZYYW_SSO_AUTOCREATE`：`1` = 新建一行（用户名 = `X-User`，被占用时 `X-User-2`…；`portal_sub` = `X-Portal-Sub`；存储角色 = `X-Role`；不可用的密码；默认不限额），未设 / `0`（默认）= 403「此账号尚未在 claude-bridge 开通，请联系管理员」。同名但该行已映射到别的 sub 不会被认领。已停用的行 403。没有 `X-User` **或没有 `X-Portal-Sub`** = 未登录（API 401，页面跳门户登录），绝不退回只按用户名匹配。
+- **显示名**：顶栏、账户页、管理页自己那一行显示本次请求的 `X-User`（门户当前用户名）；本地 `username` 是数据键，门户改名时**不跟着改**（避免撞名和校验问题），需要的话管理员手动改。
 - **角色**：管理页、管理 API、额度豁免一律按本次请求的 `X-Role`；`bridge_users.role` 不改写（关掉 SSO 后仍按存储的角色）。
 - **登录 / 登出**：`GET /login` → `302 $PORTAL_ORIGIN/login?rd=<https://本站/>`（按 `X-Forwarded-Proto` / `-Host` 拼）；没身份的页面 → 门户登录并回到当前地址；`POST /login`、`POST /api/me/password` → 403；`POST /logout` 清掉本地 cookie 后 303 到 `PORTAL_ORIGIN`（默认 `https://szyyw.xyz`）。
-- **映射**：`bridge_users.portal_user`（可空、唯一；ids 不变，threads / files / usage / projects 的 owner 也不变）。设置方式：`claude-bridge users [--db PATH] map <用户名> <门户用户名>` / `unmap <用户名>`，`users list` 显示 `门户=`；或管理页编辑用户里的「门户用户名」/ `POST /api/admin/users/<id>/portal-user {"portal_user": "名字" | null}`。映射在 SSO 关着时也能设，先映射再开门卫。
+- **映射**：`bridge_users.portal_sub`（可空、唯一；ids 不变，threads / files / usage / projects 的 owner 也不变）。设置方式：`claude-bridge users [--db PATH] map <用户名> <门户ID>` / `unmap <用户名>`，`users list` 显示 `门户ID=`；或管理页编辑用户里的「门户 ID」/ `POST /api/admin/users/<id>/portal-user {"portal_sub": "<门户ID>" | null}`。映射在 SSO 关着时也能设，先映射再开门卫；同名行不映射也行，第一次登录会自动认领。
 - **不经门卫的路径**：`/api/agent/*`（worker，`Authorization: Bearer`）与 `/api/health`。浏览器的 SSE（`/api/threads/<id>/stream`，EventSource）和图片（`/api/files/<id>`）都是同源请求，带门户 cookie 过门卫，应用从头里认人。
 
 嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。

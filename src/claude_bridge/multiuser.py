@@ -4,8 +4,9 @@ Sessions are long-lived on purpose (the audience is a few people the admin knows
 `session_days`, renewed whenever a page is opened, invalidated by a password change, a reset or a disable.
 
 Portal SSO (`SZYYW_SSO=1`, alias `CLAUDE_BRIDGE_SSO=1`): the szyyw.xyz Caddy gate authenticates browsers and
-injects `X-User` / `X-Role`; identity comes from those headers only and the session cookie is ignored. Safe
-only behind that gate with no published port. `X-User` → a `bridge_users` row via `Accounts.resolve_portal`;
+injects `X-User` / `X-Role` / `X-Portal-Sub`; identity comes from those headers only and the session cookie is
+ignored. Safe only behind that gate with no published port. `X-Portal-Sub` (the portal's stable id; `X-User` is
+the renameable display name) → a `bridge_users` row via `Accounts.resolve_portal`; no sub = signed out;
 `X-Role` decides admin access per request (the stored `role` column is not touched). Login / logout go to
 `PORTAL_ORIGIN`; the local password login is off. `/api/agent/*` (Bearer) and `/api/health` are unchanged.
 """
@@ -110,8 +111,8 @@ class ResetIn(BaseModel):
     password: str = Field("", max_length=200)
 
 
-class PortalUserIn(BaseModel):
-    portal_user: str | None = Field(None, max_length=64)
+class PortalSubIn(BaseModel):
+    portal_sub: str | None = Field(None, max_length=64)
 
 
 class QuotaIn(BaseModel):
@@ -172,23 +173,28 @@ def create_multiuser_app(
         if cached is not False:
             return cached
         ident = identity_from_headers(request.headers.get)
+        # the stable id, read directly: szyyw_auth falls back to X-User when it's missing, but a username-only
+        # match is exactly what keying on the sub avoids — no X-Portal-Sub = not through the gate = signed out
+        sub = (request.headers.get("X-Portal-Sub") or "").strip()
         user = None
-        if ident is not None:
-            row, how = accounts.resolve_portal(ident.user, ident.role, autocreate=sso_autocreate)
+        if ident is not None and sub:
+            row, how = accounts.resolve_portal(sub, ident.user, ident.role, autocreate=sso_autocreate)
             if how == "adopted":
-                log.warning("SSO: portal user %r adopted bridge_users id=%s (same username, portal_user was empty)",
-                            ident.user, row["id"] if row else "?")
+                log.warning("SSO: portal user %r (sub %s) adopted bridge_users id=%s (same username, portal_sub was empty)",
+                            ident.user, sub, row["id"] if row else "?")
             elif how == "created":
-                log.warning("SSO: portal user %r auto-created bridge_users id=%s username=%r",
-                            ident.user, row["id"] if row else "?", row["username"] if row else "?")
+                log.warning("SSO: portal user %r (sub %s) auto-created bridge_users id=%s username=%r",
+                            ident.user, sub, row["id"] if row else "?", row["username"] if row else "?")
             if row is None:
-                log.warning("SSO: portal user %r has no bridge_users row (autocreate %s) → 403",
-                            ident.user, "on" if sso_autocreate else "off")
+                log.warning("SSO: portal user %r (sub %s) has no bridge_users row (autocreate %s) → 403",
+                            ident.user, sub, "on" if sso_autocreate else "off")
                 raise NotProvisioned()
             if row["disabled"]:
                 raise NotProvisioned("这个账户已停用，请联系管理员")
             accounts.touch_seen(row["id"])
-            user = {**row, "role": ident.role}
+            # role and the portal's current display name are per request, in memory only — the stored row
+            # (username is the data key) is never renamed to follow X-User
+            user = {**row, "role": ident.role, "portal_user": ident.user}
         request.scope["bridge_sso_user"] = user
         return user
 
@@ -315,7 +321,7 @@ def create_multiuser_app(
     def me(user: dict[str, Any] = Depends(api_user)):
         out = {"user": public_user(user), "usage": accounts.usage_for(user)}
         if sso:
-            out["sso"] = {"portal": portal, "portal_user": user.get("portal_user")}
+            out["sso"] = {"portal": portal, "portal_user": user.get("portal_user"), "portal_sub": user.get("portal_sub")}
         return out
 
     @app.patch("/api/me")
@@ -345,7 +351,7 @@ def create_multiuser_app(
         out = {"items": [user_row(u, account) for u in accounts.users()], "account": account,
                "quota": accounts.quota_config(), "me": admin["id"]}
         if sso:
-            out["sso"] = {"portal": portal, "autocreate": sso_autocreate}
+            out["sso"] = {"portal": portal, "autocreate": sso_autocreate, "me_portal_user": admin.get("portal_user")}
         return out
 
     @app.post("/api/admin/users", status_code=201)
@@ -373,12 +379,13 @@ def create_multiuser_app(
         bridge.service._unlink(names)
         return {"ok": True}
 
-    # portal SSO mapping: which portal account (X-User) acts as this row. Works with SSO off too, so the
-    # mapping can be prepared before the gate is switched on. Body {"portal_user": "<name>"} or null to clear.
+    # portal SSO mapping: which portal account (its stable id, X-Portal-Sub) acts as this row. Works with SSO
+    # off too, so the mapping can be prepared before the gate is switched on. Body {"portal_sub": "<id>"} or
+    # null to clear.
     @app.post("/api/admin/users/{uid}/portal-user")
-    def admin_portal_user(uid: int, body: PortalUserIn, admin: dict[str, Any] = Depends(api_admin)):
-        user = _svc(accounts.set_portal_user, uid, body.portal_user)
-        log.warning("portal_user of bridge_users id=%s set to %r by %s", uid, user["portal_user"], admin["username"])
+    def admin_portal_user(uid: int, body: PortalSubIn, admin: dict[str, Any] = Depends(api_admin)):
+        user = _svc(accounts.set_portal_sub, uid, body.portal_sub)
+        log.warning("portal_sub of bridge_users id=%s set to %r by %s", uid, user["portal_sub"], admin["username"])
         return {"user": user_row(user, accounts.account_status())}
 
     @app.put("/api/admin/quota")
