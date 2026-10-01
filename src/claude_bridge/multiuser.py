@@ -2,11 +2,20 @@
 
 Sessions are long-lived on purpose (the audience is a few people the admin knows): a signed cookie good for
 `session_days`, renewed whenever a page is opened, invalidated by a password change, a reset or a disable.
+
+Portal SSO (`SZYYW_SSO=1`, alias `CLAUDE_BRIDGE_SSO=1`): the szyyw.xyz Caddy gate authenticates browsers and
+injects `X-User` / `X-Role` / `X-Portal-Sub`; identity comes from those headers only and the session cookie is
+ignored. Safe only behind that gate with no published port. `X-Portal-Sub` (the portal's stable id; `X-User` is
+the renameable display name) → a `bridge_users` row via `Accounts.resolve_portal`; no sub = signed out;
+`X-Role` decides admin access per request (the stored `role` column is not touched). Login / logout go to
+`PORTAL_ORIGIN`; the local password login is off. `/api/agent/*` (Bearer) and `/api/health` are unchanged.
 """
 
 from __future__ import annotations
 
 import html
+import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,6 +33,38 @@ from claude_bridge.server import create_bridge, static_dir
 from claude_bridge.service import PROJECT_SCOPE_PREFIX, BridgeConfig
 from claude_bridge.standalone import client_ip
 from claude_bridge.store import BridgeStore
+
+log = logging.getLogger(__name__)
+
+NOT_PROVISIONED = "此账号尚未在 claude-bridge 开通，请联系管理员"
+SSO_NO_PASSWORD = "门户登录模式下密码由门户管理"
+_TRUE = ("1", "true", "yes", "on")
+
+
+def _flag(*names: str) -> bool:
+    return any(os.environ.get(n, "").strip().lower() in _TRUE for n in names)
+
+
+def sso_from_env() -> bool:
+    """`SZYYW_SSO` (the platform-wide name, same as szyyw_auth.sso_enabled) or `CLAUDE_BRIDGE_SSO`."""
+    return _flag("SZYYW_SSO", "CLAUDE_BRIDGE_SSO")
+
+
+class NotProvisioned(Exception):
+    """A gate identity with no bridge_users row (and autocreate off), or a disabled one."""
+
+    def __init__(self, detail: str = NOT_PROVISIONED) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+def public_base(request: Request) -> str:
+    """scheme://host the browser used: X-Forwarded-Proto / -Host from Caddy, else the request itself."""
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if proto and host:
+        return f"{proto}://{host}"
+    return str(request.base_url).rstrip("/")
 
 # the page's two modes: "" = Chat; "code:<project>" = Code in one of the user's project directories.
 # The worker maps each scope to a profile (tools, permissions, per-user / per-project directory).
@@ -70,6 +111,10 @@ class ResetIn(BaseModel):
     password: str = Field("", max_length=200)
 
 
+class PortalSubIn(BaseModel):
+    portal_sub: str | None = Field(None, max_length=64)
+
+
 class QuotaIn(BaseModel):
     cap_5h_usd: float | None = None
     cap_7d_usd: float | None = None
@@ -94,7 +139,19 @@ def create_multiuser_app(
     files_dir: str | Path | None = None,
     session_days: int = 365,
     tz: str = "",
+    sso: bool | None = None,
+    sso_autocreate: bool | None = None,
+    portal_origin: str | None = None,
 ) -> FastAPI:
+    """`sso` / `sso_autocreate` / `portal_origin` default to `SZYYW_SSO` (or `CLAUDE_BRIDGE_SSO`) /
+    `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN` (default https://szyyw.xyz)."""
+    if sso is None:
+        sso = sso_from_env()
+    if sso_autocreate is None:
+        sso_autocreate = _flag("SZYYW_SSO_AUTOCREATE")
+    portal = (portal_origin or os.environ.get("PORTAL_ORIGIN") or "https://szyyw.xyz").rstrip("/")
+    if sso:
+        from szyyw_auth import identity_from_headers, login_url
     store = BridgeStore(db_path)
     accounts = Accounts(store, secret=secret, session_days=session_days, tz=tz)
     def scope_ok(scope: str, owner: str) -> bool:
@@ -110,8 +167,47 @@ def create_multiuser_app(
     )
     cfg.check_quota = accounts.check_quota
 
+    def sso_user(request: Request) -> dict[str, Any] | None:
+        """The effective user for a gated request: the mapped row with `role` = X-Role (in memory only)."""
+        cached = request.scope.get("bridge_sso_user", False)
+        if cached is not False:
+            return cached
+        ident = identity_from_headers(request.headers.get)
+        # the stable id, read directly: szyyw_auth falls back to X-User when it's missing, but a username-only
+        # match is exactly what keying on the sub avoids — no X-Portal-Sub = not through the gate = signed out
+        sub = (request.headers.get("X-Portal-Sub") or "").strip()
+        user = None
+        if ident is not None and sub:
+            row, how = accounts.resolve_portal(sub, ident.user, ident.role, autocreate=sso_autocreate)
+            if how == "adopted":
+                log.warning("SSO: portal user %r (sub %s) adopted bridge_users id=%s (same username, portal_sub was empty)",
+                            ident.user, sub, row["id"] if row else "?")
+            elif how == "created":
+                log.warning("SSO: portal user %r (sub %s) auto-created bridge_users id=%s username=%r",
+                            ident.user, sub, row["id"] if row else "?", row["username"] if row else "?")
+            if row is None:
+                log.warning("SSO: portal user %r (sub %s) has no bridge_users row (autocreate %s) → 403",
+                            ident.user, sub, "on" if sso_autocreate else "off")
+                raise NotProvisioned()
+            if row["disabled"]:
+                raise NotProvisioned("这个账户已停用，请联系管理员")
+            accounts.touch_seen(row["id"])
+            # role and the portal's current display name are per request, in memory only — the stored row
+            # (username is the data key) is never renamed to follow X-User
+            user = {**row, "role": ident.role, "portal_user": ident.user}
+        request.scope["bridge_sso_user"] = user
+        return user
+
     def signed_in(request: Request) -> dict[str, Any] | None:
+        if sso:
+            return sso_user(request)
         return accounts.verify_token(request.cookies.get(COOKIE_NAME))
+
+    def portal_login(request: Request, path: str | None = None) -> RedirectResponse:
+        """Unauthenticated browser under SSO: the portal's login, coming back to `path` (default: this URL)."""
+        if path is None:
+            path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        return RedirectResponse(login_url(portal, public_base(request) + path), status_code=302)
 
     def browser_auth(request: Request) -> Principal:
         user = signed_in(request)
@@ -138,10 +234,12 @@ def create_multiuser_app(
     def page(request: Request, name: str, *, admin: bool = False) -> Response:
         user = signed_in(request)
         if not user:
-            return RedirectResponse("/login", status_code=303)
+            return portal_login(request) if sso else RedirectResponse("/login", status_code=303)
         if admin and user["role"] != "admin":
             return RedirectResponse("/", status_code=303)
         resp = HTMLResponse((pages / name).read_text(encoding="utf-8"))
+        if sso:
+            return resp
         age = accounts.token_age(request.cookies.get(COOKIE_NAME))
         if age is not None and age > RENEW_AFTER:
             set_session(resp, user)
@@ -174,6 +272,8 @@ def create_multiuser_app(
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, err: str = "", u: str = ""):
+        if sso:  # back to the app's root, not /login itself (that would bounce between the two)
+            return portal_login(request, "/")
         if signed_in(request):
             return RedirectResponse("/", status_code=303)
         text = (pages / "users-login.html").read_text(encoding="utf-8")
@@ -182,6 +282,8 @@ def create_multiuser_app(
 
     @app.post("/login")
     def login(request: Request, username: str = Form(""), password: str = Form("")):
+        if sso:
+            raise HTTPException(status_code=403, detail="门户登录模式下本地密码登录已关闭")
         ip, name_key = client_ip(request), f"user:{username.strip().lower()}"
         back = f"&u={quote(username.strip()[:32])}" if username.strip() else ""
         if limiter.is_limited(ip) or limiter.is_limited(name_key):
@@ -201,6 +303,10 @@ def create_multiuser_app(
 
     @app.post("/logout")
     def logout():
+        if sso:  # the local cookie is unused under SSO but cleared anyway; the real sign-out is at the portal
+            resp = RedirectResponse(portal, status_code=303)
+            resp.delete_cookie(COOKIE_NAME, path="/")
+            return resp
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(COOKIE_NAME, path="/")
         return resp
@@ -213,7 +319,10 @@ def create_multiuser_app(
 
     @app.get("/api/me")
     def me(user: dict[str, Any] = Depends(api_user)):
-        return {"user": public_user(user), "usage": accounts.usage_for(user)}
+        out = {"user": public_user(user), "usage": accounts.usage_for(user)}
+        if sso:
+            out["sso"] = {"portal": portal, "portal_user": user.get("portal_user"), "portal_sub": user.get("portal_sub")}
+        return out
 
     @app.patch("/api/me")
     def patch_me(body: MeIn, user: dict[str, Any] = Depends(api_user)):
@@ -222,6 +331,8 @@ def create_multiuser_app(
 
     @app.post("/api/me/password")
     def change_password(body: PasswordIn, user: dict[str, Any] = Depends(api_user)):
+        if sso:
+            raise HTTPException(status_code=403, detail=SSO_NO_PASSWORD)
         if not verify_password(body.current, user["pw_hash"]):
             raise HTTPException(status_code=400, detail="当前密码不对")
         updated = _svc(accounts.set_password, user["id"], body.new)
@@ -237,8 +348,11 @@ def create_multiuser_app(
     @app.get("/api/admin/users")
     def admin_users(admin: dict[str, Any] = Depends(api_admin)):
         account = accounts.account_status()
-        return {"items": [user_row(u, account) for u in accounts.users()], "account": account,
-                "quota": accounts.quota_config(), "me": admin["id"]}
+        out = {"items": [user_row(u, account) for u in accounts.users()], "account": account,
+               "quota": accounts.quota_config(), "me": admin["id"]}
+        if sso:
+            out["sso"] = {"portal": portal, "autocreate": sso_autocreate, "me_portal_user": admin.get("portal_user")}
+        return out
 
     @app.post("/api/admin/users", status_code=201)
     def admin_create(body: UserIn, admin: dict[str, Any] = Depends(api_admin)):
@@ -265,6 +379,15 @@ def create_multiuser_app(
         bridge.service._unlink(names)
         return {"ok": True}
 
+    # portal SSO mapping: which portal account (its stable id, X-Portal-Sub) acts as this row. Works with SSO
+    # off too, so the mapping can be prepared before the gate is switched on. Body {"portal_sub": "<id>"} or
+    # null to clear.
+    @app.post("/api/admin/users/{uid}/portal-user")
+    def admin_portal_user(uid: int, body: PortalSubIn, admin: dict[str, Any] = Depends(api_admin)):
+        user = _svc(accounts.set_portal_sub, uid, body.portal_sub)
+        log.warning("portal_sub of bridge_users id=%s set to %r by %s", uid, user["portal_sub"], admin["username"])
+        return {"user": user_row(user, accounts.account_status())}
+
     @app.put("/api/admin/quota")
     def admin_quota(body: QuotaIn, admin: dict[str, Any] = Depends(api_admin)):
         quota = _svc(accounts.save_quota_config, body.model_dump(exclude_unset=True))
@@ -273,7 +396,16 @@ def create_multiuser_app(
     @app.exception_handler(HTTPException)
     async def http_exc(request: Request, exc: HTTPException):
         if exc.status_code == 401 and not request.url.path.startswith("/api"):
-            return RedirectResponse("/login", status_code=303)
+            return portal_login(request) if sso else RedirectResponse("/login", status_code=303)
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+    @app.exception_handler(NotProvisioned)
+    async def not_provisioned(request: Request, exc: NotProvisioned):
+        if request.url.path.startswith("/api"):
+            return JSONResponse({"detail": exc.detail}, status_code=403)
+        body = (f'<!doctype html><meta charset="utf-8"><title>claude-bridge</title>'
+                f'<p style="font:16px system-ui;margin:3em auto;max-width:32em">{html.escape(exc.detail)}</p>'
+                f'<p style="font:14px system-ui;margin:0 auto;max-width:32em"><a href="{html.escape(portal, quote=True)}">回到门户</a></p>')
+        return HTMLResponse(body, status_code=403)
 
     return app

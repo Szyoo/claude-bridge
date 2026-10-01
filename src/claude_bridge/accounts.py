@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS bridge_users (
 );
 """
 
+# portal SSO (multiuser.py, SZYYW_SSO=1): which portal account a row belongs to, keyed on the portal's stable
+# id (X-Portal-Sub) — portal usernames (X-User) can be renamed, the sub never changes. A nullable column
+# added in place — ids, and with them every owner key in threads / files / usage / projects, stay as they are.
+# SQLite can't ADD COLUMN ... UNIQUE, so uniqueness is a partial-free unique index (NULLs never collide).
+PORTAL_MIGRATION = "ALTER TABLE bridge_users ADD COLUMN portal_sub TEXT"
+PORTAL_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_users_portal_sub ON bridge_users(portal_sub)"
+PORTAL_SUB_MAX = 64
+SSO_PW_HASH = "!sso"  # not a pbkdf2 string: verify_password() is always False, so the row can't log in locally
+
 DEFAULT_QUOTA: dict[str, Any] = {"cap_5h_usd": None, "cap_7d_usd": None, "guard_5h_pct": None, "guard_7d_pct": None}
 LIMIT_FIELD = {"five_hour": "limit_5h_pct", "seven_day": "limit_7d_pct"}
 CAP_FIELD = {"five_hour": "cap_5h_usd", "seven_day": "cap_7d_usd"}
@@ -144,7 +153,7 @@ def public_user(row: dict[str, Any], *, admin_view: bool = False) -> dict[str, A
     """What a page may see of an account; the admin's note is only for the admin page."""
     keys = ["id", "username", "display_name", "role", "limit_5h_pct", "limit_7d_pct", "created_at", "last_seen_at"]
     if admin_view:
-        keys.append("note")
+        keys += ["note", "portal_sub"]
     return {k: row.get(k) for k in keys} | {"disabled": bool(row.get("disabled"))}
 
 
@@ -157,6 +166,10 @@ class Accounts:
         self._seen: dict[int, float] = {}
         with store.lock:
             store.conn.executescript(SCHEMA)
+            cols = [r[1] for r in store.conn.execute("PRAGMA table_info(bridge_users)")]
+            if "portal_sub" not in cols:
+                store.conn.execute(PORTAL_MIGRATION)
+            store.conn.execute(PORTAL_INDEX)
         if not secret:  # persisted, so sessions survive restarts without configuring a secret
             secret = store.get_meta("accounts_secret") or ""
             if not secret:
@@ -174,6 +187,77 @@ class Accounts:
 
     def by_name(self, username: str) -> dict[str, Any] | None:
         return self.store._one("SELECT * FROM bridge_users WHERE username=?", ((username or "").strip(),))
+
+    def by_portal(self, portal_sub: str) -> dict[str, Any] | None:
+        return self.store._one("SELECT * FROM bridge_users WHERE portal_sub=?", ((portal_sub or "").strip(),))
+
+    def set_portal_sub(self, uid: int, portal_sub: str | None) -> dict[str, Any]:
+        """Map (or with None / "" unmap) a row to a portal account by its stable id (X-Portal-Sub).
+        Exact, case-sensitive; one row per portal account."""
+        user = self.get(uid)
+        if not user:
+            raise NotFound("没有这个用户")
+        sub = (portal_sub or "").strip() or None
+        if sub is not None:
+            if len(sub) > PORTAL_SUB_MAX or any(c.isspace() for c in sub):
+                raise BadRequest(f"门户 ID 不能含空白，最长 {PORTAL_SUB_MAX} 位")
+            other = self.by_portal(sub)
+            if other and other["id"] != uid:
+                raise BadRequest(f"门户 ID {sub} 已对应到 {other['username']}（id {other['id']}），先解除那边的映射")
+        self.store._x("UPDATE bridge_users SET portal_sub=? WHERE id=?", (sub, uid))
+        return self.get(uid) or user
+
+    def resolve_portal(
+        self, portal_sub: str, portal_user: str, role: str, *, autocreate: bool = False
+    ) -> tuple[dict[str, Any] | None, str]:
+        """The row a gate identity acts as, and how it was found: "mapped" | "adopted" | "created" | "" (none).
+
+        1. `portal_sub = X-Portal-Sub` (exact).
+        2. else `username = X-User` (exact case) but only while that row's portal_sub IS NULL — it is then
+           adopted: portal_sub is filled in with X-Portal-Sub, so the decision is made once (later portal
+           renames don't matter) and is visible on the admin page.
+        3. else, with `autocreate`, a new row (username = X-User, or X-User-2… when taken), portal_sub set,
+           stored role = X-Role, an unusable password, default (unlimited) quotas.
+        No sub → nothing (never a username-only match). The local username is never renamed to follow X-User.
+        """
+        sub = (portal_sub or "").strip()
+        name = (portal_user or "").strip()
+        if not sub or len(sub) > PORTAL_SUB_MAX or any(c.isspace() for c in sub):
+            return None, ""
+        user = self.by_portal(sub)
+        if user:
+            return user, "mapped"
+        if not name:
+            return None, ""
+        with self.store.transaction():
+            row = self.store._one(
+                "SELECT * FROM bridge_users WHERE username=? COLLATE BINARY AND portal_sub IS NULL", (name,)
+            )
+            if row:
+                self.store._x("UPDATE bridge_users SET portal_sub=? WHERE id=? AND portal_sub IS NULL", (sub, row["id"]))
+                return self.get(row["id"]), "adopted"
+            if not autocreate:
+                return None, ""
+            base = name if USERNAME_RE.match(name) else ""
+            if not base:
+                return None, ""
+            for n in range(1, 10):
+                candidate = base if n == 1 else f"{base[:29]}-{n}"
+                if not self.by_name(candidate):
+                    break
+            else:
+                return None, ""
+            cur = self.store._x(
+                "INSERT INTO bridge_users(username, pw_hash, role, portal_sub, note) VALUES(?,?,?,?,?) RETURNING *",
+                (candidate, SSO_PW_HASH, role if role in ROLES else "user", sub, "门户首次登录自动创建"),
+            )
+            return dict(cur.fetchone()), "created"
+
+    def touch_seen(self, uid: int) -> None:
+        now = time.time()
+        if now - self._seen.get(uid, 0) > LAST_SEEN_EVERY:
+            self._seen[uid] = now
+            self.store._x("UPDATE bridge_users SET last_seen_at=datetime('now') WHERE id=?", (uid,))
 
     def count(self, *, role: str | None = None, active: bool = False) -> int:
         where, params = ["1=1"], []
@@ -318,10 +402,7 @@ class Accounts:
         user = self.get(uid)
         if not user or user["disabled"] or user["token_version"] != ver:
             return None
-        now = time.time()
-        if now - self._seen.get(uid, 0) > LAST_SEEN_EVERY:
-            self._seen[uid] = now
-            self.store._x("UPDATE bridge_users SET last_seen_at=datetime('now') WHERE id=?", (uid,))
+        self.touch_seen(uid)
         return user
 
     @staticmethod
@@ -415,6 +496,8 @@ class Accounts:
         user = self.get(int(principal.owner))
         if not user or user["disabled"]:
             raise QuotaExceeded("账户已停用", status=403)
+        # the principal's role is the effective one (= the stored role, or X-Role under SSO); non-admin here
+        user = {**user, "role": "user"}
         reason = self.usage_for(user)["blocked"]
         if reason:
             raise QuotaExceeded(reason)
