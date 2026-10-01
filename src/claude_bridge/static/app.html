@@ -166,7 +166,8 @@
       box.innerHTML = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
         + `<span class="n">${esc((d.sso && d.sso.portal_user) || u.display_name || u.username)}</span><span class="u${us.blocked ? ' full' : ''}">${esc(sub)}</span></a>`
         + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin" style="text-decoration:none">管理</a>' : '')
-        + '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>';
+        // portal SSO: sign-out lives in the corner account menu (it signs out of the portal); no local button
+        + (d.sso ? '' : '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>');
     }
     show();
     setInterval(renderMe, 120000);

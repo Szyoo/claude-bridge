@@ -40,7 +40,7 @@
       <div class="bp-actions"><button type="submit" class="bridge-btn bridge-btn-primary">修改密码</button></div>
     </form>
 
-    <form method="post" action="/logout" class="bp-actions"><button type="submit" class="bridge-btn">退出登录</button></form>
+    <form method="post" action="/logout" class="bp-actions" id="logout"><button type="submit" class="bridge-btn">退出登录</button></form>
   </main>
 
   <script type="module">
@@ -56,6 +56,7 @@
       $('[data-admin]').hidden = u.role !== 'admin';
       if (d.sso) {  // portal SSO: the password lives in the portal; this site's own one is unused
         pw.hidden = true;
+        $('#logout').hidden = true;  // sign-out is the corner account menu's (portal) 登出
         $('#profile .bp-help').textContent = `通过门户登录（${d.sso.portal_user || ''}）；用户名与显示名只出现在这里的界面上。`;
       }
       $('#usage').innerHTML = u.role === 'admin'

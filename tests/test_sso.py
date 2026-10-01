@@ -265,3 +265,25 @@ def test_cli_map_unmap(db, capsys):
     assert main(["users", "--db", str(db), "unmap", "szyyw"]) == 0
     assert rows(db)["szyyw"]["portal_sub"] is None
     assert main(["users", "--db", str(db), "map", "nobody", "x"]) == 1
+
+
+def test_sso_pages_load_corner_tools(db, monkeypatch):
+    c = gated(make(db, monkeypatch), "alice", role="admin")
+    for path in ("/", "/account", "/admin"):
+        r = c.get(path)
+        assert r.status_code == 200, path
+        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-scheme="auto">' in r.text
+        assert "/static/bridge/vendor/szyyw-design/tokens.css" in r.text
+        assert "/static/bridge/corner-boot.js" in r.text
+    for f in ("corner-boot.js", "vendor/szyyw-design/switcher.js", "vendor/szyyw-design/components.css"):
+        assert c.get(f"/static/bridge/{f}").status_code == 200, f
+
+
+def test_sso_off_pages_have_no_corner_tools(db):
+    app = create_multiuser_app(db_path=db, agent_token="tok", tz="UTC")
+    c = TestClient(app, follow_redirects=False)
+    c.post("/login", data={"username": "szyyw", "password": PW})
+    for path in ("/", "/account", "/admin", "/login"):
+        r = c.get(path)
+        assert r.status_code in (200, 303), path
+        assert "data-sso" not in r.text and "szyyw-design" not in r.text and "corner-boot" not in r.text
