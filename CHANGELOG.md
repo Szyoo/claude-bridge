@@ -4,9 +4,9 @@
 
 ## v0.4.0 — 2026-10-01
 
-- **门户 SSO**（`serve --multi-user`，`SZYYW_SSO=1` / 别名 `CLAUDE_BRIDGE_SSO=1`，默认关）：身份来自 `*.szyyw.xyz` Caddy 门卫注入的 `X-User` / `X-Role`（[szyyw-auth](https://github.com/Szyoo/szyyw-auth) v0.1.0 契约），cookie 不再认人；`/login` 跳门户（`PORTAL_ORIGIN`，默认 `https://szyyw.xyz`，带 `?rd=`），`/logout` 回门户，本地密码登录和改密码关闭；管理权限按每次请求的 `X-Role`，不改写存储的角色。未开启时行为不变
-- `bridge_users` 新增可空唯一列 `portal_user`（启动时自动迁移，ids 与数据归属不变）。认人：先按 `portal_user`，再按同名且未映射的行（认领并记日志），否则 `SZYYW_SSO_AUTOCREATE=1` 自动建号、默认 403「此账号尚未在 claude-bridge 开通」
-- 设置映射：`claude-bridge users map <用户名> <门户用户名>` / `users unmap <用户名>`，管理页「门户用户名」，`POST /api/admin/users/<id>/portal-user`；`/api/admin/users` 的每行多了 `portal_user`
+- **门户 SSO**（`serve --multi-user`，`SZYYW_SSO=1` / 别名 `CLAUDE_BRIDGE_SSO=1`，默认关）：身份来自 `*.szyyw.xyz` Caddy 门卫注入的 `X-Portal-Sub` / `X-User` / `X-Role`（[szyyw-auth](https://github.com/Szyoo/szyyw-auth) v0.1.0 契约），cookie 不再认人；`/login` 跳门户（`PORTAL_ORIGIN`，默认 `https://szyyw.xyz`，带 `?rd=`），`/logout` 回门户，本地密码登录和改密码关闭；管理权限按每次请求的 `X-Role`，不改写存储的角色。未开启时行为不变
+- `bridge_users` 新增可空唯一列 `portal_sub`（门户账号的固定 ID；门户用户名可改，所以不按名字存；启动时自动迁移，ids 与数据归属不变）。认人：先按 `portal_sub = X-Portal-Sub`，再按 `username = X-User` 且未映射的行（认领：填入 sub 并记日志），否则 `SZYYW_SSO_AUTOCREATE=1` 自动建号、默认 403「此账号尚未在 claude-bridge 开通」。缺 `X-Portal-Sub` = 未登录，不按用户名兜底。本地用户名不随门户改名；页面上显示本次请求的 `X-User`
+- 设置映射：`claude-bridge users map <用户名> <门户ID>` / `users unmap <用户名>`，管理页「门户 ID」，`POST /api/admin/users/<id>/portal-user {"portal_sub": …}`；`/api/admin/users` 的每行多了 `portal_sub`
 - `deploy/vps/compose.yml` 加 `SZYYW_SSO` / `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN`（默认全关）；`szyyw-auth` 进 `[serve]` 依赖（worker 与嵌入式宿主不需要）
 
 ## v0.3.5 — 2026-10-01

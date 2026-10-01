@@ -101,9 +101,9 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--password", help="default: prompt (or generate when stdin is not a terminal)")
     ue = us.add_parser("enable", help="re-enable a disabled account")
     ue.add_argument("username")
-    um = us.add_parser("map", help="portal SSO: let portal account PORTAL_USER (X-User) act as USERNAME's row")
+    um = us.add_parser("map", help="portal SSO: let the portal account with id PORTAL_SUB (X-Portal-Sub) act as USERNAME's row")
     um.add_argument("username")
-    um.add_argument("portal_user")
+    um.add_argument("portal_sub")
     uu = us.add_parser("unmap", help="portal SSO: remove USERNAME's portal mapping")
     uu.add_argument("username")
 
@@ -222,8 +222,8 @@ def cmd_users(args: argparse.Namespace) -> int:
         if args.users_cmd == "list":
             for u in accounts.users():
                 flags = " [停用]" if u["disabled"] else ""
-                if u.get("portal_user"):
-                    flags += f"  门户={u['portal_user']}"
+                if u.get("portal_sub"):
+                    flags += f"  门户ID={u['portal_sub']}"
                 print(f"{u['id']:>4}  {u['username']:<20} {u['role']:<6} {u['display_name'] or '':<16} "
                       f"最近 {u['last_seen_at'] or '—'}{flags}")
             return 0
@@ -248,9 +248,9 @@ def cmd_users(args: argparse.Namespace) -> int:
             accounts.update(user["id"], {"disabled": False})
             print(f"已启用 {user['username']}")
         elif args.users_cmd in ("map", "unmap"):
-            before = user.get("portal_user")
-            target = args.portal_user if args.users_cmd == "map" else None
-            after = accounts.set_portal_user(user["id"], target)["portal_user"]
+            before = user.get("portal_sub")
+            target = args.portal_sub if args.users_cmd == "map" else None
+            after = accounts.set_portal_sub(user["id"], target)["portal_sub"]
             print(f"{user['username']}（id {user['id']}）门户映射：{before or '—'} → {after or '—'}")
         return 0
     except BridgeError as e:
