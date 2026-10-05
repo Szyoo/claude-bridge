@@ -1,5 +1,7 @@
 # vultr-jp 部署：对外只经 Caddy（ingress 网络），刻意不写任何 ports:
 # Docker 的 iptables 会绕过 ufw，publish 端口 = 直接暴露公网，勿改。
+# 部署：推送 main 即上线（VPS 上 git clone + deploy-app.sh：build → up -d --no-deps → 健康检查，失败回滚）。
+#       手动操作只用 `up -d --no-deps <服务>`，别 `compose down`。
 # 显式项目名：别的项目也在 deploy/vps 下，默认都叫 vps，会互相当成 orphan。
 name: claude-bridge
 

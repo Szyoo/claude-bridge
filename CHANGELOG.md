@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## 未发布
+
+- **部署改为 git clone + 推送即上线**：VPS 的 `/opt/claude-bridge` 现在是 git clone，由平台的 `deploy-app.sh`（`szyyw-autodeploy` 每 2 分钟）部署 main，健康检查失败自动回滚。`scripts/deploy-vps.sh` 不再 rsync：检查在 main / 工作区干净 / 已推送后 ssh 触发立即部署，新增 `--rollback <ref>`、`--status`，去掉 `--dry-run`
+- **自动升级共享包**：`scripts/upgrade-shared.sh` + `.github/workflows/upgrade-shared.yml`（每 6 小时 / 手动）检测 `szyyw-auth` 与 `@szyyw/design` 的上游最新正式 tag，升级（含 vendored 副本）后跑 ruff + pytest，通过才以 bot 身份推到 main；失败不推送
+
 ## v0.4.2 — 2026-10-05
 
 - **管理员查看用户**：管理页的用户行显示最近一次访问的 IP · 设备，新增「查看」→ `/admin/users/<id>`：只读浏览该用户全部对话（Chat / Code·项目分组，消息含工具调用、图片）与访问记录。接口 `GET /api/admin/users/<id>/threads`、`…/threads/<tid>/messages`、`…/access`、`GET /api/admin/files/<id>`，全部只读：不改用户的当前对话、对话时间、最近在线，用户侧无任何痕迹
