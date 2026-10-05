@@ -44,7 +44,8 @@ body.bridge-page { margin: 0; min-height: 100vh; background: var(--bridge-bg); c
 .bp-user .who { min-width: 0; }
 .bp-user .who .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-user .who .d { font-size: 12px; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-user .seen { font-size: 12px; color: var(--bridge-muted); }
+.bp-user .seen { font-size: 12px; color: var(--bridge-muted); min-width: 0; }
+.bp-user .seen .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-user .ops { display: flex; gap: 4px; justify-content: flex-end; }
 .bp-user.is-off .who, .bp-user.is-off .bp-meter { opacity: .55; }
 @media (max-width: 720px) {

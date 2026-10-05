@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from claude_bridge.errors import BadRequest, NotFound, QuotaExceeded
 from claude_bridge.principal import Principal
 from claude_bridge.service import LIMIT_WINDOWS, BridgeService
-from claude_bridge.store import BridgeStore
+from claude_bridge.store import BridgeStore, utc_text
 
 ROLES = ("admin", "user")
 WINDOW_LABELS = {"five_hour": "5 小时", "seven_day": "本周"}
@@ -60,6 +60,26 @@ PORTAL_MIGRATION = "ALTER TABLE bridge_users ADD COLUMN portal_sub TEXT"
 PORTAL_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_users_portal_sub ON bridge_users(portal_sub)"
 PORTAL_SUB_MAX = 64
 SSO_PW_HASH = "!sso"  # not a pbkdf2 string: verify_password() is always False, so the row can't log in locally
+
+# who used the site from where: one row per (user, ip, device) visit — repeated requests within VISIT_GAP extend
+# it — plus one row per local password login / failed attempt. Admin-only; nothing about it reaches the user.
+ACCESS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS bridge_access (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER,
+  username   TEXT NOT NULL DEFAULT '',
+  kind       TEXT NOT NULL DEFAULT 'visit' CHECK (kind IN ('visit','login','login_failed')),
+  ip         TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  first_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  last_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  hits       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_access_user ON bridge_access(user_id, last_at);
+"""
+VISIT_GAP = 1800  # seconds without requests that start a new visit row
+ACCESS_TOUCH_EVERY = 60  # at most one DB write per (user, ip, device) per minute
+ACCESS_KEEP_DAYS = 180
 
 DEFAULT_QUOTA: dict[str, Any] = {"cap_5h_usd": None, "cap_7d_usd": None, "guard_5h_pct": None, "guard_7d_pct": None}
 LIMIT_FIELD = {"five_hour": "limit_5h_pct", "seven_day": "limit_7d_pct"}
@@ -164,8 +184,11 @@ class Accounts:
         self.tz = ZoneInfo(tz) if tz else None
         self.service: BridgeService | None = None  # set by the app once the bridge exists (quota needs its windows)
         self._seen: dict[int, float] = {}
+        self._access_seen: dict[tuple[int, str, str], float] = {}
+        self._access_pruned = 0.0
         with store.lock:
             store.conn.executescript(SCHEMA)
+            store.conn.executescript(ACCESS_SCHEMA)
             cols = [r[1] for r in store.conn.execute("PRAGMA table_info(bridge_users)")]
             if "portal_sub" not in cols:
                 store.conn.execute(PORTAL_MIGRATION)
@@ -258,6 +281,43 @@ class Accounts:
         if now - self._seen.get(uid, 0) > LAST_SEEN_EVERY:
             self._seen[uid] = now
             self.store._x("UPDATE bridge_users SET last_seen_at=datetime('now') WHERE id=?", (uid,))
+
+    # ---------------- access log (admin only) ----------------
+
+    def record_access(self, user: dict[str, Any] | None, kind: str, ip: str, user_agent: str, *, username: str = "") -> None:
+        """`visit` rows are merged per (user, ip, device) while requests keep coming; logins are one row each."""
+        uid = user["id"] if user else None
+        name = (user or {}).get("username") or username
+        ip, ua = (ip or "")[:64], (user_agent or "")[:300]
+        now = time.time()
+        if kind == "visit":
+            key = (uid or 0, ip, ua)
+            if now - self._access_seen.get(key, 0) < ACCESS_TOUCH_EVERY:
+                return
+            self._access_seen[key] = now
+            cutoff = utc_text(now - VISIT_GAP)
+            row = self.store._one(
+                "SELECT id FROM bridge_access WHERE user_id=? AND kind='visit' AND ip=? AND user_agent=? AND last_at>=? "
+                "ORDER BY id DESC LIMIT 1", (uid, ip, ua, cutoff))
+            if row:
+                self.store._x("UPDATE bridge_access SET last_at=datetime('now'), hits=hits+1 WHERE id=?", (row["id"],))
+                return
+        self.store._x("INSERT INTO bridge_access(user_id, username, kind, ip, user_agent) VALUES(?,?,?,?,?)",
+                      (uid, name[:64], kind, ip, ua))
+        if now - self._access_pruned > 86400:
+            self._access_pruned = now
+            self.store._x("DELETE FROM bridge_access WHERE last_at < ?", (utc_text(now - ACCESS_KEEP_DAYS * 86400),))
+
+    def access_log(self, uid: int, limit: int = 200) -> list[dict[str, Any]]:
+        return self.store._q("SELECT * FROM bridge_access WHERE user_id=? ORDER BY last_at DESC, id DESC LIMIT ?", (uid, limit))
+
+    def last_access(self) -> dict[int, dict[str, Any]]:
+        """Each user's most recent visit / login (for the user list)."""
+        rows = self.store._q(
+            "SELECT a.* FROM bridge_access a JOIN (SELECT user_id, MAX(last_at) AS m FROM bridge_access "
+            "WHERE user_id IS NOT NULL AND kind != 'login_failed' GROUP BY user_id) b ON a.user_id=b.user_id AND a.last_at=b.m "
+            "ORDER BY a.id")
+        return {r["user_id"]: r for r in rows}
 
     def count(self, *, role: str | None = None, active: bool = False) -> int:
         where, params = ["1=1"], []
@@ -364,6 +424,7 @@ class Accounts:
         if user["role"] == "admin" and not user["disabled"] and self.count(role="admin", active=True) <= 1:
             raise BadRequest("至少要保留一个可用的管理员")
         names = self.store.delete_owner(str(uid))
+        self.store._x("DELETE FROM bridge_access WHERE user_id=?", (uid,))
         self.store._x("DELETE FROM bridge_users WHERE id=?", (uid,))
         return names
 

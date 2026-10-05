@@ -50,6 +50,16 @@ export function fmtSeen(text) {
   return `${Math.round(m / 1440)} 天前`;
 }
 
+/** "iPhone · Safari" from a User-Agent string (rough, for the admin's access log). */
+export function fmtDevice(ua) {
+  if (!ua) return '未知设备';
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
+    : /Mac OS X|Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
+  const br = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
+    : /(CriOS|Chrome)\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /curl|python|httpx|requests/i.test(ua) ? '脚本' : '';
+  return [os, br].filter(Boolean).join(' · ') || ua.slice(0, 40);
+}
+
 /** A usage bar: `used` fills it, `limit` (if any) draws a tick; both in percent. */
 export function meterHtml({ label, used, limit, sub = '', right = null }) {
   const pct = used == null ? 0 : Math.min(100, used);

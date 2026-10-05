@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.4.2 — 2026-10-05
+
+- **管理员查看用户**：管理页的用户行显示最近一次访问的 IP · 设备，新增「查看」→ `/admin/users/<id>`：只读浏览该用户全部对话（Chat / Code·项目分组，消息含工具调用、图片）与访问记录。接口 `GET /api/admin/users/<id>/threads`、`…/threads/<tid>/messages`、`…/access`、`GET /api/admin/files/<id>`，全部只读：不改用户的当前对话、对话时间、最近在线，用户侧无任何痕迹
+- **访问记录** `bridge_access`：每个已登录请求记 IP（Caddy 的 `X-Forwarded-For`）与 User-Agent，同一用户 + IP + 设备 30 分钟内的请求合并为一行（首次 / 末次 / 次数，每分钟最多写一次库）；本地密码模式另记登录与登录失败；保留 180 天，删用户时一起删
+- 修：管理页编辑弹窗里点「重置密码 / 停用 / 删除」会先把弹窗重置成「新建用户」，导致这三个操作无效
+
 ## v0.4.1 — 2026-10-02
 
 - **门户 SSO 下的右上角工具**：`serve --multi-user` 在 `SZYYW_SSO=1` 时，app / account / admin 页面加载 [@szyyw/design](https://github.com/Szyoo/szyyw-design) v0.8.0 的应用切换器（`mountAppSwitcher`）与账户菜单（`mountAccountMenu`）；`<html>` 上标 `data-sso="1" data-portal="<PORTAL_ORIGIN>" data-scheme="auto"`（服务端注入，模板不变）
