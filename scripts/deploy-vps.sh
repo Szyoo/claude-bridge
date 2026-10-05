@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 立即部署到 vultr-jp（平常不需要：推送 main 后，VPS 的 szyyw-autodeploy 每 2 分钟会自动拉取并部署）。
+# 立即部署到 vultr-jp（平常不需要：推送 main 后，VPS 的 szyyw-autodeploy 每 10 分钟会自动拉取并部署）。
 # 用法：bash scripts/deploy-vps.sh                   部署 main 最新提交
 #       bash scripts/deploy-vps.sh --rollback <ref>  回滚到某个 tag / 提交（deploy-app.sh --ref；之后自动部署会跳过非 main 的状态）
 #       bash scripts/deploy-vps.sh --status          查看部署状态
