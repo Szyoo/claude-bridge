@@ -21,7 +21,7 @@ dependencies = [
 serve = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
-    "szyyw-auth @ https://github.com/Szyoo/szyyw-auth/archive/refs/tags/v0.1.0.tar.gz#subdirectory=python",
+    "szyyw-auth @ https://github.com/Szyoo/szyyw-auth/archive/refs/tags/v0.2.0.tar.gz#subdirectory=python",
 ]
 dev = ["pytest>=8", "httpx>=0.27", "anyio>=4", "ruff>=0.6"]
 
