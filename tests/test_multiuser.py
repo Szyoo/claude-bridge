@@ -452,3 +452,63 @@ def test_code_projects_lifecycle_and_scopes(app, agent):
     agent.post(f"/api/agent/jobs/{d['id']}/finish", json={"ok": True, "result": "{}"})
     assert "claude-bridge" not in [p["name"] for p in alice.get("/api/projects").json()["items"]]
     assert bob.delete("/api/projects/scratch").status_code == 404
+
+
+# ---------------- admin: access log and read-only conversation view ----------------
+
+
+def test_access_log_records_visits_and_logins(app):
+    acc: Accounts = app.state.accounts
+    ua = {"user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605.1", "x-forwarded-for": "203.0.113.7"}
+    c = TestClient(app, follow_redirects=False, headers=ua)
+    c.post("/login", data={"username": "alice", "password": "nope"})
+    c.post("/login", data={"username": "alice", "password": PW})
+    for _ in range(3):
+        c.get("/api/me")
+    TestClient(app, headers={**ua, "x-forwarded-for": "198.51.100.9"}, cookies=dict(c.cookies)).get("/api/me")
+    uid = acc.by_name("alice")["id"]
+    rows = acc.access_log(uid)
+    kinds = sorted((r["kind"], r["ip"]) for r in rows)
+    assert kinds == [("login", "203.0.113.7"), ("login_failed", "203.0.113.7"), ("visit", "198.51.100.9"), ("visit", "203.0.113.7")]
+    assert all("iPhone" in r["user_agent"] for r in rows)
+
+    boss = login(app, "boss")
+    items = boss.get(f"/api/admin/users/{uid}/access").json()["items"]
+    assert len(items) == 4
+    row = next(u for u in boss.get("/api/admin/users").json()["items"] if u["id"] == uid)
+    assert row["last_access"]["ip"] in ("203.0.113.7", "198.51.100.9")
+    assert c.get(f"/api/admin/users/{uid}/access").status_code == 403  # not for users
+    assert "access" not in json.dumps(c.get("/api/me").json())
+
+
+def test_admin_reads_conversations_without_the_user_noticing(app, agent):
+    acc: Accounts = app.state.accounts
+    alice, boss = login(app, "alice"), login(app, "boss")
+    uid = acc.by_name("alice")["id"]
+    t = run_turn(alice, agent, 0.01, text="私人问题")
+    second = alice.post("/api/threads", json={}).json()["thread"]  # alice's current thread is now `second`
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    fid = alice.post("/api/files", content=png).json()["id"]
+    alice.post(f"/api/threads/{second}/messages", json={"text": "看图", "files": [fid]})
+
+    before_threads = alice.get("/api/threads").json()
+    before_seen = acc.get(uid)["last_seen_at"]
+
+    d = boss.get(f"/api/admin/users/{uid}/threads").json()
+    assert {x["id"] for x in d["items"]} >= {t["thread"], second} and d["user"]["username"] == "alice"
+    msgs = boss.get(f"/api/admin/users/{uid}/threads/{t['thread']}/messages").json()["items"]
+    assert [m["role"] for m in msgs][-2:] == ["user", "assistant"] and msgs[-2]["content"] == "私人问题"
+    assert any(e["type"] == "usage" for e in msgs[-1]["events"])
+    assert boss.get(f"/api/admin/files/{fid}").status_code == 200
+    assert boss.get(f"/admin/users/{uid}").status_code == 200
+    assert boss.get(f"/api/admin/users/{uid}/threads/nope/messages").status_code == 404
+    bob_uid = acc.by_name("bob")["id"]
+    assert boss.get(f"/api/admin/users/{bob_uid}/threads/{t['thread']}/messages").status_code == 404  # wrong owner
+
+    # nothing changed for alice: same current thread, same order / timestamps, same last-seen
+    assert alice.get("/api/threads").json() == before_threads
+    assert acc.get(uid)["last_seen_at"] == before_seen
+    # and users can't reach any of it
+    for path in (f"/api/admin/users/{uid}/threads", f"/api/admin/files/{fid}", f"/admin/users/{uid}"):
+        r = alice.get(path)
+        assert r.status_code in (303, 403), (path, r.status_code)

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>claude-bridge · 用户</title>
+  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.12/marked.min.js" defer></script>
+  <style>
+    .au-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bridge-user); margin-bottom: 14px; }
+    .au-tabs button { border: 0; background: transparent; color: var(--bridge-muted); font: inherit; font-weight: 600; padding: 5px 14px; border-radius: 6px; cursor: pointer; }
+    .au-tabs button[aria-selected="true"] { background: var(--bridge-panel); color: var(--bridge-fg); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+    .au-chat { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 12px; align-items: start; }
+    .au-threads { display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 210px); overflow: auto; padding: 8px; }
+    .au-group { font-size: 11.5px; font-weight: 600; color: var(--bridge-muted); padding: 10px 8px 4px; }
+    .au-group:first-child { padding-top: 2px; }
+    .au-thread { text-align: left; border: 0; background: transparent; color: var(--bridge-fg); font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; flex-direction: column; min-width: 0; }
+    .au-thread:hover { background: var(--bridge-hover); }
+    .au-thread.active { background: var(--bridge-user); }
+    .au-thread .t, .au-thread .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .au-thread .m { font-size: 11.5px; color: var(--bridge-muted); }
+    .au-view { min-width: 0; padding: 0; overflow: hidden; }
+    .au-view-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--bridge-border); }
+    .au-view-head .t { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .au-msgs { max-height: calc(100vh - 250px); overflow: auto; padding: 14px 18px; font-size: 14px; }
+    .au-back { display: none; }
+    .au-access { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .au-access th { text-align: left; font-weight: 600; font-size: 12px; color: var(--bridge-muted); padding: 0 8px 6px; }
+    .au-access td { padding: 8px; border-top: 1px solid var(--bridge-border); vertical-align: top; }
+    .au-access td.ua { color: var(--bridge-muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .au-access .k-failed { color: var(--bridge-err); }
+    @media (max-width: 720px) {
+      .au-chat { grid-template-columns: 1fr; }
+      .au-chat.reading .au-list { display: none; }
+      .au-chat:not(.reading) .au-view { display: none; }
+      .au-threads, .au-msgs { max-height: none; }
+      .au-back { display: inline-block; }
+      .au-msgs { padding: 12px; }
+      .au-access td.ua, .au-access th.ua { display: none; }
+    }
+  </style>
+</head>
+<body class="bridge-root bridge-page">
+  <main class="bp-wrap">
+    <header class="bp-head">
+      <h1 id="who">用户</h1>
+      <a href="/admin">← 管理</a>
+    </header>
+    <p class="bp-help" style="margin:-12px 0 14px">只读查看：这里的操作不会改动对方的任何数据，对方页面上也看不到。</p>
+    <div class="au-tabs" role="tablist">
+      <button type="button" role="tab" data-tab="chat" aria-selected="true">对话</button>
+      <button type="button" role="tab" data-tab="access" aria-selected="false">访问记录</button>
+    </div>
+
+    <section id="tab-chat" class="au-chat">
+      <div class="bp-card au-list" style="padding:0"><div class="au-threads" id="threads"></div></div>
+      <div class="bp-card au-view">
+        <div class="au-view-head"><button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny au-back" id="back">← 列表</button><span class="t" id="title">选一段对话</span><span class="bp-help" id="meta"></span></div>
+        <div class="au-msgs" id="msgs"><p class="bp-help" style="margin:0">左边选一段对话查看内容。</p></div>
+      </div>
+    </section>
+
+    <section id="tab-access" class="bp-card" hidden>
+      <p class="bp-help" style="margin:0 0 10px">同一 IP、同一设备连续访问合并为一行（30 分钟内没有请求才算新的一次）；保留 180 天。门户登录模式下登录发生在门户，这里记的是访问。</p>
+      <div style="overflow-x:auto"><table class="au-access"><thead><tr><th>时间</th><th>IP</th><th>设备</th><th class="ua">User-Agent</th></tr></thead><tbody id="access"></tbody></table></div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { renderTurn } from '/static/bridge/bridge-widget.js';
+    import { api, esc, toast, fmtSeen, fmtDevice } from '/static/bridge/bridge-pages.js';
+    const $ = (s) => document.querySelector(s);
+    const uid = Number(location.pathname.split('/').pop());
+    const KIND = { visit: '访问', login: '登录', login_failed: '登录失败' };
+    let current = null;
+
+    const local = (t) => t ? new Date(t.replace(' ', 'T') + 'Z').toLocaleString('zh-CN', { hour12: false }) : '';
+
+    for (const b of document.querySelectorAll('[data-tab]')) b.addEventListener('click', () => {
+      for (const x of document.querySelectorAll('[data-tab]')) x.setAttribute('aria-selected', String(x === b));
+      $('#tab-chat').hidden = b.dataset.tab !== 'chat';
+      $('#tab-access').hidden = b.dataset.tab !== 'access';
+      if (b.dataset.tab === 'access') loadAccess();
+    });
+
+    async function loadThreads() {
+      const d = await api('GET', `/api/admin/users/${uid}/threads`);
+      const u = d.user;
+      $('#who').textContent = `${u.display_name || u.username}（${u.username}）`;
+      document.title = `claude-bridge · ${u.username}`;
+      const groups = new Map([['', []]]);
+      for (const t of d.items) {
+        const key = t.scope || '';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(t);
+      }
+      const label = (k) => k === '' ? 'Chat' : k.startsWith('code:') ? `Code · ${k.slice(5)}` : k;
+      const html = [...groups].filter(([, ts]) => ts.length).map(([k, ts]) =>
+        `<div class="au-group">${esc(label(k))}</div>` + ts.map(t =>
+          `<button type="button" class="au-thread" data-id="${esc(t.id)}"><span class="t">${esc(t.title || '新对话')}</span>`
+          + `<span class="m">${t.n} 条 · ${esc(fmtSeen(t.updated_at))}</span></button>`).join('')).join('');
+      $('#threads').innerHTML = html || '<p class="bp-help" style="margin:8px">还没有对话。</p>';
+    }
+
+    async function openThread(id) {
+      current = id;
+      for (const b of document.querySelectorAll('.au-thread')) b.classList.toggle('active', b.dataset.id === id);
+      $('#tab-chat').classList.add('reading');
+      $('#msgs').innerHTML = '<p class="bp-help" style="margin:0">加载中…</p>';
+      let d;
+      try { d = await api('GET', `/api/admin/users/${uid}/threads/${encodeURIComponent(id)}/messages`); } catch (e) { toast(e.message, true); return; }
+      if (current !== id) return;
+      const th = d.thread;
+      $('#title').textContent = th.title || '新对话';
+      $('#meta').textContent = `${th.scope ? (th.scope.startsWith('code:') ? `Code · ${th.scope.slice(5)}` : th.scope) : 'Chat'} · ${d.items.length} 条`;
+      const box = $('#msgs');
+      box.innerHTML = '';
+      for (const m of d.items) {
+        const el = document.createElement('div');
+        renderTurn(el, m, { strings: { me: '对方' }, fileUrl: (fid) => `/api/admin/files/${encodeURIComponent(fid)}` });
+        box.appendChild(el);
+      }
+      if (!d.items.length) box.innerHTML = '<p class="bp-help" style="margin:0">这段对话还没有消息。</p>';
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function loadAccess() {
+      try {
+        const d = await api('GET', `/api/admin/users/${uid}/access`);
+        $('#access').innerHTML = d.items.map(a => {
+          const span = a.first_at === a.last_at ? local(a.last_at) : `${local(a.first_at)} – ${local(a.last_at).split(' ').pop()}`;
+          const kind = a.kind === 'visit' ? (a.hits > 1 ? `${a.hits} 次请求` : '') : `<span class="${a.kind === 'login_failed' ? 'k-failed' : ''}">${KIND[a.kind]}</span>`;
+          return `<tr><td>${esc(span)}${kind ? `<div class="bp-help">${kind}</div>` : ''}</td><td>${esc(a.ip || '—')}</td>`
+            + `<td>${esc(fmtDevice(a.user_agent))}</td><td class="ua" title="${esc(a.user_agent)}">${esc(a.user_agent)}</td></tr>`;
+        }).join('') || '<tr><td colspan="4" class="bp-help">还没有记录。</td></tr>';
+      } catch (e) { toast(e.message, true); }
+    }
+
+    $('#threads').addEventListener('click', (e) => { const b = e.target.closest('[data-id]'); if (b) openThread(b.dataset.id); });
+    $('#back').addEventListener('click', () => $('#tab-chat').classList.remove('reading'));
+    loadThreads().catch(e => toast(e.message, true));
+  </script>
+</body>
+</html>

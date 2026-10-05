@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from claude_bridge.accounts import Accounts, generate_password, public_user, verify_password
@@ -217,9 +217,11 @@ def create_multiuser_app(
         return user
 
     def signed_in(request: Request) -> dict[str, Any] | None:
-        if sso:
-            return sso_user(request)
-        return accounts.verify_token(request.cookies.get(COOKIE_NAME))
+        user = sso_user(request) if sso else accounts.verify_token(request.cookies.get(COOKIE_NAME))
+        if user and not request.scope.get("bridge_access_logged"):  # the access log (admin only), once per request
+            request.scope["bridge_access_logged"] = True
+            accounts.record_access(user, "visit", client_ip(request), request.headers.get("user-agent", ""))
+        return user
 
     def portal_login(request: Request, path: str | None = None) -> RedirectResponse:
         """Unauthenticated browser under SSO: the portal's login, coming back to `path` (default: this URL)."""
@@ -311,11 +313,14 @@ def create_multiuser_app(
         if not user:
             limiter.record_failure(ip)
             limiter.record_failure(name_key)
+            accounts.record_access(accounts.by_name(username), "login_failed", ip, request.headers.get("user-agent", ""),
+                                   username=username.strip())
             return RedirectResponse(f"/login?err=1{back}", status_code=303)
         if user["disabled"]:
             return RedirectResponse(f"/login?err=disabled{back}", status_code=303)
         limiter.clear(ip)
         limiter.clear(name_key)
+        accounts.record_access(user, "login", ip, request.headers.get("user-agent", ""))
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, user)
         return resp
@@ -361,13 +366,53 @@ def create_multiuser_app(
 
     # ---------------- admin ----------------
 
-    def user_row(u: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
-        return {**public_user(u, admin_view=True), "usage": accounts.usage_for(u, account)}
+    def user_row(u: dict[str, Any], account: dict[str, Any], last: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
+        a = (last if last is not None else accounts.last_access()).get(u["id"])
+        return {**public_user(u, admin_view=True), "usage": accounts.usage_for(u, account),
+                "last_access": {k: a[k] for k in ("ip", "user_agent", "last_at", "kind")} if a else None}
+
+    # ---------------- admin: a user's access log and conversations (read only) ----------------
+    # Nothing here writes: no current-thread change, no updated_at touch, no last_seen — the user can't tell.
+
+    def target_user(uid: int) -> dict[str, Any]:
+        u = accounts.get(uid)
+        if not u:
+            raise HTTPException(status_code=404, detail="没有这个用户")
+        return u
+
+    @app.get("/admin/users/{uid}", response_class=HTMLResponse)
+    def admin_user_page(request: Request, uid: int):
+        return page(request, "admin-user.html", admin=True)
+
+    @app.get("/api/admin/users/{uid}/access")
+    def admin_user_access(uid: int, limit: int = 200, admin: dict[str, Any] = Depends(api_admin)):
+        target_user(uid)
+        return {"items": accounts.access_log(uid, max(1, min(limit, 1000)))}
+
+    @app.get("/api/admin/users/{uid}/threads")
+    def admin_user_threads(uid: int, admin: dict[str, Any] = Depends(api_admin)):
+        u = target_user(uid)
+        return {"user": public_user(u, admin_view=True), "items": store.threads(None, str(uid)),
+                "projects": store.projects(str(uid))}
+
+    @app.get("/api/admin/users/{uid}/threads/{thread_id}/messages")
+    def admin_user_messages(uid: int, thread_id: str, limit: int = 500, admin: dict[str, Any] = Depends(api_admin)):
+        target_user(uid)
+        th = store.get_thread(thread_id)
+        if not th or th.get("owner") != str(uid):
+            raise HTTPException(status_code=404, detail="没有这个对话")
+        return {"thread": th, "items": store.messages(thread_id, limit=max(1, min(limit, 2000)), tail=True)}
+
+    @app.get("/api/admin/files/{file_id}")
+    def admin_file(file_id: str, admin: dict[str, Any] = Depends(api_admin)):
+        path, mime = _svc(bridge.service.file_for_download, file_id, None)
+        return FileResponse(path, media_type=mime, headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
     @app.get("/api/admin/users")
     def admin_users(admin: dict[str, Any] = Depends(api_admin)):
         account = accounts.account_status()
-        out = {"items": [user_row(u, account) for u in accounts.users()], "account": account,
+        last = accounts.last_access()
+        out = {"items": [user_row(u, account, last) for u in accounts.users()], "account": account,
                "quota": accounts.quota_config(), "me": admin["id"]}
         if sso:
             out["sso"] = {"portal": portal, "autocreate": sso_autocreate, "me_portal_user": admin.get("portal_user")}
