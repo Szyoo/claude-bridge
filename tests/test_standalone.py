@@ -46,3 +46,13 @@ def test_no_auth_mode_and_missing_password(tmp_path):
     assert c.get("/").status_code == 200 and c.get("/api/status").status_code == 200
     with pytest.raises(RuntimeError):
         create_standalone_app(db_path=tmp_path / "x.db", agent_token="tok")
+
+
+def test_site_icons_public_and_linked(tmp_path):
+    app = create_standalone_app(db_path=tmp_path / "s.db", password="pw", secret="s")
+    c = TestClient(app, follow_redirects=False)  # not logged in
+    for path, ctype in (("/favicon.svg", "image/svg+xml"), ("/favicon.ico", "image/x-icon"), ("/apple-touch-icon.png", "image/png")):
+        r = c.get(path)
+        assert r.status_code == 200 and r.headers["content-type"].startswith(ctype) and r.content
+    login = c.get("/login").text
+    assert 'href="/favicon.svg"' in login and 'href="/favicon.ico"' in login and 'href="/apple-touch-icon.png"' in login

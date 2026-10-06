@@ -512,3 +512,10 @@ def test_admin_reads_conversations_without_the_user_noticing(app, agent):
     for path in (f"/api/admin/users/{uid}/threads", f"/api/admin/files/{fid}", f"/admin/users/{uid}"):
         r = alice.get(path)
         assert r.status_code in (303, 403), (path, r.status_code)
+
+
+def test_site_icons_public_without_login(app):
+    c = TestClient(app, follow_redirects=False)
+    for path in ("/favicon.svg", "/favicon.ico", "/apple-touch-icon.png"):
+        assert c.get(path).status_code == 200
+    assert 'href="/favicon.svg"' in c.get("/login").text

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from claude_bridge.auth import COOKIE_NAME, PasswordAuth
 from claude_bridge.server import create_bridge, static_dir
@@ -18,6 +18,23 @@ def client_ip(request: Request) -> str:
     if fwd:
         return fwd.split(",")[0].strip()
     return request.client.host if request.client else "?"
+
+
+SITE_ICONS = {
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+}
+
+
+def mount_site_icons(app: FastAPI) -> None:
+    """Root-level favicon routes for the standalone site only (never auth-gated; embedding hosts keep their own icons)."""
+    site = static_dir() / "site"
+    for path, (name, media_type) in SITE_ICONS.items():
+        def icon(name: str = name, media_type: str = media_type) -> FileResponse:
+            return FileResponse(site / name, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+        app.add_api_route(path, icon, methods=["GET"], include_in_schema=False)
 
 
 def create_standalone_app(
@@ -46,6 +63,7 @@ def create_standalone_app(
     app.state.auth = auth
     bridge.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix="/static/bridge")
     pages = static_dir()
+    mount_site_icons(app)
 
     def authed(request: Request) -> bool:
         return auth.verify_token(request.cookies.get(COOKIE_NAME))

@@ -32,8 +32,9 @@ claude-bridge = "claude_bridge.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-# vendor/szyyw-design: @szyyw/design for the SSO corner tools (scripts/update-design.sh); "static/*" does not recurse
-"claude_bridge" = ["static/*", "static/vendor/szyyw-design/*"]
+# vendor/szyyw-design: @szyyw/design for the SSO corner tools (scripts/update-design.sh); "static/*" does not recurse;
+# static/site: favicon files of the standalone site, from szyyw-platform/branding
+"claude_bridge" = ["static/*", "static/vendor/szyyw-design/*", "static/site/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

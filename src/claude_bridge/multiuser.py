@@ -31,7 +31,7 @@ from claude_bridge.errors import BridgeError
 from claude_bridge.principal import Principal
 from claude_bridge.server import create_bridge, static_dir
 from claude_bridge.service import PROJECT_SCOPE_PREFIX, BridgeConfig
-from claude_bridge.standalone import client_ip
+from claude_bridge.standalone import client_ip, mount_site_icons
 from claude_bridge.store import BridgeStore
 
 log = logging.getLogger(__name__)
@@ -243,6 +243,7 @@ def create_multiuser_app(
     app.state.accounts = accounts
     bridge.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix="/static/bridge")
     pages = static_dir()
+    mount_site_icons(app)
     limiter = LoginLimiter()
 
     def set_session(resp: Response, user: dict[str, Any]) -> None:
