@@ -7,8 +7,10 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/tokens.css" />
-  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/components.css" />
+  <link rel="preconnect" href="{{design_origin}}" crossorigin />
+  <link rel="stylesheet" href="{{design_base}}/tokens.css" />
+  <link rel="stylesheet" href="{{design_base}}/components.css" />
+  <script type="importmap">{"imports": {"@szyyw/design/": "{{design_base}}/"}}</script>
   <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
   <script type="module" src="/static/bridge/corner-boot.js"></script>
 </head>

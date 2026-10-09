@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.6.3 — 2026-10-10
+
+- **站点页面改从 CDN 加载 @szyyw/design，不再 vendor**：删除 `static/vendor/szyyw-design/`（并 gitignore），`pyproject.toml` 的 package-data 不再打包它——Python 包（宿主嵌入用的 `bridge-widget.*`）从此不含设计包文件，嵌入场景本来就不加载设计包，不受影响。页面（登录 / 账户 / 管理 / 查看用户 / Code 项目 / 403 / 单密码模式）从 `https://design.szyyw.xyz/<DESIGN_VERSION>/` 加载 `tokens.css` + `components.css`，并加 import map `"@szyyw/design/" → DESIGN_BASE`，`corner-boot.js` / `bridge-pages.js` 改为 `import … from '@szyyw/design/…'`。版本号只在 `standalone.py` 的 `DESIGN_VERSION`，`render_page` 填 `{{design_base}}` / `{{design_origin}}` 占位符；环境变量 `DESIGN_BASE` 可覆盖（本地离线开发指向本机静态服务）
+- 设计包升到 v0.15.0（新增的 TechText 未启用）
+- `scripts/update-design.sh [tag]` 改为「确认 CDN 上有该版本 → 改 `DESIGN_VERSION`」，不再调上游 `sync.sh`；`upgrade-shared.sh` / bot workflow 随之改读写 `standalone.py`
+
 ## v0.6.2 — 2026-10-10
 
 - 修复侧边栏会话列表被压扁：会话一多，`.bridge-threads`（flex 列 + `overflow:auto`）把每条 `.bridge-thread`（自带 `overflow:hidden`，最小高度因此为 0）按比例压缩，标题下沿被裁、条目重叠。改为 `.bridge-thread { flex-shrink: 0 }`，列表改为滚动

@@ -11,3 +11,5 @@ dist/
 claude-bridge-files/
 .env
 logs/
+# @szyyw/design comes from https://design.szyyw.xyz/<DESIGN_VERSION>/ (standalone.py); never vendor it again
+src/claude_bridge/static/vendor/szyyw-design/

@@ -13,6 +13,7 @@ from claude_bridge.accounts import Accounts
 from claude_bridge.cli import main
 from claude_bridge.multiuser import create_multiuser_app
 from claude_bridge.store import BridgeStore
+from conftest import CDN, assert_design_refs
 
 PW = "password-1"
 PORTAL = "https://portal.test"
@@ -109,7 +110,7 @@ def test_unmapped_autocreate_off_is_403(db, monkeypatch):
     assert r.status_code == 403 and "尚未在 claude-bridge 开通" in r.json()["detail"]
     page = c.get("/")
     assert page.status_code == 403 and "尚未在 claude-bridge 开通" in page.text
-    assert "vendor/szyyw-design/components.css" in page.text and f'href="{PORTAL}"' in page.text and "data-sso=\"1\"" in page.text
+    assert f"{CDN}/components.css" in page.text and f'href="{PORTAL}"' in page.text and "data-sso=\"1\"" in page.text
     assert "dave" not in rows(db)
 
 
@@ -275,11 +276,11 @@ def test_sso_pages_load_corner_tools(db, monkeypatch):
         assert r.status_code == 200, path
         # no appearance cookies: @szyyw/design defaults (nebula / default palette → no data-palette / dark)
         assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-theme="nebula" data-scheme="dark">' in r.text
-        assert "/static/bridge/vendor/szyyw-design/tokens.css" in r.text
-        assert "/static/bridge/vendor/szyyw-design/components.css" in r.text
+        assert_design_refs(r.text)
         assert "/static/bridge/corner-boot.js" in r.text
-    for f in ("corner-boot.js", "vendor/szyyw-design/chrome.js", "vendor/szyyw-design/components.css"):
-        assert c.get(f"/static/bridge/{f}").status_code == 200, f
+    assert c.get("/static/bridge/corner-boot.js").status_code == 200
+    # no vendored copy of the design package any more
+    assert c.get("/static/bridge/vendor/szyyw-design/chrome.js").status_code == 404
 
 
 def test_pages_render_appearance_cookies(db, monkeypatch):

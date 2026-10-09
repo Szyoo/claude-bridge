@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from claude_bridge.server import BridgeConfig, create_bridge
+from claude_bridge.standalone import DESIGN_VERSION
 from claude_bridge.store import BridgeStore
 
 
@@ -89,3 +90,16 @@ sys.exit({exit_code})
     )
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return str(script)
+
+
+CDN = f"https://design.szyyw.xyz/{DESIGN_VERSION}"
+
+
+def assert_design_refs(page: str, base: str = CDN) -> None:
+    """Every page loads @szyyw/design from one base (CDN by default): CSS links, the import map the static JS resolves
+    "@szyyw/design/…" through, and no unrendered placeholder or vendored path."""
+    assert f'<link rel="stylesheet" href="{base}/tokens.css" />' in page
+    assert f'<link rel="stylesheet" href="{base}/components.css" />' in page
+    assert f'<script type="importmap">{{"imports": {{"@szyyw/design/": "{base}/"}}}}</script>' in page
+    assert page.index('type="importmap"') < page.index('type="module"')
+    assert "{{design" not in page and "vendor/szyyw-design" not in page and "/latest/" not in page

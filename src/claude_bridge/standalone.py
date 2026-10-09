@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from pathlib import Path
 from urllib.parse import unquote
@@ -40,12 +41,31 @@ def mount_site_icons(app: FastAPI) -> None:
         app.add_api_route(path, icon, methods=["GET"], include_in_schema=False)
 
 
-# The pages' look comes from @szyyw/design (vendored under static/vendor/szyyw-design by scripts/update-design.sh): the
+# The pages' look comes from @szyyw/design, loaded from its CDN (https://design.szyyw.xyz/<tag>/, immutable per tag; no
+# vendored copy): the templates have {{design_base}} / {{design_origin}} placeholders that render_page fills, and an import
+# map "@szyyw/design/" → DESIGN_BASE so the static JS (corner-boot.js, bridge-pages.js) never names a version. The
 # templates load tokens.css + components.css + corner-boot.js (mountChrome: 🌗 / appearance always, app switcher + account
 # menu under portal SSO). Appearance is stored in the cb_theme / cb_palette / cb_scheme cookies (mountChrome cookiePrefix
 # "cb_", @szyyw/design appearanceCookieNames) and rendered onto <html> here, so the first paint has the right scheme
 # (DESIGN.md §2.1). The embedded widget never loads the design package.
 APPEARANCE_COOKIE_PREFIX = "cb_"
+# The one place the design package version lives (scripts/update-design.sh rewrites this line). Every design file of a
+# page must come from the same version (the modules import each other relatively). Never /latest/.
+DESIGN_VERSION = "v0.15.0"
+DESIGN_CDN = "https://design.szyyw.xyz"
+
+
+def design_base() -> str:
+    """`DESIGN_BASE` env (e.g. a local CORS static server over a szyyw-design checkout, for offline work) or the CDN
+    directory of DESIGN_VERSION. No trailing slash."""
+    return (os.environ.get("DESIGN_BASE") or f"{DESIGN_CDN}/{DESIGN_VERSION}").rstrip("/")
+
+
+def _origin(url: str) -> str:
+    m = re.match(r"^[a-z][a-z0-9+.-]*://[^/]+", url, re.I)
+    return m.group(0) if m else DESIGN_CDN
+
+
 _SCHEMES = ("auto", "dark", "light")
 _APPEARANCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
@@ -68,7 +88,10 @@ def appearance_attrs(cookies: dict[str, str]) -> str:
 
 
 def render_page(page: str, cookies: dict[str, str], portal: str | None) -> str:
-    """Put the appearance (and, under portal SSO, data-sso / data-portal for corner-boot.js) on `<html>`."""
+    """Put the appearance (and, under portal SSO, data-sso / data-portal for corner-boot.js) on `<html>`, and the design
+    package location into the {{design_base}} / {{design_origin}} placeholders (links + import map)."""
+    base = html.escape(design_base(), quote=True)
+    page = page.replace("{{design_base}}", base).replace("{{design_origin}}", html.escape(_origin(base), quote=True))
     attrs = appearance_attrs(cookies)
     if portal is not None:
         attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}"' + attrs
