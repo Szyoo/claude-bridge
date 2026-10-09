@@ -2,7 +2,6 @@
    Built on @szyyw/design (vendor/szyyw-design: tokens.css + components.css): cards are .glass.panel, forms
    .form-row/.field, buttons .btn/.btn-ghost, tags .pill, meters .bar, dialogs .overlay+.sheet, notices .callout,
    toasts toast.js. What is left here is bridge-only layout, on the package's tokens; names never reuse a package class. */
-[hidden] { display: none !important; }
 
 /* page column (account / admin / user) */
 .bp-wrap { max-width: 960px; margin: 0 auto; padding: 4px 16px 48px; }
