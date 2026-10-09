@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.6.2 — 2026-10-10
+
+- 修复侧边栏会话列表被压扁：会话一多，`.bridge-threads`（flex 列 + `overflow:auto`）把每条 `.bridge-thread`（自带 `overflow:hidden`，最小高度因此为 0）按比例压缩，标题下沿被裁、条目重叠。改为 `.bridge-thread { flex-shrink: 0 }`，列表改为滚动
+- 版本号补齐：v0.6.1 时 `_version.py` / `pyproject.toml` 仍是 0.6.0，本版一并改为 0.6.2
+
 ## v0.6.1 — 2026-10-09
 
 - 设计包升到 v0.14.2（毛玻璃 backdrop-filter 书写顺序修正、全局 `[hidden]` 隐藏）；删掉 `bridge-pages.css` 里重复的 `[hidden]` 兜底。组件（`bridge-widget.*`）无改动

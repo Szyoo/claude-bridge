@@ -76,7 +76,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-side-grip { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; cursor: col-resize; }
 .bridge-side-grip:hover, .bridge-dragging .bridge-side-grip { background: linear-gradient(to right, transparent 3px, var(--bridge-accent) 3px, var(--bridge-accent) 5px, transparent 5px); opacity: .6; }
 .bridge-threads { overflow: auto; display: flex; flex-direction: column; gap: 2px; min-height: 0; }
-.bridge-thread { text-align: left; padding: 6px 10px; border: 0; border-radius: var(--chat-radius); background: transparent; color: var(--bridge-fg); cursor: pointer; font: inherit; font-size: .928em; overflow: hidden; display: flex; flex-direction: column; gap: 1px; }
+.bridge-thread { text-align: left; padding: 6px 10px; border: 0; border-radius: var(--chat-radius); background: transparent; color: var(--bridge-fg); cursor: pointer; font: inherit; font-size: .928em; overflow: hidden; display: flex; flex-direction: column; gap: 1px; flex-shrink: 0; }
 .bridge-thread:hover { background: var(--bridge-hover); }
 .bridge-thread.active { background: var(--bridge-user); }
 .bridge-thread .t, .bridge-thread .p, .bridge-thread .m { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
