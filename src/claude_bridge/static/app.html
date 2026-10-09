@@ -22,7 +22,7 @@
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
-    import { api, esc, fmtPct, fmtSeen, toast } from '/static/bridge/bridge-pages.js';
+    import { api, esc, fmtPct, fmtSeen, toast, confirmTyped } from '/static/bridge/bridge-pages.js';
 
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
     const app = document.getElementById('app');
@@ -134,7 +134,7 @@
       const del = e.target.closest('[data-del]');
       if (del) {
         const name = del.dataset.del;
-        if (prompt(`删除项目「${name}」：目录里的文件和这个项目的对话都会删掉，无法恢复。\n输入项目名确认：`) !== name) return;
+        if (!await confirmTyped({ title: `删除项目「${name}」`, message: '目录里的文件和这个项目的对话都会删掉。', expect: name, okLabel: '删除项目' })) return;
         try { await api('DELETE', `/api/projects/${encodeURIComponent(name)}`); } catch (err) { toast(err.message, true); }
         return showHome();
       }

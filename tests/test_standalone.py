@@ -17,7 +17,9 @@ def test_password_login_flow(tmp_path):
     r = c.post("/login", data={"password": "pw"})
     assert r.status_code == 303 and r.headers["location"] == "/" and "bridge_session" in r.headers["set-cookie"]
     assert c.get("/").status_code == 200 and "bridge-widget" in c.get("/").text
-    assert "szyyw-design" not in c.get("/").text and "corner-boot" not in c.get("/").text  # SSO corner tools: multi-user only
+    page = c.get("/").text  # @szyyw/design look + 🌗 / appearance, never the portal switcher / account menu
+    assert "vendor/szyyw-design/components.css" in page and "corner-boot" in page and "data-sso" not in page
+    assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in page
     assert c.get("/api/status").status_code == 200
     assert c.get("/api/threads?scope=").json()["current"] == "main"
     assert c.get("/static/bridge/bridge-client.js").status_code == 200

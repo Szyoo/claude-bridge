@@ -109,6 +109,7 @@ def test_unmapped_autocreate_off_is_403(db, monkeypatch):
     assert r.status_code == 403 and "尚未在 claude-bridge 开通" in r.json()["detail"]
     page = c.get("/")
     assert page.status_code == 403 and "尚未在 claude-bridge 开通" in page.text
+    assert "vendor/szyyw-design/components.css" in page.text and f'href="{PORTAL}"' in page.text and "data-sso=\"1\"" in page.text
     assert "dave" not in rows(db)
 
 

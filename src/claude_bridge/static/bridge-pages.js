@@ -32,7 +32,8 @@ export function sheet(el) {
   overlay.className = 'overlay';
   overlay.append(el);
   el.hidden = false;
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  // Esc closes only the topmost sheet (a confirmation can sit on top of the user editor)
+  const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('body > .overlay')].pop() === overlay) close(); };
   function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
   overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-close]')) close(); });
   return {
@@ -40,6 +41,55 @@ export function sheet(el) {
     close,
     get isOpen() { return overlay.isConnected; },
   };
+}
+
+/**
+ * Two-step confirm for a destructive button (DESIGN §8): the first click turns it red into「再点一次确认」and shows
+ * `warning` (the impact) in `warnEl` (a .callout); a second click within 5 s returns true. Returns false while arming.
+ */
+export function armConfirm(btn, { warnEl = null, warning = '', label = '再点一次确认' } = {}) {
+  if (btn.dataset.armed) { disarm(btn, warnEl); return true; }
+  for (const other of document.querySelectorAll('[data-armed]')) disarm(other, warnEl);
+  btn.dataset.armed = btn.textContent;
+  btn.textContent = label;
+  btn.classList.add('bp-armed');
+  if (warnEl) { warnEl.textContent = warning; warnEl.hidden = false; }
+  btn._disarm = setTimeout(() => disarm(btn, warnEl), 5000);
+  return false;
+}
+export function disarm(btn, warnEl = null) {
+  if (!btn.dataset.armed) return;
+  clearTimeout(btn._disarm);
+  btn.textContent = btn.dataset.armed;
+  delete btn.dataset.armed;
+  btn.classList.remove('bp-armed');
+  if (warnEl) warnEl.hidden = true;
+}
+
+/**
+ * Typed confirmation in a sheet: the destructive button only enables once the input equals `expect`
+ * (replaces `prompt("输入…确认") === expect`). Resolves true on confirm, false on cancel / ✕ / Esc / backdrop.
+ */
+export function confirmTyped({ title, message, expect, okLabel = '删除' }) {
+  return new Promise((resolve) => {
+    const el = document.createElement('form');
+    el.className = 'sheet';
+    el.innerHTML = `<div class="sheet-head"><h3 class="sheet-title">${esc(title)}</h3><button type="button" class="close-x" data-close aria-label="关闭">✕</button></div>
+      <div class="sheet-body"><div class="callout err"><strong>无法恢复。</strong>${esc(message)}</div>
+        <div class="form-row bp-gap"><label for="bp-confirm-input">输入「${esc(expect)}」确认</label>
+        <input id="bp-confirm-input" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" /></div></div>
+      <div class="sheet-foot"><button type="submit" class="btn-ghost danger bp-armed" disabled>${esc(okLabel)}</button><button type="button" class="btn-ghost" data-close>取消</button></div>`;
+    const input = el.querySelector('input'), ok = el.querySelector('[type=submit]');
+    let done = false;
+    const sh = sheet(el);
+    const finish = (v) => { if (done) return; done = true; sh.close(); resolve(v); };
+    input.addEventListener('input', () => { ok.disabled = input.value !== expect; });
+    el.addEventListener('submit', (e) => { e.preventDefault(); if (input.value === expect) finish(true); });
+    // ✕ / 取消 / backdrop / Esc all go through sheet(): watch for the overlay leaving the page
+    new MutationObserver((_, mo) => { if (!el.isConnected) { mo.disconnect(); finish(false); } }).observe(document.body, { childList: true });
+    sh.open();
+    input.focus();
+  });
 }
 
 export const WINDOWS = [['five_hour', '5 小时'], ['seven_day', '本周']];

@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.5.1 — 2026-10-09
+
+- **剩下的页面也统一到 @szyyw/design**：「账号未开通」403 页（原来是内联样式的两行字）改成模板 `static/denied.html`（`.glass.panel.empty` + 回到门户按钮 + 工具位，SSO 时带账户菜单可切换账号）；standalone 单密码模式的登录页与聊天页加载 `tokens.css` + `components.css` + `corner-boot.js`（只有 🌗 / 外观，`portal: null`），服务端同样按 `cb_*` cookie 渲染外观属性；聊天页右上角原来 fixed 的「退出」挪到侧栏底部，不再和工具位重叠
+- **破坏性操作按 DESIGN §8 二次确认**，替代浏览器原生 `confirm()` / `prompt()`：管理页「重置密码」「停用账户」首点变红「再点一次确认」并展开影响说明（5 秒内再点才执行）；「删除用户」与 Code 页「删除项目」弹出 `.sheet`，输入用户名 / 项目名后删除按钮才可用（语义同前：输入名字才能删）。`bridge-pages.js` 新导出 `armConfirm` / `disarm` / `confirmTyped`；叠在编辑弹层上的确认弹层按 Esc 只关最上面那层
+- 嵌入组件（`bridge-widget.*`）无改动
+
 ## v0.5.0 — 2026-10-09
 
 - **嵌入组件跟随宿主的 @szyyw/design**：`bridge-widget.css` 的 `--bridge-*` 缺省值改为 `var(--设计包 token, 回退值)`（`--bg / --sheet-bg / --text / --text-dim / --glass-border / --hover-tint / --accent / --on-accent / --err / --on-err / --ok / --overlay-bg / --term-* / --pop-shadow`），明暗改用 `light-dark()` 跟随宿主 `color-scheme`，去掉 `prefers-color-scheme` 媒体查询——宿主固定深色 / 浅色、换配色时组件即时跟随，宿主不必再映射 token 或重写 `.bridge-*` 皮肤。`/context` 构成的分类色改用 `--bridge-chart-1…6`（缺省 `--chart-1…6`），不再写死 hex。按钮 / 角标 / 遮罩 / 缩略图上的 `#fff`、`rgba(0,0,0,…)` 收进 token（新增 `--bridge-err-fg` / `--bridge-scrim` / `--bridge-term-border` / `--bridge-on-image-bg|fg`）；下拉箭头改用 `currentColor`。`--bridge-font` 缺省 `inherit`（跟宿主字体）。`--bridge-*` 覆写接口不变、原有变量名全部保留。行为变化：宿主根上没有 `color-scheme` 时组件是浅色（之前跟随系统），要跟随系统请在宿主设 `color-scheme: light dark`

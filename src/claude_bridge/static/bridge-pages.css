@@ -12,6 +12,9 @@
 .bp-grid.tight { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); row-gap: 0; }
 .bp-lead { margin: 4px 0 14px; }
 .bp-gap { margin-top: 12px; }
+.bp-center { justify-content: center; }
+/* a destructive button armed for its second click (armConfirm / confirmTyped) */
+.bp-armed:not(:disabled), .btn-ghost.bp-armed:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, transparent); background: var(--tint-red-bg); }
 .bp-num-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
 .bp-num-row .field { width: 9em; }
 
@@ -60,6 +63,7 @@
 .bp-me .u { font-size: .786em; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-me .u.full { color: var(--bridge-err); }
 .bp-me form { margin: 0; }
+.bp-me .grow { flex: 1; }
 
 /* Chat / Code switch (.seg) in the chat top bar: as tall as the bar's controls */
 .bp-mode { flex: none; padding: 2px; }
