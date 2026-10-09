@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # upgrade-shared.sh — 把本仓库固定的共享包升到上游最新的正式 tag（vX.Y.Z）：
 #   szyyw-auth    pyproject.toml 的 [serve] 依赖（tarball 地址里的 tag）
-#   szyyw-design  src/claude_bridge/static/vendor/szyyw-design/（vendored 副本，委托 scripts/update-design.sh → 上游 sync.sh）
+#   szyyw-design  src/claude_bridge/standalone.py 的 DESIGN_VERSION（页面从 design.szyyw.xyz 加载；委托 scripts/update-design.sh，
+#                 它先确认 CDN 上已有该版本，没有就失败退出，下一轮再试）
 # 有改动时 stdout 打印一行摘要（给提交信息用），没有就什么都不打印。CI（.github/workflows/upgrade-shared.yml）和本地都能跑。
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,11 +28,11 @@ if newer "$cur" "$new"; then
   parts+=("szyyw-auth $cur → $new")
 fi
 
-# --- szyyw-design（vendored 副本）---
-vf=src/claude_bridge/static/vendor/szyyw-design/VENDORED.md
-cur=$(grep -oE '当前版本：\*\*v[0-9.]+\*\*' "$vf" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+# --- szyyw-design（CDN 版本号）---
+vf=src/claude_bridge/standalone.py
+cur=$(grep -E '^DESIGN_VERSION = "v[0-9]+\.[0-9]+\.[0-9]+"$' "$vf" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
 new=$(latest szyyw-design)
-[ -n "$cur" ] || { echo "$vf 里找不到当前版本" >&2; exit 1; }
+[ -n "$cur" ] || { echo "$vf 里找不到 DESIGN_VERSION" >&2; exit 1; }
 [ -n "$new" ] || { echo "取不到 szyyw-design 的 tag" >&2; exit 1; }
 if newer "$cur" "$new"; then
   bash scripts/update-design.sh "$new" >&2

@@ -1,7 +1,10 @@
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
-from claude_bridge.standalone import create_standalone_app
+from claude_bridge.standalone import DESIGN_VERSION, create_standalone_app
+from conftest import CDN, assert_design_refs
 
 
 def test_password_login_flow(tmp_path):
@@ -18,7 +21,8 @@ def test_password_login_flow(tmp_path):
     assert r.status_code == 303 and r.headers["location"] == "/" and "bridge_session" in r.headers["set-cookie"]
     assert c.get("/").status_code == 200 and "bridge-widget" in c.get("/").text
     page = c.get("/").text  # @szyyw/design look + 🌗 / appearance, never the portal switcher / account menu
-    assert "vendor/szyyw-design/components.css" in page and "corner-boot" in page and "data-sso" not in page
+    assert f"{CDN}/components.css" in page and "corner-boot" in page and "data-sso" not in page
+    assert_design_refs(page)
     assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in page
     assert c.get("/api/status").status_code == 200
     assert c.get("/api/threads?scope=").json()["current"] == "main"
@@ -58,3 +62,29 @@ def test_site_icons_public_and_linked(tmp_path):
         assert r.status_code == 200 and r.headers["content-type"].startswith(ctype) and r.content
     login = c.get("/login").text
     assert 'href="/favicon.svg"' in login and 'href="/favicon.ico"' in login and 'href="/apple-touch-icon.png"' in login
+
+
+def test_design_version_and_base(tmp_path, monkeypatch):
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", DESIGN_VERSION)
+    app = create_standalone_app(db_path=tmp_path / "s.db", password="pw", secret="s", agent_token="tok")
+    page = TestClient(app).get("/login").text
+    assert_design_refs(page)
+    assert '<link rel="preconnect" href="https://design.szyyw.xyz" crossorigin />' in page
+    # local offline work: DESIGN_BASE points at a CORS static server over a szyyw-design checkout
+    monkeypatch.setenv("DESIGN_BASE", "http://localhost:8000/")
+    page = TestClient(app).get("/login").text
+    assert_design_refs(page, "http://localhost:8000")
+    assert '<link rel="preconnect" href="http://localhost:8000" crossorigin />' in page
+
+
+def test_static_js_imports_design_through_import_map():
+    """The static JS names no version and no vendored path: only bare "@szyyw/design/…" specifiers."""
+    from claude_bridge.server import static_dir
+
+    for name in ("corner-boot.js", "bridge-pages.js"):
+        src = (static_dir() / name).read_text(encoding="utf-8")
+        imports = re.findall(r"^import .* from '([^']+)';$", src, re.M)
+        assert imports and all(i.startswith("@szyyw/design/") for i in imports), imports
+    # the embedded widget never touches the design package
+    for name in ("bridge-widget.js", "bridge-client.js"):
+        assert "@szyyw/design/" not in (static_dir() / name).read_text(encoding="utf-8")

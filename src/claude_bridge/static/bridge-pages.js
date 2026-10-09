@@ -1,5 +1,5 @@
 // Helpers shared by the multi-user pages (app / account / admin). Framework-free ES module.
-import { toast as dsToast } from './vendor/szyyw-design/toast.js';
+import { toast as dsToast } from '@szyyw/design/toast.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 

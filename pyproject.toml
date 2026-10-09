@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-bridge"
-version = "0.6.2"
+version = "0.6.3"
 description = "Web chat → job queue → local `claude -p` worker bridge: SSE streaming, tool events, cancel, usage"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,9 +32,9 @@ claude-bridge = "claude_bridge.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-# vendor/szyyw-design: @szyyw/design for the SSO corner tools (scripts/update-design.sh); "static/*" does not recurse;
-# static/site: favicon files of the standalone site, from szyyw-platform/branding
-"claude_bridge" = ["static/*", "static/vendor/szyyw-design/*", "static/site/*"]
+# "static/*" does not recurse; static/site: favicon files of the standalone site, from szyyw-platform/branding.
+# @szyyw/design is not packaged: the site pages load it from https://design.szyyw.xyz (DESIGN_VERSION in standalone.py)
+"claude_bridge" = ["static/*", "static/site/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
