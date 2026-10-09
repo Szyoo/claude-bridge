@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from claude_bridge.accounts import Accounts, generate_password, public_user, verify_password
 from claude_bridge.auth import COOKIE_NAME, LoginLimiter
 from claude_bridge.errors import BridgeError
+from claude_bridge.ipgeo import IpGeo
 from claude_bridge.principal import Principal
 from claude_bridge.server import create_bridge, static_dir
 from claude_bridge.service import PROJECT_SCOPE_PREFIX, BridgeConfig
@@ -172,6 +173,7 @@ def create_multiuser_app(
         from szyyw_auth import identity_from_headers, login_url
     store = BridgeStore(db_path)
     accounts = Accounts(store, secret=secret, session_days=session_days, tz=tz)
+    ipgeo = IpGeo(store)  # admin pages: where an IP is (app.state.ipgeo so tests can swap the fetcher)
     def scope_ok(scope: str, owner: str) -> bool:
         if scope == "":
             return True
@@ -241,6 +243,7 @@ def create_multiuser_app(
     app = FastAPI(title="claude-bridge", docs_url=None, redoc_url=None)
     app.state.bridge = bridge
     app.state.accounts = accounts
+    app.state.ipgeo = ipgeo
     bridge.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix="/static/bridge")
     pages = static_dir()
     mount_site_icons(app)
@@ -367,10 +370,14 @@ def create_multiuser_app(
 
     # ---------------- admin ----------------
 
-    def user_row(u: dict[str, Any], account: dict[str, Any], last: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
+    def user_row(u: dict[str, Any], account: dict[str, Any], last: dict[int, dict[str, Any]] | None = None,
+                 geo: dict[str, Any] | None = None) -> dict[str, Any]:
         a = (last if last is not None else accounts.last_access()).get(u["id"])
+        if a and geo is None:
+            geo = ipgeo.lookup([a["ip"]])
         return {**public_user(u, admin_view=True), "usage": accounts.usage_for(u, account),
-                "last_access": {k: a[k] for k in ("ip", "user_agent", "last_at", "kind")} if a else None}
+                "last_access": {**{k: a[k] for k in ("ip", "user_agent", "last_at", "kind")}, "geo": (geo or {}).get(a["ip"])}
+                if a else None}
 
     # ---------------- admin: a user's access log and conversations (read only) ----------------
     # Nothing here writes: no current-thread change, no updated_at touch, no last_seen — the user can't tell.
@@ -388,7 +395,9 @@ def create_multiuser_app(
     @app.get("/api/admin/users/{uid}/access")
     def admin_user_access(uid: int, limit: int = 200, admin: dict[str, Any] = Depends(api_admin)):
         target_user(uid)
-        return {"items": accounts.access_log(uid, max(1, min(limit, 1000)))}
+        items = accounts.access_log(uid, max(1, min(limit, 1000)))
+        geo = ipgeo.lookup(a["ip"] for a in items)
+        return {"items": [{**a, "geo": geo.get(a["ip"])} for a in items]}
 
     @app.get("/api/admin/users/{uid}/threads")
     def admin_user_threads(uid: int, admin: dict[str, Any] = Depends(api_admin)):
@@ -413,7 +422,8 @@ def create_multiuser_app(
     def admin_users(admin: dict[str, Any] = Depends(api_admin)):
         account = accounts.account_status()
         last = accounts.last_access()
-        out = {"items": [user_row(u, account, last) for u in accounts.users()], "account": account,
+        geo = ipgeo.lookup(a["ip"] for a in last.values())
+        out = {"items": [user_row(u, account, last, geo) for u in accounts.users()], "account": account,
                "quota": accounts.quota_config(), "me": admin["id"]}
         if sso:
             out["sso"] = {"portal": portal, "autocreate": sso_autocreate, "me_portal_user": admin.get("portal_user")}

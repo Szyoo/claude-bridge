@@ -34,6 +34,7 @@
     .au-access td { padding: 8px; border-top: 1px solid var(--bridge-border); vertical-align: top; }
     .au-access td.ua { color: var(--bridge-muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .au-access .k-failed { color: var(--bridge-err); }
+    .au-access .geo { font-size: 12px; color: var(--bridge-muted); margin-top: 2px; }
     @media (max-width: 720px) {
       .au-chat { grid-template-columns: 1fr; }
       .au-chat.reading .au-list { display: none; }
@@ -73,7 +74,7 @@
 
   <script type="module">
     import { renderTurn } from '/static/bridge/bridge-widget.js';
-    import { api, esc, toast, fmtSeen, fmtDevice } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo } from '/static/bridge/bridge-pages.js';
     const $ = (s) => document.querySelector(s);
     const uid = Number(location.pathname.split('/').pop());
     const KIND = { visit: '访问', login: '登录', login_failed: '登录失败' };
@@ -135,7 +136,7 @@
         $('#access').innerHTML = d.items.map(a => {
           const span = a.first_at === a.last_at ? local(a.last_at) : `${local(a.first_at)} – ${local(a.last_at).split(' ').pop()}`;
           const kind = a.kind === 'visit' ? (a.hits > 1 ? `${a.hits} 次请求` : '') : `<span class="${a.kind === 'login_failed' ? 'k-failed' : ''}">${KIND[a.kind]}</span>`;
-          return `<tr><td>${esc(span)}${kind ? `<div class="bp-help">${kind}</div>` : ''}</td><td>${esc(a.ip || '—')}</td>`
+          return `<tr><td>${esc(span)}${kind ? `<div class="bp-help">${kind}</div>` : ''}</td><td>${esc(a.ip || '—')}${a.geo ? `<div class="geo">${esc(fmtGeo(a.geo))}</div>` : ''}</td>`
             + `<td>${esc(fmtDevice(a.user_agent))}</td><td class="ua" title="${esc(a.user_agent)}">${esc(a.user_agent)}</td></tr>`;
         }).join('') || '<tr><td colspan="4" class="bp-help">还没有记录。</td></tr>';
       } catch (e) { toast(e.message, true); }

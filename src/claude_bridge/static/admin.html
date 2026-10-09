@@ -74,7 +74,7 @@
   </dialog>
 
   <script type="module">
-    import { api, esc, toast, fmtUsd, fmtPct, fmtWhen, fmtSeen, fmtDevice, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, fmtUsd, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
     const $ = (s, el = document) => el.querySelector(s);
     const CAP = { five_hour: 'cap_5h_usd', seven_day: 'cap_7d_usd' };
     const GUARD = { five_hour: 'guard_5h_pct', seven_day: 'guard_7d_pct' };
@@ -134,7 +134,8 @@
             ${u.portal_sub || data.sso ? `<div class="d">门户 ID：${u.portal_sub ? esc(u.portal_sub) : '未映射'}${data.sso && u.id === data.me && data.sso.me_portal_user ? ` · 当前门户用户名 ${esc(data.sso.me_portal_user)}` : ''}</div>` : ''}
             ${u.usage.blocked ? `<div class="d" style="color:var(--bridge-err)">${esc(u.usage.blocked)}</div>` : ''}</div>
           ${meters}
-          <div class="seen">${esc(fmtSeen(u.last_seen_at))}${u.last_access ? `<div class="d" title="${esc(u.last_access.user_agent)}">${esc(u.last_access.ip)} · ${esc(fmtDevice(u.last_access.user_agent))}</div>` : ''}</div>
+          <div class="seen">${esc(fmtSeen(u.last_seen_at))}${u.last_access ? `<div class="d" title="${esc(u.last_access.user_agent)}">${esc(u.last_access.ip)} · ${esc(fmtDevice(u.last_access.user_agent))}</div>`
+            + (u.last_access.geo ? `<div class="d geo" title="${esc(fmtGeo(u.last_access.geo))}">${esc(fmtGeo(u.last_access.geo))}</div>` : '') : ''}</div>
           <div class="ops"><a class="bridge-btn bridge-tiny" href="/admin/users/${u.id}" style="text-decoration:none">查看</a><button type="button" class="bridge-btn bridge-tiny" data-edit="${u.id}">编辑</button></div>
         </div>`;
       });
