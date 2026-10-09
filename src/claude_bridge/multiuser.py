@@ -16,11 +16,10 @@ from __future__ import annotations
 import html
 import logging
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -33,7 +32,7 @@ from claude_bridge.ipgeo import IpGeo
 from claude_bridge.principal import Principal
 from claude_bridge.server import create_bridge, static_dir
 from claude_bridge.service import PROJECT_SCOPE_PREFIX, BridgeConfig
-from claude_bridge.standalone import client_ip, mount_site_icons
+from claude_bridge.standalone import client_ip, mount_site_icons, render_page
 from claude_bridge.store import BridgeStore
 
 log = logging.getLogger(__name__)
@@ -45,41 +44,6 @@ _TRUE = ("1", "true", "yes", "on")
 
 def _flag(*names: str) -> bool:
     return any(os.environ.get(n, "").strip().lower() in _TRUE for n in names)
-
-
-# The pages' look comes from @szyyw/design (vendored under static/vendor/szyyw-design by scripts/update-design.sh): the
-# templates load tokens.css + components.css + corner-boot.js (mountChrome: 🌗 / appearance always, app switcher + account
-# menu under portal SSO). Appearance is stored in the cb_theme / cb_palette / cb_scheme cookies (mountChrome cookiePrefix
-# "cb_", @szyyw/design appearanceCookieNames) and rendered onto <html> here, so the first paint has the right scheme
-# (DESIGN.md §2.1). Standalone (single password) mode and the embedded widget never load the design package.
-APPEARANCE_COOKIE_PREFIX = "cb_"
-_SCHEMES = ("auto", "dark", "light")
-_APPEARANCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
-
-
-def appearance_attrs(cookies: dict[str, str]) -> str:
-    """`<html>` attributes from the appearance cookies, like @szyyw/design appearance-data's
-    readAppearanceFromCookies + appearanceAttrs: defaults nebula / default palette (no data-palette) / dark.
-    Theme / palette ids are only shape-checked (the option list lives in the package; an unknown id has no CSS block
-    and the client resets it)."""
-    def get(key: str) -> str:
-        return unquote(cookies.get(f"{APPEARANCE_COOKIE_PREFIX}{key}", "")).strip()
-
-    theme = get("theme") if _APPEARANCE_ID.match(get("theme")) else "nebula"
-    palette = get("palette") if _APPEARANCE_ID.match(get("palette")) else "default"
-    scheme = get("scheme") if get("scheme") in _SCHEMES else "dark"
-    attrs = f' data-theme="{theme}"'
-    if palette != "default":
-        attrs += f' data-palette="{palette}"'
-    return attrs + f' data-scheme="{scheme}"'
-
-
-def render_page(page: str, cookies: dict[str, str], portal: str | None) -> str:
-    """Put the appearance (and, under portal SSO, data-sso / data-portal for corner-boot.js) on `<html>`."""
-    attrs = appearance_attrs(cookies)
-    if portal is not None:
-        attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}"' + attrs
-    return page.replace('<html lang="zh-CN">', f'<html lang="zh-CN"{attrs}>', 1)
 
 
 def sso_from_env() -> bool:
@@ -496,9 +460,9 @@ def create_multiuser_app(
     async def not_provisioned(request: Request, exc: NotProvisioned):
         if request.url.path.startswith("/api"):
             return JSONResponse({"detail": exc.detail}, status_code=403)
-        body = (f'<!doctype html><meta charset="utf-8"><title>claude-bridge</title>'
-                f'<p style="font:16px system-ui;margin:3em auto;max-width:32em">{html.escape(exc.detail)}</p>'
-                f'<p style="font:14px system-ui;margin:0 auto;max-width:32em"><a href="{html.escape(portal, quote=True)}">回到门户</a></p>')
+        body = (pages / "denied.html").read_text(encoding="utf-8")
+        body = body.replace("{{detail}}", html.escape(exc.detail)).replace("{{portal}}", html.escape(portal, quote=True))
+        body = render_page(body, request.cookies, portal if sso else None)
         return HTMLResponse(body, status_code=403)
 
     return app

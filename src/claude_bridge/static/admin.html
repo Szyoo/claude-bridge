@@ -62,6 +62,7 @@
         <button type="button" class="btn-ghost btn-small" data-op="toggle"></button>
         <button type="button" class="btn-ghost btn-small danger" data-op="delete">删除用户</button>
       </div>
+      <div class="callout warn bp-gap" data-warn hidden></div>
       <div class="err-text bp-gap" role="alert"></div>
     </div>
     <div class="sheet-foot">
@@ -81,7 +82,7 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, fmtUsd, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armConfirm, disarm, confirmTyped, fmtUsd, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
     const $ = (s, el = document) => el.querySelector(s);
     const CAP = { five_hour: 'cap_5h_usd', seven_day: 'cap_7d_usd' };
     const GUARD = { five_hour: 'guard_5h_pct', seven_day: 'guard_7d_pct' };
@@ -152,10 +153,11 @@
       for (const b of document.querySelectorAll('#users button[data-edit]')) b.addEventListener('click', () => openUser(data.items.find(u => u.id === Number(b.dataset.edit))));
     }
 
-    const form = $('#user-form'), dlg = sheet(form), secretEl = $('#secret-sheet'), secretSheet = sheet(secretEl);
+    const form = $('#user-form'), warnEl = $('[data-warn]', form), dlg = sheet(form), secretEl = $('#secret-sheet'), secretSheet = sheet(secretEl);
     function openUser(u) {
       editing = u || null;
       form.reset();
+      for (const b of form.querySelectorAll('[data-armed]')) disarm(b, warnEl);
       $('.sheet-title', form).textContent = u ? `编辑 ${u.username}` : '新建用户';
       for (const el of form.querySelectorAll('[data-create]')) el.hidden = !!u;
       for (const el of form.querySelectorAll('[data-edit]')) el.hidden = !u;
@@ -199,20 +201,21 @@
     });
 
     form.addEventListener('click', async (e) => {
-      const op = e.target.closest('[data-op]')?.dataset.op;
+      const btn = e.target.closest('[data-op]'), op = btn?.dataset.op;
       if (!editing || !['reset', 'toggle', 'delete'].includes(op)) return;
+      for (const b of form.querySelectorAll('[data-armed]')) if (b !== btn) disarm(b, warnEl);
       const u = editing;
       try {
         if (op === 'reset') {
-          if (!confirm(`给 ${u.username} 生成一个新密码？对方所有设备会被登出。`)) return;
+          if (!armConfirm(btn, { warnEl, warning: `给 ${u.username} 生成一个新密码：对方所有设备会被登出。` })) return;
           const r = await api('POST', `/api/admin/users/${u.id}/password`, {});
           dlg.close(); showSecret(u.username, r.password);
         } else if (op === 'toggle') {
-          if (!u.disabled && !confirm(`停用 ${u.username}？对方会立即被登出，记录保留，之后可以再启用。`)) return;
+          if (!u.disabled && !armConfirm(btn, { warnEl, warning: `停用 ${u.username}：对方会立即被登出，记录保留，之后可以再启用。` })) return;
           await api('PATCH', `/api/admin/users/${u.id}`, { disabled: !u.disabled });
           dlg.close(); toast(u.disabled ? '已启用' : '已停用');
         } else if (op === 'delete') {
-          if (prompt(`删除 ${u.username} 及其全部对话和上传的图片，无法恢复。\n输入用户名确认：`) !== u.username) return;
+          if (!await confirmTyped({ title: `删除 ${u.username}`, message: `${u.username} 的账户、全部对话和上传的图片都会删除。`, expect: u.username, okLabel: '删除用户' })) return;
           await api('DELETE', `/api/admin/users/${u.id}`);
           dlg.close(); toast('已删除');
         }

@@ -3,28 +3,30 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light dark" />
   <title>claude-bridge</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/tokens.css" />
+  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/components.css" />
   <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+  <script type="module" src="/static/bridge/corner-boot.js"></script>
   <style>
-    html { font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
-    body { margin: 0; }
-    #app { height: 100vh; }
-    .bridge-topbar { position: fixed; right: 12px; top: 8px; z-index: 2; }
+    #app { height: 100vh; height: 100dvh; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.12/marked.min.js" defer></script>
 </head>
-<body class="bridge-root">
-  <form class="bridge-topbar" method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny">退出</button></form>
+<body class="bp-chat">
   <div id="app"></div>
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
-    mountBridgeWidget(document.getElementById('app'), client, { scope: '', title: 'claude-bridge' });
+    mountBridgeWidget(document.getElementById('app'), client, {
+      scope: '', title: 'claude-bridge', fill: true,
+      sideFoot: '<form method="post" action="/logout" class="bp-me"><span class="grow"></span><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny">退出</button></form>',
+    });
   </script>
 </body>
 </html>

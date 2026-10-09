@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -35,6 +38,41 @@ def mount_site_icons(app: FastAPI) -> None:
             return FileResponse(site / name, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
 
         app.add_api_route(path, icon, methods=["GET"], include_in_schema=False)
+
+
+# The pages' look comes from @szyyw/design (vendored under static/vendor/szyyw-design by scripts/update-design.sh): the
+# templates load tokens.css + components.css + corner-boot.js (mountChrome: 🌗 / appearance always, app switcher + account
+# menu under portal SSO). Appearance is stored in the cb_theme / cb_palette / cb_scheme cookies (mountChrome cookiePrefix
+# "cb_", @szyyw/design appearanceCookieNames) and rendered onto <html> here, so the first paint has the right scheme
+# (DESIGN.md §2.1). The embedded widget never loads the design package.
+APPEARANCE_COOKIE_PREFIX = "cb_"
+_SCHEMES = ("auto", "dark", "light")
+_APPEARANCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+def appearance_attrs(cookies: dict[str, str]) -> str:
+    """`<html>` attributes from the appearance cookies, like @szyyw/design appearance-data's
+    readAppearanceFromCookies + appearanceAttrs: defaults nebula / default palette (no data-palette) / dark.
+    Theme / palette ids are only shape-checked (the option list lives in the package; an unknown id has no CSS block
+    and the client resets it)."""
+    def get(key: str) -> str:
+        return unquote(cookies.get(f"{APPEARANCE_COOKIE_PREFIX}{key}", "")).strip()
+
+    theme = get("theme") if _APPEARANCE_ID.match(get("theme")) else "nebula"
+    palette = get("palette") if _APPEARANCE_ID.match(get("palette")) else "default"
+    scheme = get("scheme") if get("scheme") in _SCHEMES else "dark"
+    attrs = f' data-theme="{theme}"'
+    if palette != "default":
+        attrs += f' data-palette="{palette}"'
+    return attrs + f' data-scheme="{scheme}"'
+
+
+def render_page(page: str, cookies: dict[str, str], portal: str | None) -> str:
+    """Put the appearance (and, under portal SSO, data-sso / data-portal for corner-boot.js) on `<html>`."""
+    attrs = appearance_attrs(cookies)
+    if portal is not None:
+        attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}"' + attrs
+    return page.replace('<html lang="zh-CN">', f'<html lang="zh-CN"{attrs}>', 1)
 
 
 def create_standalone_app(
@@ -72,14 +110,14 @@ def create_standalone_app(
     def index(request: Request):
         if not authed(request):
             return RedirectResponse("/login", status_code=303)
-        return HTMLResponse((pages / "index.html").read_text(encoding="utf-8"))
+        return HTMLResponse(render_page((pages / "index.html").read_text(encoding="utf-8"), request.cookies, None))
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, err: str = ""):
         if authed(request):
             return RedirectResponse("/", status_code=303)
-        html = (pages / "login.html").read_text(encoding="utf-8")
-        return HTMLResponse(html.replace("{{error}}", "口令不对" if err else ""))
+        text = render_page((pages / "login.html").read_text(encoding="utf-8"), request.cookies, None)
+        return HTMLResponse(text.replace("{{error}}", "口令不对" if err else ""))
 
     @app.post("/login")
     def login(request: Request, password: str = Form("")):
