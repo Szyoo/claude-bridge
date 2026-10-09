@@ -4,6 +4,7 @@
 
 ## 未发布
 
+- **IP 归属地**：管理页用户行的最近访问、`/admin/users/<id>` 的访问记录，IP 下面多一行「国家 省 市 · 运营商」（同门户首页公网 IP 卡片）。服务端 `ipgeo.py` 查 ip-api.com batch（zh-CN），按 IP 永久缓存在新表 `bridge_ipgeo`；tailnet 显示「Tailscale 内网」、其他内网 / 保留地址显示「内网」，不出网；查询失败不缓存、不影响页面。接口 `last_access.geo`、访问记录每行 `geo`（`{country, region, city, isp}` / `{label}` / `null`），仅管理员接口
 - **站点 favicon**：独立站点（`serve` 单密码 / 多用户）根路径提供 `/favicon.svg`、`/favicon.ico`、`/apple-touch-icon.png`（文件在 `static/site/`，来自平台仓库 `branding/`，应用层路由不要求登录），全部 HTML 页面 head 带三个 `<link>`。嵌入式组件（`create_bridge` + `bridge-widget.*`）不注册这些路由、不碰宿主的 favicon
 - **部署改为 git clone + 推送即上线**：VPS 的 `/opt/claude-bridge` 现在是 git clone，由平台的 `deploy-app.sh`（`szyyw-autodeploy` 每 10 分钟）部署 main，健康检查失败自动回滚。`scripts/deploy-vps.sh` 不再 rsync：检查在 main / 工作区干净 / 已推送后 ssh 触发立即部署，新增 `--rollback <ref>`、`--status`，去掉 `--dry-run`
 - **自动升级共享包**：`scripts/upgrade-shared.sh` + `.github/workflows/upgrade-shared.yml`（每 6 小时 / 手动）检测 `szyyw-auth` 与 `@szyyw/design` 的上游最新正式 tag，升级（含 vendored 副本）后跑 ruff + pytest，通过才以 bot 身份推到 main；失败不推送

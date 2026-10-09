@@ -481,6 +481,43 @@ def test_access_log_records_visits_and_logins(app):
     assert "access" not in json.dumps(c.get("/api/me").json())
 
 
+def test_access_ips_carry_geo_for_admins(app):
+    """Admin views get each IP's place: public via ip-api (cached, one lookup per IP), tailnet / private labelled locally."""
+    calls: list[list[str]] = []
+
+    def fake_fetch(ips):
+        calls.append(list(ips))
+        return [{"status": "success", "query": ip, "country": "日本", "regionName": "东京都", "city": "东京",
+                 "isp": "ARTERIA Networks Corporation"} if ip == "133.32.173.120" else {"status": "fail", "query": ip} for ip in ips]
+
+    app.state.ipgeo.fetch = fake_fetch
+    acc: Accounts = app.state.accounts
+    c = TestClient(app, follow_redirects=False, headers={"x-forwarded-for": "133.32.173.120"})
+    c.post("/login", data={"username": "alice", "password": PW})
+    TestClient(app, headers={"x-forwarded-for": "100.95.157.76"}, cookies=dict(c.cookies)).get("/api/me")
+    TestClient(app, headers={"x-forwarded-for": "8.8.4.4"}, cookies=dict(c.cookies)).get("/api/me")
+    uid = acc.by_name("alice")["id"]
+
+    boss = login(app, "boss")
+    geo = {a["ip"]: a["geo"] for a in boss.get(f"/api/admin/users/{uid}/access").json()["items"]}
+    assert geo["133.32.173.120"] == {"country": "日本", "region": "东京都", "city": "东京", "isp": "ARTERIA Networks Corporation"}
+    assert geo["100.95.157.76"] == {"label": "Tailscale 内网"}
+    assert geo["8.8.4.4"] is None  # ip-api had nothing → null, and remembered
+    row = next(u for u in boss.get("/api/admin/users").json()["items"] if u["id"] == uid)
+    assert "geo" in row["last_access"]
+    boss.get(f"/api/admin/users/{uid}/access")
+    assert sorted(ip for batch in calls for ip in batch) == ["133.32.173.120", "8.8.4.4"]  # cached after the first look
+
+    def broken(ips):
+        raise OSError("offline")
+
+    app.state.ipgeo.fetch = broken  # a failed lookup never breaks the page and isn't cached
+    TestClient(app, headers={"x-forwarded-for": "1.1.1.1"}, cookies=dict(c.cookies)).get("/api/me")
+    items = boss.get(f"/api/admin/users/{uid}/access").json()["items"]
+    assert next(a for a in items if a["ip"] == "1.1.1.1")["geo"] is None
+    assert app.state.ipgeo._cached(["1.1.1.1"]) == {}
+
+
 def test_admin_reads_conversations_without_the_user_noticing(app, agent):
     acc: Accounts = app.state.accounts
     alice, boss = login(app, "alice"), login(app, "boss")

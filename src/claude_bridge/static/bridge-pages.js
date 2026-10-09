@@ -60,6 +60,23 @@ export function fmtDevice(ua) {
   return [os, br].filter(Boolean).join(' · ') || ua.slice(0, 40);
 }
 
+// ISP names: drop the company suffix; the big three Chinese carriers in Chinese
+const CN_ISP = [[/china mobile|cmnet/i, '中国移动'], [/china unicom|\bcnc\b/i, '中国联通'], [/china telecom|chinanet/i, '中国电信']];
+function shortIsp(isp = '') {
+  const cn = CN_ISP.find(([re]) => re.test(isp));
+  if (cn) return cn[1];
+  return isp.replace(/^the\s+/i, '')
+    .replace(/(,?\s+(communications?|corporation|corp\.?|co\.?,?\s*ltd\.?|inc\.?|llc|limited|k\.k\.))+\s*$/i, '').trim();
+}
+
+/** "日本 东京都 东京 · ARTERIA Networks" from the server's geo ({country, region, city, isp} or {label}); same as the portal's 公网 IP card. */
+export function fmtGeo(g) {
+  if (!g) return '';
+  if (g.label) return g.label;
+  const place = [g.country, g.region, g.city].filter((x, i, a) => x && a.indexOf(x) === i).join(' ');
+  return [place, shortIsp(g.isp)].filter(Boolean).join(' · ');
+}
+
 /** A usage bar: `used` fills it, `limit` (if any) draws a tick; both in percent. */
 export function meterHtml({ label, used, limit, sub = '', right = null }) {
   const pct = used == null ? 0 : Math.min(100, used);
