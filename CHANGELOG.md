@@ -2,6 +2,15 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
+## v0.6.0 — 2026-10-09
+
+- **组件里不再弹浏览器原生对话框**（对齐 @szyyw/design DESIGN §8，但不依赖设计包、只用 `--bridge-*` 着色）：
+  - 删除对话：⋯ 菜单里首点「删除对话」变红成「再点一次确认删除」并在菜单里展开影响说明（菜单保持打开），5 秒内再点才删；关菜单 / 点别处即取消
+  - 压缩会话（`/context` 面板，`renderContextPanel`）：首点变成「再点一次确认压缩」并在面板里说明后果，再点才调 `onCompact`
+  - 重命名：组件自带的输入弹层（`role="dialog"` + `aria-modal`、标题做 label、焦点进输入框并全选、Tab 不出框、Enter 保存、Esc / 点外 / ✕ / 取消关闭、关闭后焦点回到 ⋯ 按钮；手机上是底部抽屉；`prefers-reduced-motion` 不做动画）
+- 新导出（对外 API，故为 minor）：`armConfirm` / `disarmConfirm` / `promptDialog`，宿主自己的外壳（如 ashare 的线程菜单）可以直接用。新文案键 `strings.delArm / renameLabel / save / cancel`
+- 新样式类：`.bridge-armed`、`.bridge-menu-warn`、`.bridge-ctx-warn`、`.bridge-dlg*`（z-index 70，挂在 body 下、带 `bridge-root`，宿主祖先的 transform / backdrop-filter 困不住它）
+
 ## v0.5.1 — 2026-10-09
 
 - **剩下的页面也统一到 @szyyw/design**：「账号未开通」403 页（原来是内联样式的两行字）改成模板 `static/denied.html`（`.glass.panel.empty` + 回到门户按钮 + 工具位，SSO 时带账户菜单可切换账号）；standalone 单密码模式的登录页与聊天页加载 `tokens.css` + `components.css` + `corner-boot.js`（只有 🌗 / 外观，`portal: null`），服务端同样按 `cb_*` cookie 渲染外观属性；聊天页右上角原来 fixed 的「退出」挪到侧栏底部，不再和工具位重叠

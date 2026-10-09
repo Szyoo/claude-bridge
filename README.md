@@ -165,6 +165,8 @@ worker.run_forever()
 | `renderPrefsPanel(el, prefs, {onChange, classes, fields})` | 偏好控件;`classes` 可把结构类名映射到宿主设计系统的开关 / 胶囊 |
 | `isSendKey(e, prefs) / sendHint(prefs) / placePopover(anchor, pop) / attachDrag(handle, onMove, onEnd) / fmtTime / fmtRelative` | 发送键判定、fixed 弹层定位(窄屏由样式改成底部抽屉)、拖拽改高 / 改宽 |
 | `planImage / prepareImages / mountAttachments({button, input, tray, textarea, dropZone, client})` | 发图:见下 |
+| `armConfirm(btn, {label, warnEl, warning, timeout})` / `disarmConfirm(btn)` | 破坏性按钮的二次确认（v0.6.0，DESIGN §8）：首点变红换文案并在 `warnEl` 显示影响（role=alert），5 秒内再点返回 `true`；组件的删除对话、压缩会话用它 |
+| `promptDialog({title, label, value, placeholder, okLabel, cancelLabel, returnFocus})` | 组件自带的文本输入弹层（v0.6.0，替代 `window.prompt`）：`role=dialog` + `aria-modal`，焦点进输入框、Tab 不出框、Esc / 点外 / ✕ 取消（resolve `null`），关闭后焦点回到 `returnFocus`；只用 `--bridge-*` 着色，手机上是底部抽屉 |
 
 ### 图片
 
