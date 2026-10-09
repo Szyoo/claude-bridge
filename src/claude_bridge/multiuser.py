@@ -16,10 +16,11 @@ from __future__ import annotations
 import html
 import logging
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -46,22 +47,39 @@ def _flag(*names: str) -> bool:
     return any(os.environ.get(n, "").strip().lower() in _TRUE for n in names)
 
 
-# Portal SSO only: the shared top-right corner tools of @szyyw/design (app switcher + account menu), vendored under
-# static/vendor/szyyw-design by scripts/update-design.sh. Injected into app / account / admin at serve time so the
-# templates — and every non-SSO response — stay exactly as they were; standalone and the embedded widget never load it.
-CORNER_HEAD = (
-    '<link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/tokens.css" />\n'
-    '  <link rel="preload" href="/static/bridge/vendor/szyyw-design/components.css" as="fetch" crossorigin />\n'
-    '  <script type="module" src="/static/bridge/corner-boot.js"></script>\n'
-)
+# The pages' look comes from @szyyw/design (vendored under static/vendor/szyyw-design by scripts/update-design.sh): the
+# templates load tokens.css + components.css + corner-boot.js (mountChrome: 🌗 / appearance always, app switcher + account
+# menu under portal SSO). Appearance is stored in the cb_theme / cb_palette / cb_scheme cookies (mountChrome cookiePrefix
+# "cb_", @szyyw/design appearanceCookieNames) and rendered onto <html> here, so the first paint has the right scheme
+# (DESIGN.md §2.1). Standalone (single password) mode and the embedded widget never load the design package.
+APPEARANCE_COOKIE_PREFIX = "cb_"
+_SCHEMES = ("auto", "dark", "light")
+_APPEARANCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 
-def with_corner_tools(page: str, portal: str) -> str:
-    """Mark `<html>` with data-sso / data-portal (read by corner-boot.js) and load the corner tools in `<head>`.
-    data-scheme="auto": tokens.css otherwise pins color-scheme to dark; auto follows the system like the bridge CSS."""
-    attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}" data-scheme="auto"'
-    page = page.replace('<html lang="zh-CN">', f'<html lang="zh-CN"{attrs}>', 1)
-    return page.replace("</head>", f"  {CORNER_HEAD}</head>", 1)
+def appearance_attrs(cookies: dict[str, str]) -> str:
+    """`<html>` attributes from the appearance cookies, like @szyyw/design appearance-data's
+    readAppearanceFromCookies + appearanceAttrs: defaults nebula / default palette (no data-palette) / dark.
+    Theme / palette ids are only shape-checked (the option list lives in the package; an unknown id has no CSS block
+    and the client resets it)."""
+    def get(key: str) -> str:
+        return unquote(cookies.get(f"{APPEARANCE_COOKIE_PREFIX}{key}", "")).strip()
+
+    theme = get("theme") if _APPEARANCE_ID.match(get("theme")) else "nebula"
+    palette = get("palette") if _APPEARANCE_ID.match(get("palette")) else "default"
+    scheme = get("scheme") if get("scheme") in _SCHEMES else "dark"
+    attrs = f' data-theme="{theme}"'
+    if palette != "default":
+        attrs += f' data-palette="{palette}"'
+    return attrs + f' data-scheme="{scheme}"'
+
+
+def render_page(page: str, cookies: dict[str, str], portal: str | None) -> str:
+    """Put the appearance (and, under portal SSO, data-sso / data-portal for corner-boot.js) on `<html>`."""
+    attrs = appearance_attrs(cookies)
+    if portal is not None:
+        attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}"' + attrs
+    return page.replace('<html lang="zh-CN">', f'<html lang="zh-CN"{attrs}>', 1)
 
 
 def sso_from_env() -> bool:
@@ -261,9 +279,9 @@ def create_multiuser_app(
             return portal_login(request) if sso else RedirectResponse("/login", status_code=303)
         if admin and user["role"] != "admin":
             return RedirectResponse("/", status_code=303)
-        text = (pages / name).read_text(encoding="utf-8")
+        text = render_page((pages / name).read_text(encoding="utf-8"), request.cookies, portal if sso else None)
         if sso:
-            return HTMLResponse(with_corner_tools(text, portal))
+            return HTMLResponse(text)
         resp = HTMLResponse(text)
         age = accounts.token_age(request.cookies.get(COOKIE_NAME))
         if age is not None and age > RENEW_AFTER:
@@ -301,7 +319,7 @@ def create_multiuser_app(
             return portal_login(request, "/")
         if signed_in(request):
             return RedirectResponse("/", status_code=303)
-        text = (pages / "users-login.html").read_text(encoding="utf-8")
+        text = render_page((pages / "users-login.html").read_text(encoding="utf-8"), request.cookies, None)
         text = text.replace("{{error}}", html.escape(LOGIN_ERRORS.get(err, "") if err else ""))
         return HTMLResponse(text.replace("{{username}}", html.escape(u[:32], quote=True)))
 

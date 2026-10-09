@@ -3,25 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light dark" />
   <title>claude-bridge · 登录</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/tokens.css" />
+  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/components.css" />
   <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+  <script type="module" src="/static/bridge/corner-boot.js"></script>
 </head>
-<body class="bridge-root bridge-page">
-  <main class="bp-login">
-    <form class="bp-card" method="post" action="/login">
-      <h1>claude-bridge</h1>
-      <label class="bp-field"><span>用户名</span>
-        <input class="bp-input" name="username" value="{{username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus /></label>
-      <label class="bp-field"><span>密码</span>
-        <input class="bp-input" type="password" name="password" autocomplete="current-password" required /></label>
-      <div class="bp-err" role="alert">{{error}}</div>
-      <button type="submit" class="bridge-btn bridge-btn-primary">登录</button>
-      <p class="bp-help">账户由管理员分发。登录一次后这台设备会一直保持登录。</p>
+<body>
+  <div class="bg-layer"></div>
+  <main class="app-frame bp-login">
+    <form class="glass panel rise" method="post" action="/login">
+      <h1 class="page-title grad-text bp-lead">claude-bridge</h1>
+      <div class="form-row"><label for="l-user">用户名</label>
+        <input id="l-user" class="field" name="username" value="{{username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus /></div>
+      <div class="form-row"><label for="l-pass">密码</label>
+        <input id="l-pass" class="field" type="password" name="password" autocomplete="current-password" required /></div>
+      <div class="err-text bp-err" role="alert">{{error}}</div>
+      <button type="submit" class="btn">登录</button>
+      <p class="hint">账户由管理员分发。登录一次后这台设备会一直保持登录。</p>
     </form>
   </main>
   <script>

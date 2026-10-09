@@ -1,27 +1,44 @@
-/* claude-bridge reference widget. Override the --bridge-* tokens to theme it.
+/* claude-bridge reference widget. Override the --bridge-* tokens to theme it (the public theming interface).
+   Defaults follow the host's @szyyw/design tokens (--bg / --text / --accent / --chart-* …) when the host loads
+   tokens.css, and fall back to the widget's own palette otherwise. Light / dark follows the host's `color-scheme`
+   (light-dark()), not prefers-color-scheme: a host that pins data-scheme="dark" gets a dark widget even on a light OS.
+   A host with no color-scheme at all renders light; give it `color-scheme: light dark` to follow the system.
    Sizes follow the Claude Code client: body .875rem-ish (14px "cozy"), line-height 1.42857,
    turn gap = body × leading × .75, item gap = body × leading × .5, 32px gutters (16px narrow),
    6px radius, 12px composer radius, popover shadow 0 8px 24px / 0 2px 6px. */
 .bridge-root, .bridge {
-  --bridge-bg: #f7f7f8;
-  --bridge-panel: #ffffff;
-  --bridge-fg: #1b1b1f;
-  --bridge-muted: #6b6f76;
-  --bridge-border: #e2e4e8;
-  --bridge-hover: rgba(0, 0, 0, .05);
-  --bridge-accent: #3b6df2;
-  --bridge-accent-fg: #ffffff;
-  --bridge-user: rgba(0, 0, 0, .045);
-  --bridge-err: #d64545;
-  --bridge-ok: #2e9b5d;
-  --bridge-term-bg: #16181d;
-  --bridge-term-fg: #d8dbe2;
-  --bridge-term-dim: #8b919c;
-  --bridge-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  --bridge-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --bridge-shadow-pop: 0 8px 24px rgba(0, 0, 0, .12), 0 2px 6px rgba(0, 0, 0, .08);
-  --bridge-shadow-composer: 0 .25rem 1.25rem rgba(0, 0, 0, .035);
-  --bridge-shadow-composer-focus: 0 .25rem 1.25rem rgba(0, 0, 0, .075);
+  --bridge-bg: var(--bg, light-dark(#f7f7f8, #0f1115));
+  --bridge-panel: var(--sheet-bg, light-dark(#ffffff, #171a21));
+  --bridge-fg: var(--text, light-dark(#1b1b1f, #e6e8ee));
+  --bridge-muted: var(--text-dim, light-dark(#6b6f76, #8b919c));
+  --bridge-border: var(--glass-border, light-dark(#e2e4e8, #2a2f3a));
+  --bridge-hover: var(--hover-tint, light-dark(rgba(0, 0, 0, .05), rgba(255, 255, 255, .06)));
+  --bridge-accent: var(--accent, light-dark(#3b6df2, #6c8cff));
+  --bridge-accent-fg: var(--on-accent, #ffffff);
+  --bridge-user: color-mix(in srgb, var(--bridge-muted) 12%, transparent);
+  --bridge-err: var(--err, #d64545);
+  --bridge-err-fg: var(--on-err, #ffffff);
+  --bridge-ok: var(--ok, #2e9b5d);
+  --bridge-scrim: var(--overlay-bg, rgba(0, 0, 0, .28));
+  --bridge-term-bg: var(--term-bg, light-dark(#16181d, #0b0d11));
+  --bridge-term-fg: var(--term-text, #d8dbe2);
+  --bridge-term-dim: var(--term-dim, #8b919c);
+  --bridge-term-border: var(--term-border, rgba(255, 255, 255, .07));
+  /* labels / ✕ drawn over image thumbnails: fixed, whatever the theme (the image underneath is arbitrary) */
+  --bridge-on-image-bg: rgba(0, 0, 0, .55);
+  --bridge-on-image-fg: #ffffff;
+  /* /context breakdown segments: the host's chart palette */
+  --bridge-chart-1: var(--chart-1, #3b6df2);
+  --bridge-chart-2: var(--chart-2, #e0703a);
+  --bridge-chart-3: var(--chart-3, #2e9b5d);
+  --bridge-chart-4: var(--chart-4, #d4a72c);
+  --bridge-chart-5: var(--chart-5, #8b8b8b);
+  --bridge-chart-6: var(--chart-6, #6f6f6f);
+  --bridge-font: inherit;
+  --bridge-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --bridge-shadow-pop: var(--pop-shadow, 0 8px 24px light-dark(rgba(0, 0, 0, .12), rgba(0, 0, 0, .32)), 0 2px 6px light-dark(rgba(0, 0, 0, .08), rgba(0, 0, 0, .2)));
+  --bridge-shadow-composer: 0 .25rem 1.25rem light-dark(rgba(0, 0, 0, .035), rgba(0, 0, 0, .12));
+  --bridge-shadow-composer-focus: 0 .25rem 1.25rem light-dark(rgba(0, 0, 0, .075), rgba(0, 0, 0, .24));
 
   /* typography scale — prefs set --chat-density-px / --chat-scale on the root */
   --chat-density-px: 14px;
@@ -41,19 +58,12 @@
   color: var(--bridge-fg);
 }
 .bridge { background: var(--bridge-bg); }
-@media (prefers-color-scheme: dark) {
-  .bridge-root, .bridge {
-    --bridge-bg: #0f1115; --bridge-panel: #171a21; --bridge-fg: #e6e8ee; --bridge-muted: #8b919c;
-    --bridge-border: #2a2f3a; --bridge-hover: rgba(255, 255, 255, .06); --bridge-accent: #6c8cff; --bridge-user: rgba(255, 255, 255, .06);
-    --bridge-term-bg: #0b0d11; --bridge-shadow-pop: 0 8px 24px rgba(0, 0, 0, .32), 0 2px 6px rgba(0, 0, 0, .2);
-  }
-}
 .bridge-root[data-density="compact"], .bridge[data-density="compact"] { --chat-control: 26px; }
 .bridge-root[data-density="roomy"], .bridge[data-density="roomy"] { --chat-control: 34px; }
 
-.bridge { display: grid; grid-template-columns: var(--chat-side-w, 240px) 1fr; height: var(--chat-height, 100%); min-height: 0; position: relative; }
+.bridge { display: grid; grid-template-columns: var(--chat-side-w, 240px) minmax(0, 1fr); height: var(--chat-height, 100%); min-height: 0; position: relative; }
 .bridge [hidden], .bridge-pop[hidden], .bridge-menu[hidden], .bridge-scrim[hidden] { display: none !important; }
-.bridge.no-side, .bridge.side-hidden { grid-template-columns: 1fr; }
+.bridge.no-side, .bridge.side-hidden { grid-template-columns: minmax(0, 1fr); }
 .bridge.fill { height: 100%; }
 .bridge-side-scrim { display: none; }
 .bridge.side-hidden .bridge-side { display: none; }
@@ -76,7 +86,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-side-foot { margin-top: auto; border-top: 1px solid var(--bridge-border); padding-top: 8px; }
 
 /* ---------- main column ---------- */
-.bridge-main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; }
+.bridge-main { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
 .bridge-top { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--bridge-border); background: var(--bridge-panel); min-height: calc(var(--chat-control) + 12px); }
 .bridge-title { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bridge-agent { display: inline-flex; align-items: center; gap: 6px; color: var(--bridge-muted); font-size: .857em; }
@@ -156,7 +166,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-term { margin: 4px 0 6px 1.3em; background: var(--bridge-term-bg); color: var(--bridge-term-fg); border-radius: var(--chat-radius); font-family: var(--bridge-mono); font-size: .857em; line-height: 1.55; max-height: 280px; overflow: auto; }
 .bridge-term pre { margin: 0; padding: .5em .8em; white-space: pre-wrap; word-break: break-word; font: inherit; }
 .bridge-term pre.cmd { color: var(--bridge-term-dim); }
-.bridge-term pre.cmd + pre.out { border-top: 1px solid rgba(255, 255, 255, .07); }
+.bridge-term pre.cmd + pre.out { border-top: 1px solid var(--bridge-term-border); }
 .bridge-step-body { margin: 4px 0 6px 1.3em; padding: .3em .8em; border-left: 2px solid var(--bridge-border); white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
@@ -171,10 +181,10 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-att img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .bridge-att.uploading img { opacity: .5; }
 .bridge-att.error { border-color: var(--bridge-err); }
-.bridge-att-name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 1.4; text-align: center; color: #fff; background: rgba(0, 0, 0, .5); }
+.bridge-att-name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 1.4; text-align: center; color: var(--bridge-on-image-fg); background: var(--bridge-on-image-bg); }
 .bridge-att-spin { position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border: 2px solid var(--bridge-accent); border-right-color: transparent; border-radius: 50%; animation: bridge-spin .8s linear infinite; }
-.bridge-att-err { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--bridge-err); color: #fff; font-style: normal; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
-.bridge-att-x { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; font-size: 10px; line-height: 18px; cursor: pointer; }
+.bridge-att-err { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--bridge-err); color: var(--bridge-err-fg); font-style: normal; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.bridge-att-x { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: var(--bridge-on-image-bg); color: var(--bridge-on-image-fg); font-size: 10px; line-height: 18px; cursor: pointer; }
 .bridge-drop { outline: 2px dashed var(--bridge-accent); outline-offset: -2px; }
 @keyframes bridge-spin { to { transform: rotate(360deg); } }
 
@@ -189,7 +199,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-bar { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .bridge-bar .grow { flex: 1; }
 .bridge-pick { appearance: none; -webkit-appearance: none; height: var(--chat-control); border: 0; background: transparent; color: var(--bridge-muted); font: inherit; font-size: .857em; cursor: pointer; padding: 0 18px 0 8px; border-radius: var(--chat-radius); max-width: 180px; text-overflow: ellipsis;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 3.5l3 3 3-3' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round'/></svg>"); background-repeat: no-repeat; background-position: right 5px center; }
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-size: 4px 4px; background-repeat: no-repeat; background-position: right 10px center, right 6px center; }
 .bridge-pick:hover { background-color: var(--bridge-hover); color: var(--bridge-fg); }
 .bridge-pill { display: inline-flex; align-items: center; gap: .4em; height: calc(var(--chat-control) - 6px); margin: 0 4px; padding: 0 .6em; border-radius: 999px; border: 1px solid var(--bridge-border); background: transparent; color: var(--bridge-muted); font: inherit; font-size: .8em; cursor: pointer; }
 .bridge-pill:hover { background: var(--bridge-hover); color: var(--bridge-fg); }
@@ -203,9 +213,9 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-new { width: 100%; }
 .bridge-send, .bridge-stop { width: var(--chat-control); height: var(--chat-control); padding: 0; margin-left: 4px; display: grid; place-items: center; font-size: 1.1em; border-radius: var(--chat-radius); flex: none; }
 .bridge-send { background: var(--bridge-accent); color: var(--bridge-accent-fg); border-color: var(--bridge-accent); }
-.bridge-stop { background: var(--bridge-err); color: #fff; border-color: var(--bridge-err); font-size: .8em; }
+.bridge-stop { background: var(--bridge-err); color: var(--bridge-err-fg); border-color: var(--bridge-err); font-size: .8em; }
 .bridge-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--bridge-fg); color: var(--bridge-bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 60; }
-.bridge-toast.err { background: var(--bridge-err); color: #fff; }
+.bridge-toast.err { background: var(--bridge-err); color: var(--bridge-err-fg); }
 
 /* ---------- popovers (settings ⚙ / session ⏱) — fixed, positioned by placePopover ---------- */
 .bridge-pop { position: fixed; z-index: 50; min-width: 300px; max-width: min(440px, calc(100vw - 16px)); max-height: 72vh; overflow: auto; padding: 12px 14px 14px; border: 1px solid var(--bridge-border); border-radius: 10px; background: var(--bridge-panel); box-shadow: var(--bridge-shadow-pop); font-size: 13px; color: var(--bridge-fg); display: flex; flex-direction: column; gap: 10px; }
@@ -225,6 +235,8 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-pop-title:not(:first-child) { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--bridge-border); }
 .bridge-prefs { display: flex; flex-direction: column; gap: 10px; }
 .bridge-pref-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* rows are <label>s: hosts with a global `label { display: block; margin-bottom; color }` (e.g. @szyyw/design) must not restyle them */
+.bridge-pref-row, .bridge-pref-col { margin: 0; color: inherit; font-size: inherit; }
 .bridge-pref-col { display: flex; flex-direction: column; gap: 6px; }
 .bridge-pref-label { font-size: 13px; }
 .bridge-pref-hint { display: block; font-size: 11px; color: var(--bridge-muted); margin-top: 1px; }
@@ -234,7 +246,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-chip:hover { color: var(--bridge-fg); }
 .bridge-chip.active { color: var(--bridge-accent); border-color: var(--bridge-accent); background: color-mix(in srgb, var(--bridge-accent) 10%, transparent); }
 .bridge-switch { appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 38px; height: 22px; border-radius: 11px; background: color-mix(in srgb, var(--bridge-muted) 50%, transparent); cursor: pointer; transition: background .2s; margin: 0; }
-.bridge-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.bridge-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--bridge-accent-fg); transition: transform .2s; }
 .bridge-switch:checked { background: var(--bridge-accent); }
 .bridge-switch:checked::after { transform: translateX(16px); }
 .bridge-range { width: 100%; accent-color: var(--bridge-accent); margin: 0; }
@@ -269,16 +281,16 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 /* ---------- narrow screens: 16px gutters, sidebar as overlay, popovers as bottom sheets ---------- */
 @media (max-width: 720px) {
   .bridge-root, .bridge { --chat-gutter: 12px; }
-  .bridge, .bridge.side-hidden { grid-template-columns: 1fr; }
+  .bridge, .bridge.side-hidden { grid-template-columns: minmax(0, 1fr); }
   .bridge-side, .bridge.side-hidden .bridge-side { display: none; }
   .bridge.side-open .bridge-side { display: flex; position: absolute; inset: 0 25% 0 0; z-index: 3; box-shadow: var(--bridge-shadow-pop); }
   /* the drawer covers the ☰ that opened it: tapping the uncovered strip (or Esc) closes it */
-  .bridge.side-open .bridge-side-scrim { display: block; position: absolute; inset: 0; z-index: 2; background: rgba(0, 0, 0, .28); }
+  .bridge.side-open .bridge-side-scrim { display: block; position: absolute; inset: 0; z-index: 2; background: var(--bridge-scrim); }
   .bridge-side-grip { display: none; }
   .bridge-input { font-size: max(16px, 1em); } /* iOS zooms into inputs smaller than 16px */
   .bridge-bar [data-set="effort"] { display: none; }
   .bridge-pop { left: 0 !important; right: 0; top: auto !important; bottom: 0; max-width: none; max-height: 80vh; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
-  .bridge-scrim { display: block; position: fixed; inset: 0; z-index: 49; background: rgba(0, 0, 0, .28); touch-action: none; }
+  .bridge-scrim { display: block; position: fixed; inset: 0; z-index: 49; background: var(--bridge-scrim); touch-action: none; }
   /* the grip marks the head as swipe-down-able */
   .bridge-pop-head { padding-top: 12px; }
   .bridge-pop-grip { display: block; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--bridge-muted); opacity: .45; }

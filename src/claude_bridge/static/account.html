@@ -3,48 +3,54 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light dark" />
   <title>claude-bridge · 账户</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/static/bridge/bridge-widget.css" />
+  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/tokens.css" />
+  <link rel="stylesheet" href="/static/bridge/vendor/szyyw-design/components.css" />
   <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
+  <script type="module" src="/static/bridge/corner-boot.js"></script>
 </head>
-<body class="bridge-root bridge-page">
-  <main class="bp-wrap narrow">
-    <header class="bp-head">
-      <h1>我的账户</h1>
-      <a href="/admin" data-admin hidden>管理</a>
-      <a href="/">← 回到聊天</a>
+<body>
+  <div class="bg-layer"></div>
+  <div class="app-frame">
+    <header class="app-header">
+      <div class="app-brand"><h1 class="app-title">我的账户</h1><p class="app-sub">claude-bridge</p></div>
+      <nav class="app-actions">
+        <a class="btn-ghost btn-small" href="/admin" data-admin hidden>管理</a>
+        <a class="btn-ghost btn-small" href="/">← 回到聊天</a>
+      </nav>
     </header>
 
-    <section class="bp-card">
-      <h2>用量</h2>
-      <p class="bp-help">按你在这个订阅里的份额计算，窗口与 Claude 账户的 5 小时 / 每周额度同步重置。</p>
-      <div class="bp-grid" id="usage"></div>
-      <div id="blocked"></div>
-    </section>
+    <main class="bp-wrap narrow">
+      <section class="glass panel">
+        <h2 class="panel-title">用量</h2>
+        <p class="muted small bp-lead">按你在这个订阅里的份额计算，窗口与 Claude 账户的 5 小时 / 每周额度同步重置。</p>
+        <div class="bp-grid" id="usage"></div>
+        <div id="blocked"></div>
+      </section>
 
-    <form class="bp-card" id="profile">
-      <h2>资料</h2>
-      <p class="bp-help">用户名用来登录；显示名只出现在界面上。</p>
-      <label class="bp-field"><span>用户名</span><input class="bp-input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32" /></label>
-      <label class="bp-field"><span>显示名</span><input class="bp-input" name="display_name" maxlength="40" placeholder="可留空" /></label>
-      <div class="bp-actions"><button type="submit" class="bridge-btn bridge-btn-primary">保存</button></div>
-    </form>
+      <form class="glass panel" id="profile">
+        <h2 class="panel-title">资料</h2>
+        <p class="muted small bp-lead">用户名用来登录；显示名只出现在界面上。</p>
+        <div class="form-row"><label for="f-username">用户名</label><input id="f-username" class="field" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32" /></div>
+        <div class="form-row"><label for="f-display">显示名</label><input id="f-display" class="field" name="display_name" maxlength="40" placeholder="可留空" /></div>
+        <div class="actions"><button type="submit" class="btn">保存</button></div>
+      </form>
 
-    <form class="bp-card" id="password">
-      <h2>修改密码</h2>
-      <p class="bp-help">改完后其它设备需要重新登录，这台设备保持登录。</p>
-      <label class="bp-field"><span>当前密码</span><input class="bp-input" type="password" name="current" autocomplete="current-password" required /></label>
-      <label class="bp-field"><span>新密码（至少 8 位）</span><input class="bp-input" type="password" name="new" autocomplete="new-password" minlength="8" required /></label>
-      <label class="bp-field"><span>再输一次</span><input class="bp-input" type="password" name="again" autocomplete="new-password" minlength="8" required /></label>
-      <div class="bp-actions"><button type="submit" class="bridge-btn bridge-btn-primary">修改密码</button></div>
-    </form>
+      <form class="glass panel" id="password">
+        <h2 class="panel-title">修改密码</h2>
+        <p class="muted small bp-lead">改完后其它设备需要重新登录，这台设备保持登录。</p>
+        <div class="form-row"><label for="f-current">当前密码</label><input id="f-current" class="field" type="password" name="current" autocomplete="current-password" required /></div>
+        <div class="form-row"><label for="f-new">新密码（至少 8 位）</label><input id="f-new" class="field" type="password" name="new" autocomplete="new-password" minlength="8" required /></div>
+        <div class="form-row"><label for="f-again">再输一次</label><input id="f-again" class="field" type="password" name="again" autocomplete="new-password" minlength="8" required /></div>
+        <div class="actions"><button type="submit" class="btn">修改密码</button></div>
+      </form>
 
-    <form method="post" action="/logout" class="bp-actions" id="logout"><button type="submit" class="bridge-btn">退出登录</button></form>
-  </main>
+      <form method="post" action="/logout" class="actions" id="logout"><button type="submit" class="btn-ghost">退出登录</button></form>
+    </main>
+  </div>
 
   <script type="module">
     import { api, esc, toast, fmtWhen, userMeter, WINDOWS } from '/static/bridge/bridge-pages.js';
@@ -60,15 +66,15 @@
       if (d.sso) {  // portal SSO: the password lives in the portal; this site's own one is unused
         pw.hidden = true;
         $('#logout').hidden = true;  // sign-out is the corner account menu's (portal) 登出
-        $('#profile .bp-help').textContent = `通过门户登录（${d.sso.portal_user || ''}）；用户名与显示名只出现在这里的界面上。`;
+        $('#profile .bp-lead').textContent = `通过门户登录（${d.sso.portal_user || ''}）；用户名与显示名只出现在这里的界面上。`;
       }
       $('#usage').innerHTML = u.role === 'admin'
-        ? '<p class="bp-help">管理员不受额度限制。整个订阅的用量在「管理」页。</p>'
+        ? '<p class="muted small">管理员不受额度限制。整个订阅的用量在「管理」页。</p>'
         : WINDOWS.map(([k, label]) => {
           const w = us[k], reset = fmtWhen(w.resets_at);
-          return `<div>${userMeter(w, label)}${reset ? `<div class="bp-meter-sub">重置：${esc(reset)}</div>` : ''}</div>`;
+          return `<div>${userMeter(w, label)}${reset ? `<div class="tiny muted">重置：${esc(reset)}</div>` : ''}</div>`;
         }).join('');
-      $('#blocked').innerHTML = us.blocked ? `<div class="bp-blocked">${esc(us.blocked)}</div>` : '';
+      $('#blocked').innerHTML = us.blocked ? `<div class="callout err bp-gap">${esc(us.blocked)}</div>` : '';
     }
 
     profile.addEventListener('submit', async (e) => {
