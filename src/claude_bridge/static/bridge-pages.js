@@ -1,4 +1,5 @@
 // Helpers shared by the multi-user pages (app / account / admin). Framework-free ES module.
+import { toast as dsToast } from './vendor/szyyw-design/toast.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -17,12 +18,28 @@ export async function api(method, path, body) {
   return data;
 }
 
-let toastTimer;
+/** Operation feedback: @szyyw/design's toast (bottom-centre stack, click to close). */
 export function toast(msg, isErr = false) {
-  let t = document.querySelector('.bridge-toast');
-  if (!t) { t = document.createElement('div'); t.className = 'bridge-toast'; document.body.appendChild(t); }
-  t.textContent = msg; t.classList.toggle('err', isErr); t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, isErr ? 5000 : 2200);
+  return dsToast(msg, { tone: isErr ? 'err' : 'ok', timeout: isErr ? 5000 : 2200 });
+}
+
+/**
+ * A modal sheet (@szyyw/design .overlay > .sheet). `.overlay` is display:flex, so `hidden` can't hide it: the overlay
+ * is attached on open and removed on close. Closes on ✕ / Esc / a click on the backdrop. Returns { open, close, isOpen }.
+ */
+export function sheet(el) {
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.append(el);
+  el.hidden = false;
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-close]')) close(); });
+  return {
+    open() { if (!overlay.isConnected) { document.body.append(overlay); document.addEventListener('keydown', onKey); } el.querySelector('input:not([type=hidden]), button')?.focus(); },
+    close,
+    get isOpen() { return overlay.isConnected; },
+  };
 }
 
 export const WINDOWS = [['five_hour', '5 小时'], ['seven_day', '本周']];
@@ -77,14 +94,14 @@ export function fmtGeo(g) {
   return [place, shortIsp(g.isp)].filter(Boolean).join(' · ');
 }
 
-/** A usage bar: `used` fills it, `limit` (if any) draws a tick; both in percent. */
+/** A usage bar (@szyyw/design .bar): `used` fills it, `limit` (if any) draws a tick; both in percent. */
 export function meterHtml({ label, used, limit, sub = '', right = null }) {
   const pct = used == null ? 0 : Math.min(100, used);
-  const cls = limit != null && used != null && used >= limit ? 'full' : limit != null && used != null && used >= limit * 0.8 ? 'warn' : '';
+  const cls = limit != null && used != null && used >= limit ? ' over' : limit != null && used != null && used >= limit * 0.8 ? ' bp-warn' : '';
   const tick = limit != null && limit < 100 ? `<s style="left:${limit}%"></s>` : '';
   const txt = right ?? (used == null ? '—' : limit != null ? `${fmtPct(used)} / ${fmtPct(limit)}` : fmtPct(used));
-  return `<div class="bp-meter"><div class="bp-meter-top"><span>${esc(label)}</span><b>${esc(txt)}</b></div>`
-    + `<div class="bp-bar ${cls}"><i style="width:${pct}%"></i>${tick}</div>${sub ? `<div class="bp-meter-sub">${sub}</div>` : ''}</div>`;
+  return `<div class="bp-meter"><div class="spread small"><span>${esc(label)}</span><b class="num">${esc(txt)}</b></div>`
+    + `<div class="bar"><div class="bar-fill${cls}" style="width:${pct}%"></div>${tick}</div>${sub ? `<div class="tiny muted">${sub}</div>` : ''}</div>`;
 }
 
 /** One window of a user's usage (from /api/me or /api/admin/users). */

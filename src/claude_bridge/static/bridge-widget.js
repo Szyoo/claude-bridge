@@ -117,7 +117,10 @@ const CATEGORY_ZH = {
   'System tools (deferred)': '系统工具（按需加载，不计入）', Skills: '技能说明', 'Memory files': '记忆文件', Messages: '对话消息（历史 + 工具输出）',
   'Autocompact buffer': '自动压缩预留', 'Free space': '剩余空间',
 };
-const CATEGORY_COLORS = ['#3b6df2', '#e0703a', '#2e9b5d', '#d4a72c', '#8b8b8b', '#6f6f6f', '#3b6df2', '#555555'];
+// /context segments: the host's chart palette via --bridge-chart-1…6 (bridge-widget.css → @szyyw/design --chart-*); the inline
+// fallback chain keeps them coloured where the panel is rendered outside a .bridge-root (hosts that only use renderContextPanel)
+const CHART_FALLBACK = ['#3b6df2', '#e0703a', '#2e9b5d', '#d4a72c', '#8b8b8b', '#6f6f6f'];
+const categoryColor = (i) => { const n = (i % CHART_FALLBACK.length) + 1; return `var(--bridge-chart-${n}, var(--chart-${n}, ${CHART_FALLBACK[n - 1]}))`; };
 
 // Elapsed m:ss since a server UTC timestamp ('YYYY-MM-DD HH:MM:SS').
 export function fmtElapsed(utc, now = Date.now()) {
@@ -155,10 +158,10 @@ export function renderContextPanel(el, ctx, opts = {}) {
   } else {
     const win = ctx.window || 1;
     const counted = (ctx.categories || []).filter(c => !c.deferred && c.name !== 'Free space');
-    const segs = counted.map((c, i) => `<i style="width:${Math.max(0.3, (c.tokens || 0) / win * 100)}%;background:${CATEGORY_COLORS[i % CATEGORY_COLORS.length]}" title="${esc(CATEGORY_ZH[c.name] || c.name)} ${fmtTokens(c.tokens)}"></i>`).join('');
+    const segs = counted.map((c, i) => `<i style="width:${Math.max(0.3, (c.tokens || 0) / win * 100)}%;background:${categoryColor(i)}" title="${esc(CATEGORY_ZH[c.name] || c.name)} ${fmtTokens(c.tokens)}"></i>`).join('');
     const rows = (ctx.categories || []).map((c) => {
       const counting = !c.deferred && c.name !== 'Free space';
-      const dot = counting ? `<i class="dot" style="background:${CATEGORY_COLORS[counted.indexOf(c) % CATEGORY_COLORS.length]}"></i>` : '<i class="dot none"></i>';
+      const dot = counting ? `<i class="dot" style="background:${categoryColor(counted.indexOf(c))}"></i>` : '<i class="dot none"></i>';
       const pct = c.pct == null ? '—' : `${c.pct}%`;
       return `<tr class="${c.deferred ? 'deferred' : ''}"><td>${dot}${esc(CATEGORY_ZH[c.name] || c.name)}</td><td class="n">${fmtTokens(c.tokens)}</td><td class="n">${pct}</td></tr>`;
     }).join('');

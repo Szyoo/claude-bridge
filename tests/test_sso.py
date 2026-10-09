@@ -272,18 +272,36 @@ def test_sso_pages_load_corner_tools(db, monkeypatch):
     for path in ("/", "/account", "/admin"):
         r = c.get(path)
         assert r.status_code == 200, path
-        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-scheme="auto">' in r.text
+        # no appearance cookies: @szyyw/design defaults (nebula / default palette → no data-palette / dark)
+        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-theme="nebula" data-scheme="dark">' in r.text
         assert "/static/bridge/vendor/szyyw-design/tokens.css" in r.text
+        assert "/static/bridge/vendor/szyyw-design/components.css" in r.text
         assert "/static/bridge/corner-boot.js" in r.text
-    for f in ("corner-boot.js", "vendor/szyyw-design/switcher.js", "vendor/szyyw-design/components.css"):
+    for f in ("corner-boot.js", "vendor/szyyw-design/chrome.js", "vendor/szyyw-design/components.css"):
         assert c.get(f"/static/bridge/{f}").status_code == 200, f
 
 
-def test_sso_off_pages_have_no_corner_tools(db):
+def test_pages_render_appearance_cookies(db, monkeypatch):
+    c = gated(make(db, monkeypatch), "alice", role="admin")
+    c.cookies.set("cb_scheme", "light")
+    c.cookies.set("cb_palette", "aurora")
+    assert 'data-theme="nebula" data-palette="aurora" data-scheme="light">' in c.get("/account").text
+    c.cookies.set("cb_scheme", "auto")
+    c.cookies.set("cb_palette", '"><script>')  # not an id: ignored, never echoed
+    r = c.get("/account").text
+    assert 'data-theme="nebula" data-scheme="auto">' in r and "<script>\"" not in r and 'data-palette' not in r
+
+
+def test_sso_off_pages_have_no_portal_tools(db):
+    """Without SSO the pages still get the design package (🌗 / appearance) but no data-sso / data-portal: corner-boot
+    then mounts no app switcher / account menu."""
     app = create_multiuser_app(db_path=db, agent_token="tok", tz="UTC")
     c = TestClient(app, follow_redirects=False)
+    login = c.get("/login")
+    assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in login.text and "corner-boot" in login.text
     c.post("/login", data={"username": "szyyw", "password": PW})
-    for path in ("/", "/account", "/admin", "/login"):
+    for path in ("/", "/account", "/admin"):
         r = c.get(path)
-        assert r.status_code in (200, 303), path
-        assert "data-sso" not in r.text and "szyyw-design" not in r.text and "corner-boot" not in r.text
+        assert r.status_code == 200, path
+        assert "data-sso" not in r.text and "data-portal" not in r.text
+        assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in r.text and "corner-boot" in r.text

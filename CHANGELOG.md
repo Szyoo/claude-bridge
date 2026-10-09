@@ -2,7 +2,14 @@
 
 版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
 
-## 未发布
+## v0.5.0 — 2026-10-09
+
+- **嵌入组件跟随宿主的 @szyyw/design**：`bridge-widget.css` 的 `--bridge-*` 缺省值改为 `var(--设计包 token, 回退值)`（`--bg / --sheet-bg / --text / --text-dim / --glass-border / --hover-tint / --accent / --on-accent / --err / --on-err / --ok / --overlay-bg / --term-* / --pop-shadow`），明暗改用 `light-dark()` 跟随宿主 `color-scheme`，去掉 `prefers-color-scheme` 媒体查询——宿主固定深色 / 浅色、换配色时组件即时跟随，宿主不必再映射 token 或重写 `.bridge-*` 皮肤。`/context` 构成的分类色改用 `--bridge-chart-1…6`（缺省 `--chart-1…6`），不再写死 hex。按钮 / 角标 / 遮罩 / 缩略图上的 `#fff`、`rgba(0,0,0,…)` 收进 token（新增 `--bridge-err-fg` / `--bridge-scrim` / `--bridge-term-border` / `--bridge-on-image-bg|fg`）；下拉箭头改用 `currentColor`。`--bridge-font` 缺省 `inherit`（跟宿主字体）。`--bridge-*` 覆写接口不变、原有变量名全部保留。行为变化：宿主根上没有 `color-scheme` 时组件是浅色（之前跟随系统），要跟随系统请在宿主设 `color-scheme: light dark`
+- 组件修：主列与侧栏收起时的网格列改为 `minmax(0, 1fr)`，窄屏顶栏的长状态文字不再把整页撑出横向滚动；偏好面板的行是 `<label>`，宿主全局 `label { display: block; margin; color }`（如 components.css）不再改到它们
+- **多用户页面统一到 @szyyw/design v0.13.1**（登录 / 账户 / 管理 / 查看用户 / Code 项目页）：直接加载 `tokens.css` + `components.css`，自写的 `.bp-card / .bp-field / .bp-input / .bp-actions / .bp-tag / .bp-bar / .bp-err / .bp-blocked / .bp-dialog / .bp-head / .au-tabs`、页面 toast 换成包的 `.glass.panel / .form-row + .field / .actions / .pill / .bar / .err-text / .callout / .overlay + .sheet / .app-header / .tabs / .seg / .tbl / toast()`；账户 / 管理页加点阵背景。`corner-boot.js` 改用 `mountChrome`（🌗 + 外观弹层总是挂，SSO 时再挂应用切换器与账户菜单），不再 fetch `components.css` 包 `@scope`；顶栏给工具位让位改用 `--corner-rail-w`（不再写死 100px / 88px）
+- **外观首屏**：服务端读 `cb_theme / cb_palette / cb_scheme` cookie 渲染 `<html data-theme / data-palette / data-scheme>`（DESIGN §2.1），取代写死的 `data-scheme="auto"`；默认同设计包（深色）
+- 修：管理页「新建用户」弹层里露出了只属于编辑的「重置密码 / 停用 / 删除」按钮（只隐藏了第一个编辑专用块）
+- `scripts/update-design.sh` 从目标 tag 取 `sync.sh`（之前取 main）
 
 - **IP 归属地**：管理页用户行的最近访问、`/admin/users/<id>` 的访问记录，IP 下面多一行「国家 省 市 · 运营商」（同门户首页公网 IP 卡片）。服务端 `ipgeo.py` 查 ip-api.com batch（zh-CN），按 IP 永久缓存在新表 `bridge_ipgeo`；tailnet 显示「Tailscale 内网」、其他内网 / 保留地址显示「内网」，不出网；查询失败不缓存、不影响页面。接口 `last_access.geo`、访问记录每行 `geo`（`{country, region, city, isp}` / `{label}` / `null`），仅管理员接口
 - **站点 favicon**：独立站点（`serve` 单密码 / 多用户）根路径提供 `/favicon.svg`、`/favicon.ico`、`/apple-touch-icon.png`（文件在 `static/site/`，来自平台仓库 `branding/`，应用层路由不要求登录），全部 HTML 页面 head 带三个 `<link>`。嵌入式组件（`create_bridge` + `bridge-widget.*`）不注册这些路由、不碰宿主的 favicon

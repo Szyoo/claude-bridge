@@ -94,7 +94,7 @@ claude-bridge users --db /data/bridge.db list | enable <名字>
 - **角色**：管理页、管理 API、额度豁免一律按本次请求的 `X-Role`；`bridge_users.role` 不改写（关掉 SSO 后仍按存储的角色）。
 - **登录 / 登出**：`GET /login` → `302 $PORTAL_ORIGIN/login?rd=<https://本站/>`（按 `X-Forwarded-Proto` / `-Host` 拼）；没身份的页面 → 门户登录并回到当前地址；`POST /login`、`POST /api/me/password` → 403；`POST /logout` 清掉本地 cookie 后 303 到 `PORTAL_ORIGIN`（默认 `https://szyyw.xyz`）。
 - **映射**：`bridge_users.portal_sub`（可空、唯一；ids 不变，threads / files / usage / projects 的 owner 也不变）。设置方式：`claude-bridge users [--db PATH] map <用户名> <门户ID>` / `unmap <用户名>`，`users list` 显示 `门户ID=`；或管理页编辑用户里的「门户 ID」/ `POST /api/admin/users/<id>/portal-user {"portal_sub": "<门户ID>" | null}`。映射在 SSO 关着时也能设，先映射再开门卫；同名行不映射也行，第一次登录会自动认领。
-- **右上角工具**（v0.4.1）：SSO 开启时 app / account / admin 页面在 `<html>` 上标 `data-sso="1" data-portal="…"`，加载 [@szyyw/design](https://github.com/Szyoo/szyyw-design) 的应用切换器（`mountAppSwitcher`）与账户菜单（`mountAccountMenu`，登出 = 门户登出，所以页面里不再有「退出」按钮）。设计包 vendor 在 `src/claude_bridge/static/vendor/szyyw-design/`，用 `bash scripts/update-design.sh [tag]` 同步（委托上游 `sync.sh`，不要手改）；`components.css` 由 `static/corner-boot.js` 包进 `@scope` 后挂载，只作用于工具位与两个面板，不影响 bridge 自己的样式。SSO 关闭时、standalone 与嵌入式组件都不加载这些文件。
+- **右上角工具**：页面外观来自 [@szyyw/design](https://github.com/Szyoo/szyyw-design)（v0.5.0 起所有多用户页面都加载 `tokens.css` + `components.css`，卡片 / 表单 / 弹层 / toast 用包的公开类）。`static/corner-boot.js` 调 `mountChrome`：🌗 与外观弹层总是挂；SSO 开启时（`<html data-sso="1" data-portal="…">`）再挂应用切换器与账户菜单（登出 = 门户登出，所以页面里不再有「退出」按钮）。外观存在 `cb_theme / cb_palette / cb_scheme` cookie，服务端读它渲染 `<html data-theme / data-palette / data-scheme>`，首屏不闪。设计包 vendor 在 `src/claude_bridge/static/vendor/szyyw-design/`，用 `bash scripts/update-design.sh [tag]` 同步（委托目标 tag 的上游 `sync.sh`，不要手改）。standalone 单密码模式与嵌入式组件不加载设计包。
 - **不经门卫的路径**：`/api/agent/*`（worker，`Authorization: Bearer`）与 `/api/health`。浏览器的 SSE（`/api/threads/<id>/stream`，EventSource）和图片（`/api/files/<id>`）都是同源请求，带门户 cookie 过门卫，应用从头里认人。
 
 嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。
@@ -149,6 +149,8 @@ worker.run_forever()
 ```
 
 只要传输层时用 `client.subscribe(threadId, handlers)`:`onSnapshot / onMessage / onDelta / onEvent / onStatus / onDone / onThread / onContext / onJob / onFallback / onError`。增量按 `rev` 去重(重复跳过、断档自动重拉整条);EventSource 连续失败会降级为轮询,30 秒后再尝试 SSE;401 触发 `onAuthLost`。组件的样式全部通过 `--bridge-*` 自定义属性覆盖,markdown 渲染优先用 `opts.markdown`,其次 `window.marked`(先转义),否则纯文本。
+
+**主题**（v0.5.0）：`bridge-widget.css` 的 `--bridge-*` 缺省值跟随宿主的 @szyyw/design token（`--bridge-bg: var(--bg, 回退)`、`--bridge-accent: var(--accent, …)`、`/context` 分段色 `--bridge-chart-1…6: var(--chart-1…6, …)` 等），明暗用 `light-dark()` 跟随宿主的 `color-scheme`（而不是系统的 `prefers-color-scheme`）；字体缺省 `inherit`。所以加载了 `tokens.css` 的宿主**不用再映射任何 token**，换配色 / 🌗 时组件即时跟着变。没有设计包的宿主拿到回退色板；宿主根上没有 `color-scheme` 时是浅色，想跟随系统就设 `color-scheme: light dark`（或 `<meta name="color-scheme" content="light dark">`）。`--bridge-*` 仍是对外覆写接口，原有变量名都保留；新增 `--bridge-err-fg` / `--bridge-scrim` / `--bridge-term-border` / `--bridge-on-image-bg|fg` / `--bridge-chart-1…6`。只用 `renderTurn` / `renderContextPanel` 等函数、自己搭外壳的宿主：引入 `bridge-widget.css`，并把消息 / 弹层所在容器加上 `bridge-root` 类（缺省 token 声明在 `.bridge-root, .bridge` 上），就能删掉自己那套 `.bridge-*` 皮肤。
 
 界面照 Claude Code 客户端:助手消息通栏无容器、用户消息浅底块、工具调用折叠成一行灰字(连续多条合并为「执行了 N 条命令」)、正文与工具组**按真实顺序交错**(每个 `tool_use` / `thinking` 事件带 `at` = 当时已输出的正文字数,在下一个段落边界切开,不会切进代码块)。宿主想自己排版但复用这套渲染时,`bridge-widget.js` 还导出:
 
