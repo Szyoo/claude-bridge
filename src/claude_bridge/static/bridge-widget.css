@@ -102,6 +102,22 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-menu button { text-align: left; padding: 6px 10px; font: inherit; font-size: .928em; border: 0; border-radius: 5px; background: transparent; color: var(--bridge-fg); cursor: pointer; }
 .bridge-menu button:hover { background: var(--bridge-hover); }
 .bridge-menu button.danger { color: var(--bridge-err); }
+.bridge-menu-warn { margin: 2px 4px 4px; max-width: 220px; font-size: .857em; line-height: 1.45; color: var(--bridge-err); }
+
+/* ---------- confirmations: an armed destructive button (armConfirm) and the text prompt dialog (promptDialog) ---------- */
+.bridge-armed:not(:disabled), .bridge-menu button.bridge-armed { color: var(--bridge-err); border-color: color-mix(in srgb, var(--bridge-err) 55%, transparent); background: color-mix(in srgb, var(--bridge-err) 12%, transparent); font-weight: 600; }
+.bridge-ctx-warn { margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 1.5; color: var(--bridge-err); background: color-mix(in srgb, var(--bridge-err) 10%, transparent); }
+.bridge-dlg-scrim { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 16px; background: var(--bridge-scrim); }
+.bridge-dlg { width: min(400px, 100%); display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; border: 1px solid var(--bridge-border); border-radius: 12px; background: var(--bridge-panel); color: var(--bridge-fg); box-shadow: var(--bridge-shadow-pop); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); font-size: 13px; animation: bridge-dlg-in .18s ease-out; }
+.bridge-dlg-head { display: flex; align-items: center; gap: 6px; margin: -4px -6px 0 0; }
+.bridge-dlg-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.bridge-dlg-label { margin: 0; font-size: 12px; color: var(--bridge-muted); display: block; }
+.bridge-dlg-input { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--bridge-border); border-radius: 8px; background: var(--bridge-bg); color: var(--bridge-fg); font: inherit; font-size: max(16px, 1em); }
+.bridge-dlg-input:focus { outline: 2px solid color-mix(in srgb, var(--bridge-accent) 45%, transparent); outline-offset: 0; border-color: var(--bridge-accent); }
+.bridge-dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+@keyframes bridge-dlg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .bridge-dlg { animation: none; } }
+@media (max-width: 720px) { .bridge-dlg-scrim { place-items: end center; padding: 0; } .bridge-dlg { width: 100%; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); } }
 
 /* ---------- transcript ---------- */
 .bridge-list { overflow-y: auto; overflow-x: hidden; padding: var(--chat-turn-gap) var(--chat-gutter); min-height: 0; }

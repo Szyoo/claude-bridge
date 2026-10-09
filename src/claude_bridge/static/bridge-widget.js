@@ -175,10 +175,15 @@ export function renderContextPanel(el, ctx, opts = {}) {
       <div class="bridge-ctx-foot"><span class="bridge-muted bridge-tiny">数据来自 claude /context${ctx.at ? ` · 更新于 ${esc(ctx.at)} UTC` : ''}</span>
         <button type="button" class="bridge-btn bridge-tiny" data-ctx="refresh"${opts.busy ? ' disabled' : ''}>刷新构成</button>
         <button type="button" class="bridge-btn bridge-tiny bridge-btn-danger" data-ctx="compact"${opts.busy ? ' disabled' : ''}>压缩会话</button></div>
+      <p class="bridge-ctx-warn" role="alert" hidden></p>
     </div>`;
   }
   el.querySelector('[data-ctx="refresh"]')?.addEventListener('click', () => opts.onRefresh?.());
-  el.querySelector('[data-ctx="compact"]')?.addEventListener('click', () => { if (confirm('让 Claude 把这段对话的历史压缩成摘要？细节会丢失，但上下文会明显变小。')) opts.onCompact?.(); });
+  // DESIGN §8: the first click arms the button and says what will happen; the second (within 5 s) compacts
+  el.querySelector('[data-ctx="compact"]')?.addEventListener('click', (e) => {
+    if (armConfirm(e.currentTarget, { label: '再点一次确认压缩', warnEl: el.querySelector('.bridge-ctx-warn'),
+      warning: 'Claude 会把这段对话的历史压缩成摘要：细节会丢失，但上下文会明显变小。' })) opts.onCompact?.();
+  });
 }
 
 // Bottom popover body: the session numbers (model / turns / io / quotas) above the /context breakdown.
@@ -699,6 +704,71 @@ export function onOutsidePointer(keep, close) {
   return () => document.removeEventListener('pointerdown', h);
 }
 
+// ---------- confirmations (host-agnostic; DESIGN §8 of @szyyw/design, but no dependency on it) ----------
+
+// Two-step confirm for a destructive button: the first click arms it (red, `label`, `warning` shown in `warnEl`,
+// announced via role="alert"); a second click within `timeout` ms returns true. Every other call returns false.
+// Arming one button disarms any other armed button in the same document.
+export function armConfirm(btn, { label = '再点一次确认', warnEl = null, warning = '', timeout = 5000 } = {}) {
+  if (btn.dataset.bridgeArmed != null) { disarmConfirm(btn); return true; }
+  for (const other of document.querySelectorAll('[data-bridge-armed]')) disarmConfirm(other);
+  btn.dataset.bridgeArmed = btn.textContent;
+  btn.textContent = label;
+  btn.classList.add('bridge-armed');
+  btn._bridgeWarn = warnEl;
+  if (warnEl) { warnEl.textContent = warning; warnEl.hidden = false; }
+  btn._bridgeDisarm = setTimeout(() => disarmConfirm(btn), timeout);
+  return false;
+}
+export function disarmConfirm(btn) {
+  if (btn?.dataset.bridgeArmed == null) return;
+  clearTimeout(btn._bridgeDisarm);
+  btn.textContent = btn.dataset.bridgeArmed;
+  delete btn.dataset.bridgeArmed;
+  btn.classList.remove('bridge-armed');
+  if (btn._bridgeWarn) { btn._bridgeWarn.hidden = true; btn._bridgeWarn = null; }
+}
+
+let dlgSeq = 0;
+// A small modal text prompt (replaces window.prompt): resolves the entered string, or null on 取消 / ✕ / Esc / a click
+// outside. role="dialog" + aria-modal, labelled by its title; focus goes to the input, Tab stays inside, and focus
+// returns to `returnFocus` (default: what had it before) on close. Styled only with --bridge-* tokens.
+export function promptDialog({ title, label = '', value = '', placeholder = '', okLabel = '保存', cancelLabel = '取消', maxLength = 200, returnFocus } = {}) {
+  const back = returnFocus ?? document.activeElement;
+  const id = `bridge-dlg-${++dlgSeq}`;
+  const wrap = document.createElement('div');
+  wrap.className = 'bridge-root bridge-dlg-scrim';
+  wrap.innerHTML = `<form class="bridge-dlg" role="dialog" aria-modal="true" aria-labelledby="${id}-t">
+      <div class="bridge-dlg-head"><span class="bridge-dlg-title" id="${id}-t">${esc(title)}</span>
+        <button type="button" class="bridge-pop-x" data-dlg="cancel" aria-label="关闭" title="关闭">✕</button></div>
+      ${label ? `<label class="bridge-dlg-label" for="${id}-i">${esc(label)}</label>` : ''}
+      <input class="bridge-dlg-input" id="${id}-i" maxlength="${maxLength}" autocomplete="off" placeholder="${esc(placeholder)}"${label ? '' : ` aria-labelledby="${id}-t"`} />
+      <div class="bridge-dlg-foot"><button type="button" class="bridge-btn" data-dlg="cancel">${esc(cancelLabel)}</button>
+        <button type="submit" class="bridge-btn bridge-btn-primary">${esc(okLabel)}</button></div>
+    </form>`;
+  const form = wrap.firstElementChild, input = form.querySelector('input');
+  input.value = value;
+  document.body.appendChild(wrap);
+  return new Promise((resolve) => {
+    const done = (v) => {
+      wrap.remove();
+      if (back && typeof back.focus === 'function' && back.isConnected) back.focus();
+      resolve(v);
+    };
+    form.addEventListener('submit', (e) => { e.preventDefault(); done(input.value); });
+    wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target.closest('[data-dlg="cancel"]')) done(null); });
+    wrap.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); return; }
+      if (e.key !== 'Tab') return;
+      const f = [...form.querySelectorAll('input, button')].filter(x => !x.disabled);
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    input.focus(); input.select();
+  });
+}
+
 // ============================================================
 // Reference widget
 // ============================================================
@@ -710,7 +780,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   };
   const S = { threadTitle: '新对话', helperOff: 'helper 离线：消息会排队', polling: '轮询模式',
     waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', empty: '问点什么吧', newThread: '＋ 新对话',
-    rename: '重命名', pin: '置顶', unpin: '取消置顶', del: '删除对话', delConfirm: '删除这个对话？消息记录会一起删除。', stop: '停止', me: '我', assistant: 'Claude',
+    rename: '重命名', pin: '置顶', unpin: '取消置顶', del: '删除对话', delConfirm: '删除这个对话？消息记录会一起删除。', delArm: '再点一次确认删除', renameLabel: '对话标题', save: '保存', cancel: '取消', stop: '停止', me: '我', assistant: 'Claude',
     ctx: '自动带背景', ...o.strings };
   const prefs = loadPrefs(o.prefsKey);
 
@@ -724,7 +794,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
           <span class="bridge-title">${esc(o.title)}</span>
           <span class="bridge-agent"><i class="bridge-dot"></i><span class="txt"></span></span>
           ${o.showThreads ? `<button type="button" class="bridge-icon" data-act="menu" title="更多">⋯</button>
-          <div class="bridge-menu" hidden><button type="button" data-act="rename">${esc(S.rename)}</button><button type="button" data-act="pin">${esc(S.pin)}</button><button type="button" class="danger" data-act="del">${esc(S.del)}</button></div>` : ''}
+          <div class="bridge-menu" hidden><button type="button" data-act="rename">${esc(S.rename)}</button><button type="button" data-act="pin">${esc(S.pin)}</button><button type="button" class="danger" data-act="del">${esc(S.del)}</button><p class="bridge-menu-warn" role="alert" hidden></p></div>` : ''}
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
         <form class="bridge-form">
@@ -947,7 +1017,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     placePopover(anchor, p, { align: kind === 'prefs' ? 'start' : 'end' });
   }
   function ctxBody() { return pops.ctx.querySelector('.bridge-pop-body') || popShell(pops.ctx, '当前会话', closePops); }
-  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) menu.hidden = true; scrim.hidden = true; setScrollLock(false); }
+  function closePops() { for (const p of Object.values(pops)) p.hidden = true; if (menu) { menu.hidden = true; disarmConfirm(menu.querySelector('[data-act="del"]')); } scrim.hidden = true; setScrollLock(false); }
   scrim.addEventListener('click', closePops);
 
   // ---------- actions ----------
@@ -989,11 +1059,19 @@ export function mountBridgeWidget(el, client, opts = {}) {
       if (act === 'new') { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); root.classList.remove('side-open'); }
       else if (act === 'side-close') root.classList.remove('side-open');
       else if (act === 'side') { if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open'); else { prefs.sidebar = !prefs.sidebar; usePrefs('sidebar'); } }
-      else if (act === 'menu') { const m = menu; const was = m.hidden; closePops(); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
+      else if (act === 'menu') { const m = menu; const was = m.hidden; closePops(); disarmConfirm(m.querySelector('[data-act="del"]')); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
       else if (act === 'prefs' || act === 'ctx') openPop(act, e.target.closest('[data-act]'));
-      else if (act === 'rename') { closePops(); const t = prompt(S.rename, state.threadRow?.title || ''); if (t != null) await client.patchThread(state.thread, { title: t.trim() || null }); }
+      else if (act === 'rename') {
+        closePops();
+        const t = await promptDialog({ title: S.rename, label: S.renameLabel, value: state.threadRow?.title || '', placeholder: S.threadTitle,
+          okLabel: S.save, cancelLabel: S.cancel, returnFocus: $('[data-act="menu"]') });
+        if (t != null) await client.patchThread(state.thread, { title: t.trim() || null });
+      }
       else if (act === 'pin') { closePops(); await client.patchThread(state.thread, { pinned: !state.threadRow?.pinned }); }
-      else if (act === 'del') { closePops(); if (!confirm(S.delConfirm)) return; const r = await client.deleteThread(state.thread, o.scope); state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } loadThreads(); }
+      else if (act === 'del') {
+        // two-step inside the ⋯ menu (it stays open while armed): first click warns, second deletes
+        if (!armConfirm(e.target.closest('[data-act]'), { label: S.delArm, warnEl: menu.querySelector('.bridge-menu-warn'), warning: S.delConfirm })) return;
+        closePops(); const r = await client.deleteThread(state.thread, o.scope); state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } loadThreads(); }
     } catch (err) { toast(err.message, true); }
   };
   el.addEventListener('click', onClick); menu?.addEventListener('click', onClick);

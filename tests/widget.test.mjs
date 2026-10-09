@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
 import {
   splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
+  armConfirm, disarmConfirm,
 } from '../src/claude_bridge/static/bridge-widget.js';
 
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
@@ -194,4 +195,23 @@ test('checkBridgeUpdate: picks the highest semver tag, caches it, compares with 
   assert.equal((await checkBridgeUpdate({ current: '0.10.1', fetchFn })).hasUpdate, false);
   assert.equal(calls, 1);   // second call served from the cache
   await assert.rejects(checkBridgeUpdate({ current: '0.2.0', force: true, fetchFn: async () => ({ ok: false, status: 403 }) }), /GitHub API 403/);
+});
+
+test('armConfirm: first click arms (label + warning), second confirms; disarm restores; arming one disarms the other', () => {
+  const armed = new Set();
+  const fakeBtn = (text) => {
+    const b = { textContent: text, dataset: {}, classList: { add: (c) => armed.add(b), remove: () => armed.delete(b) } };
+    return b;
+  };
+  globalThis.document = { querySelectorAll: () => [...armed].filter(b => b.dataset.bridgeArmed != null) };
+  const warn = { textContent: '', hidden: true };
+  const a = fakeBtn('删除'), b = fakeBtn('压缩');
+  assert.equal(armConfirm(a, { label: '再点一次确认', warnEl: warn, warning: '会删掉', timeout: 60000 }), false);
+  assert.equal(a.textContent, '再点一次确认'); assert.equal(warn.hidden, false); assert.equal(warn.textContent, '会删掉');
+  assert.equal(armConfirm(b, { timeout: 60000 }), false);           // arming b disarms a
+  assert.equal(a.textContent, '删除'); assert.equal(warn.hidden, true);
+  assert.equal(armConfirm(b), true);                               // second click on b confirms and restores it
+  assert.equal(b.textContent, '压缩'); assert.equal(b.dataset.bridgeArmed, undefined);
+  disarmConfirm(b); disarmConfirm(null);                           // idempotent / null-safe
+  delete globalThis.document;
 });
