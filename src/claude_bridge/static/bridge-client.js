@@ -78,15 +78,22 @@ export class BridgeClient {
 
   // ---- chat ----
   // `files` = ids returned by upload(); text may be empty when images are attached
-  send(text, { thread = null, scope = '', key = '', newThread = false, files = [] } = {}) {
-    if (thread) return this.request('POST', `/threads/${encodeURIComponent(thread)}/messages`, { text, files });
-    return this.request('POST', '/send', { text, scope, key, new_thread: newThread, files });
+  send(text, { thread = null, scope = '', key = '', newThread = false, files = [], options = null,
+               clientTools = [], clientEnvironment = {} } = {}) {
+    const extra = options ? { options } : {};
+    if (clientTools.length) { extra.client_tools = clientTools; extra.client_environment = clientEnvironment; }
+    if (thread) return this.request('POST', `/threads/${encodeURIComponent(thread)}/messages`, { text, files, ...extra });
+    return this.request('POST', '/send', { text, scope, key, new_thread: newThread, files, ...extra });
   }
   // ---- images ----
   // the body is the image itself; the server identifies the format from its bytes → { id, name, mime, size }
   upload(blob, { name = '' } = {}) { return this.request('POST', `/files?name=${encodeURIComponent(name)}`, undefined, { raw: blob }); }
   fileUrl(id) { return `${this.baseUrl}/files/${encodeURIComponent(id)}`; }
   cancel(messageId) { return this.request('POST', `/messages/${messageId}/cancel`); }
+  pendingClientTools(threadId) { return this.request('GET', `/threads/${encodeURIComponent(threadId)}/client-tools`); }
+  respondClientTool(messageId, callId, content, { isError = false } = {}) {
+    return this.request('POST', `/messages/${messageId}/client-tools/${encodeURIComponent(callId)}/result`, { content, is_error: isError });
+  }
   // session-level actions: refresh the /context breakdown, or ask Claude to compact the session history
   refreshContext(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/context`); }
   compact(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/compact`); }

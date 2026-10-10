@@ -2,9 +2,41 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------- browser ----------------
+
+
+class TurnOptions(BaseModel):
+    """CLI-supported controls scoped to a single queued chat, never saved globally."""
+    model_config = ConfigDict(extra='forbid')
+
+    model: str | None = Field(None, max_length=100)
+    effort: str | None = Field(None, max_length=20)
+    max_turns: int | None = Field(None, ge=1, le=100)
+    auto_context: bool | None = None
+    max_output_tokens: int | None = Field(None, ge=1, le=128000)
+    thinking: bool | None = None
+    instructions: str | None = Field(None, max_length=16000)
+
+
+class ClientTool(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
+    description: str = Field('', max_length=20000)
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {'type':'object'})
+
+
+class ClientToolCallIn(BaseModel):
+    call_id: str = Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_-]+$')
+    name: str = Field(min_length=1, max_length=64)
+    input: dict[str, Any] = Field(default_factory=dict)
+    timeout: int = Field(300, ge=1, le=900)
+
+
+class ClientToolResultIn(BaseModel):
+    content: str | list[dict[str, Any]]
+    is_error: bool = False
 
 
 class SendIn(BaseModel):
@@ -13,11 +45,17 @@ class SendIn(BaseModel):
     key: str = ""
     new_thread: bool = False
     files: list[str] = Field(default_factory=list, max_length=50)
+    options: TurnOptions | None = None
+    client_tools: list[ClientTool] = Field(default_factory=list, max_length=50)
+    client_environment: dict[str, str] = Field(default_factory=dict, max_length=16)
 
 
 class ThreadMessageIn(BaseModel):
     text: str = ""
     files: list[str] = Field(default_factory=list, max_length=50)
+    options: TurnOptions | None = None
+    client_tools: list[ClientTool] = Field(default_factory=list, max_length=50)
+    client_environment: dict[str, str] = Field(default_factory=dict, max_length=16)
 
 
 class ThreadIn(BaseModel):
