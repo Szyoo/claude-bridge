@@ -15,6 +15,8 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -61,6 +63,8 @@ class WorkerProfile:
     system_prompt: str | None = None          # replaces WorkerConfig.system_prompt for this scope
     add_dirs: list[str] | None = None
     strict_mcp: bool | None = None            # --strict-mcp-config with no servers: ignore the machine's MCP config
+    emit_content_blocks: bool | None = None
+    allow_client_tools: bool | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> WorkerProfile:
@@ -94,6 +98,9 @@ class WorkerConfig:
     extra_env: dict[str, str] = field(default_factory=dict)
     chat_timeout: float = 900.0
     include_partial: bool = True
+    emit_content_blocks: bool = False
+    allow_client_tools: bool = False
+    client_tool_timeout: int = 300
     worker_name: str = field(default_factory=lambda: f"{platform.node()}:{os.getpid()}")
     kinds: list[str] | None = None
     poll_wait: int = 25
@@ -262,7 +269,26 @@ class Worker:
         runner = ChatRunner(self, job)
         self._current = runner
         try:
-            runner.run()
+            if (job.get('payload') or {}).get('client_tools'):
+                if not runner.cfg.allow_client_tools:
+                    raise ValueError('worker profile does not allow client tools')
+                session = self.client.open_client_tools(job['id'])
+                runner.cfg = replace(runner.cfg,strict_mcp=True,allowed_tools=[*runner.cfg.allowed_tools,
+                    *[f"mcp__bridge_client__{tool['name']}" for tool in job['payload']['client_tools']]])
+                with tempfile.TemporaryDirectory(prefix='claude-bridge-client-') as folder:
+                    path = Path(folder)/'mcp.json'
+                    mcp = {'mcpServers':{'bridge_client':{'command':sys.executable,
+                        'args':['-I','-m','claude_bridge.client_tool_mcp'],'alwaysLoad':True,'env':{
+                            'CB_CLIENT_URL':self.client.base_url,'CB_CLIENT_PREFIX':self.client.prefix+'/client-tools',
+                            'CB_CLIENT_JOB':str(job['id']),'CB_CLIENT_TOKEN':session['token'],
+                            'CB_CLIENT_TIMEOUT':str(max(1,min(runner.cfg.client_tool_timeout,900))),
+                            **{key:os.environ.get(key,'') for key in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY')}}}}}
+                    path.write_text(json.dumps(mcp),encoding='utf-8')
+                    path.chmod(0o600)
+                    runner.mcp_config = str(path)
+                    runner.run()
+            else:
+                runner.run()
         finally:
             self._current = None
 
@@ -588,7 +614,8 @@ class Worker:
         model = (settings.get("model") or cfg.model or "").strip()
         effort = (settings.get("effort") or "").strip().lower()
         max_turns = int(settings.get("max_turns") or cfg.max_turns)
-        via_stdin = input_json or len(prompt.encode()) > cfg.argv_limit
+        argv_limit = min(cfg.argv_limit,16000) if os.name=='nt' else cfg.argv_limit
+        via_stdin = input_json or len(prompt.encode())+len(system_prompt.encode()) > argv_limit
         cmd = [cfg.claude_bin, "-p", *([] if via_stdin else [prompt])]
         if input_json:
             cmd += ["--input-format", "stream-json"]
@@ -773,16 +800,34 @@ class ChatRunner:
             if ctx:
                 prompt = ctx + text
         system_prompt = self.worker.hooks.system_prompt(p) or self.cfg.system_prompt
+        if settings.get('instructions'):
+            system_prompt = '\n\n'.join(part for part in (system_prompt,settings['instructions']) if part)
+        if p.get('client_tools'):
+            system_prompt += ('\nTools on the bridge_client MCP server execute in the requesting application. '
+                'Its execution environment is '+json.dumps(p.get('client_environment',{}),ensure_ascii=False)+
+                '. Other tools still execute on this worker. Use the tool namespace to choose the appropriate environment.')
         images = self._load_images(p.get("files") or [])
         cmd, via_stdin = self.worker.build_chat_command(
             prompt, session_id, settings, system_prompt, input_json=bool(images), cfg=self.cfg
         )
+        if p.get('client_tools'):
+            cmd += ['--mcp-config',self.mcp_config]
         stdin_data = stream_json_user_message(prompt, images) if images else prompt
         env = {**os.environ, **self.cfg.extra_env, **self.worker.hooks.env(p)}
+        # The model's shell and MCP children must not inherit control-plane credentials.
+        for key in ('CLAUDE_BRIDGE_AGENT_TOKEN','CLAUDE_BRIDGE_SECRET','CLAUDE_BRIDGE_PASSWORD'):
+            env.pop(key,None)
+        if settings.get('max_output_tokens') is not None:
+            env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = str(settings['max_output_tokens'])
+        if settings.get('effort'):
+            env['CLAUDE_CODE_EFFORT_LEVEL'] = settings['effort']
+        if settings.get('thinking') is not None:
+            env['CLAUDE_CODE_DISABLE_THINKING'] = '0' if settings['thinking'] else '1'
         self.state = StreamState(
             resumed=bool(session_id),
             thinking_max=self.cfg.thinking_max_chars,
             tool_result_max=self.cfg.tool_result_max_chars,
+            emit_content_blocks=self.cfg.emit_content_blocks,
         )
         label = f"model={settings.get('model') or self.cfg.model or 'default'} effort={settings.get('effort') or 'default'}"
         self.emitter.set_status("streaming")
@@ -800,6 +845,8 @@ class ChatRunner:
             stderr=subprocess.PIPE,
             stdin=subprocess.PIPE if via_stdin else subprocess.DEVNULL,
             text=True,
+            encoding='utf-8',
+            errors='replace',
             start_new_session=True,
         )
         proc = self.proc

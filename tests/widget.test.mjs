@@ -1,7 +1,7 @@
 // Pure-function tests for bridge-widget.js (run by test_widget_js.py via `node --test`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
+import { BridgeClient, checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
 import {
   splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
   armConfirm, disarmConfirm,
@@ -10,6 +10,35 @@ import {
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
 const result = (id, content, is_error = false) => ({ type: 'tool_result', data: { tool_use_id: id, content, is_error } });
 const kinds = (segs) => segs.map(s => s.kind === 'text' ? `T(${JSON.stringify(s.text)})` : `S[${s.items.map(i => i.kind === 'tool' ? i.id : i.kind).join(',')}]`);
+
+test('native thinking displays before completion, deduplicates preview, and never renders signature', () => {
+  const ev = (event) => ({ type: 'content_stream', data: { native_message_id: 'm1', at: 0, event } });
+  const rows = [ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'live thinking' } }),
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'opaque-secret-signature' } })];
+  let segs = splitTurn('', rows);
+  assert.equal(segs[0].items[0].text, 'live thinking');
+  assert.equal(segs[0].items[0].streaming, true);
+  rows.push(ev({ type: 'content_block_stop', index: 0 }), { type: 'thinking', data: { text: 'final preview', at: 0 } });
+  segs = splitTurn('', rows);
+  assert.equal(segs[0].items.length, 1);
+  assert.equal(segs[0].items[0].text, 'final preview');
+  assert.ok(!stepsHtml(segs[0].items).includes('opaque-secret-signature'));
+});
+
+test('caller tool options are sent without changing the normal chat request', async () => {
+  const requests = [];
+  const client = new BridgeClient({ fetch: async (url, opts) => {
+    requests.push({ url, body: JSON.parse(opts.body) }); return { ok: true, status: 200, json: async () => ({}) };
+  } });
+  await client.send('hello', { thread: 't1' });
+  assert.deepEqual(requests[0].body, { text: 'hello', files: [] });
+  await client.send('use Echo', { thread: 't1', options: { effort: 'high' }, clientTools: [{ name: 'Echo' }], clientEnvironment: { platform: 'win32' } });
+  assert.deepEqual(requests[1].body.options, { effort: 'high' });
+  assert.deepEqual(requests[1].body.client_environment, { platform: 'win32' });
+  await client.respondClientTool(1, 'call', 'result');
+  assert.deepEqual(requests[2].body, { content: 'result', is_error: false });
+});
 
 test('no events → one text segment; empty content → nothing', () => {
   assert.deepEqual(splitTurn('hi', []), [{ kind: 'text', text: 'hi' }]);

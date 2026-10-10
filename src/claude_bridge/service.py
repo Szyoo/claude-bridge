@@ -19,7 +19,7 @@ from typing import Any
 from claude_bridge._version import REPO, __version__
 from claude_bridge.broker import Broker
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
-from claude_bridge.models import AgentChatIn, JobEventsIn, JobFinishIn
+from claude_bridge.models import AgentChatIn, ClientTool, JobEventsIn, JobFinishIn, TurnOptions
 from claude_bridge.principal import ANONYMOUS, Principal
 from claude_bridge.store import INFLIGHT, BridgeStore, auto_title, public_file, utc_text
 
@@ -103,6 +103,7 @@ class BridgeConfig:
     # called before a chat / compact is queued; raise QuotaExceeded (or any BridgeError) to refuse it
     check_quota: Callable[[Principal], None] | None = None
     projects: bool = False  # Code-mode projects (GET/POST/DELETE /projects); needs a worker that handles "project" jobs
+    client_tools_enabled: bool = False
 
 
 class BridgeService:
@@ -110,6 +111,7 @@ class BridgeService:
         self.store = store
         self.broker = broker
         self.config = config or BridgeConfig()
+        self.store.init_client_tools()
 
     # ---------------- publish ----------------
 
@@ -251,8 +253,28 @@ class BridgeService:
         extra_payload: dict[str, Any] | None = None,
         files: list[str] | None = None,
         principal: Principal = ANONYMOUS,
+        options: TurnOptions | None = None,
+        client_tools: list[ClientTool] | None = None,
+        client_environment: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         owner = principal.owner
+        if client_tools:
+            from claude_bridge.client_tools import validate_tools
+            if not self.config.client_tools_enabled:
+                raise BadRequest('client tools are not enabled by this host')
+            validate_tools([tool.model_dump() for tool in client_tools])
+            if len(json.dumps(client_environment or {},ensure_ascii=False).encode()) > 16000:
+                raise BadRequest('client environment is too large')
+        turn_settings = self.settings(owner)
+        if options is not None:
+            patch = options.model_dump(exclude_none=True)
+            if 'effort' in patch:
+                patch['effort'] = patch['effort'].strip().lower()
+                if patch['effort'] and patch['effort'] not in self.config.effort_choices:
+                    raise BadRequest('unsupported effort')
+            if 'model' in patch:
+                patch['model'] = self.config.model_aliases.get(patch['model'].strip(),patch['model'].strip())
+            turn_settings.update(patch)
         text = (text or "").strip()
         file_ids = list(dict.fromkeys(files or []))
         if not text and not file_ids:
@@ -295,11 +317,13 @@ class BridgeService:
                 "thread": tid,
                 "message_id": asst_msg["id"],
                 "text": text,
-                "settings": self.settings(owner),
+                "settings": turn_settings,
                 "session_id": th.get("session_id"),
                 "scope": th.get("scope") or "",
                 "owner": owner,
                 **({"files": user_msg["files"]} if attached else {}),
+                **({'client_tools':[tool.model_dump() for tool in client_tools],
+                    'client_environment':client_environment or {}} if client_tools else {}),
                 **(extra_payload or {}),
             }
             jid = self.store.enqueue_job("chat", payload)

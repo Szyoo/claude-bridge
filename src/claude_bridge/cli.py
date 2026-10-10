@@ -64,6 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--db", default=env("DB", "claude-bridge.db"))
     s.add_argument("--files", default=env("FILES", ""), help="where uploaded images are stored (default: next to the db)")
     s.add_argument("--no-auth", action="store_true", help="disable the password login (local debugging)")
+    s.add_argument('--client-tools',action='store_true',default=env('CLIENT_TOOLS') == '1',
+                   help='accept caller-owned tool declarations (worker must opt in too)')
     s.add_argument("--multi-user", action="store_true", default=env("MULTI_USER") == "1",
                    help="username + password accounts, per-user history, quotas, /admin (create users with `claude-bridge users`)")
     s.add_argument("--tz", default=env("TZ"), help="timezone for reset times in quota messages, e.g. Asia/Tokyo (default: system)")
@@ -82,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--permission-mode", default=env("PERMISSION_MODE") or None)
     w.add_argument("--timeout", type=float, default=float(env("CHAT_TIMEOUT", "900")))
     w.add_argument("--no-partial", action="store_true", help="do not pass --include-partial-messages")
+    w.add_argument("--content-blocks", action="store_true", default=env('CONTENT_BLOCKS') == '1',
+                   help="preserve complete native content events, including thinking signatures")
+    w.add_argument('--client-tools',action='store_true',default=env('CLIENT_TOOLS') == '1',
+                   help='allow job-scoped caller tools through the controlled MCP relay')
+    w.add_argument('--client-tool-timeout',type=int,default=300)
     w.add_argument("--worker-name", default=env("WORKER_NAME"))
     w.add_argument("--profiles", default=env("PROFILES"),
                    help='JSON {scope: overrides} — e.g. "" (chat) without tools, "code" with full permissions; cwd may use {owner}')
@@ -130,6 +137,9 @@ def worker_from_args(args: argparse.Namespace) -> Worker:
         permission_mode=args.permission_mode,
         chat_timeout=args.timeout,
         include_partial=not args.no_partial,
+        emit_content_blocks=args.content_blocks,
+        allow_client_tools=args.client_tools,
+        client_tool_timeout=args.client_tool_timeout,
     )
     if args.worker_name:
         cfg.worker_name = args.worker_name
@@ -163,6 +173,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         app = create_multiuser_app(
             db_path=args.db, agent_token=env("AGENT_TOKEN"), secret=env("SECRET"), cookie_secure=cookie_secure,
             files_dir=args.files or None, tz=args.tz,
+            client_tools_enabled=args.client_tools,
         )
         from claude_bridge.multiuser import sso_from_env
 
@@ -178,6 +189,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         no_auth=args.no_auth,
         cookie_secure=cookie_secure,
         files_dir=args.files or None,
+        client_tools_enabled=args.client_tools,
     )
     print(f"claude-bridge serving on http://{args.host}:{args.port}  db={args.db}{'  [no auth]' if args.no_auth else ''}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)
