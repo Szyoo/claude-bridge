@@ -1,6 +1,6 @@
 # Changelog
 
-版本号遵循 semver；宿主按 tag 更新（见 README「宿主如何更新」）。
+版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
 ## v0.6.3 — 2026-10-10
 
