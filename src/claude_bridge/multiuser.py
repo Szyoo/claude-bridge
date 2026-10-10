@@ -143,6 +143,7 @@ def create_multiuser_app(
     sso: bool | None = None,
     sso_autocreate: bool | None = None,
     portal_origin: str | None = None,
+    client_tools_enabled: bool = False,
 ) -> FastAPI:
     """`sso` / `sso_autocreate` / `portal_origin` default to `SZYYW_SSO` (or `CLAUDE_BRIDGE_SSO`) /
     `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN` (default https://szyyw.xyz)."""
@@ -168,6 +169,8 @@ def create_multiuser_app(
         files_dir=files_dir or Path(db_path).resolve().parent / "claude-bridge-files",
     )
     cfg.check_quota = accounts.check_quota
+    if client_tools_enabled:
+        cfg.client_tools_enabled = True
 
     def sso_user(request: Request) -> dict[str, Any] | None:
         """The effective user for a gated request: the mapped row with `role` = X-Role (in memory only)."""

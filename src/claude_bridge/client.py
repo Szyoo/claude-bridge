@@ -75,6 +75,9 @@ class BridgeClient:
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         return (self._call("GET", f"/jobs/{job_id}") or {}).get("job")
 
+    def open_client_tools(self, job_id: int) -> dict[str, Any]:
+        return self._call('POST',f'/jobs/{job_id}/client-tool-session',json={})
+
     def post_events(
         self,
         job_id: int,

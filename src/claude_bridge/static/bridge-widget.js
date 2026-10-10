@@ -243,12 +243,36 @@ function cpIndex(text, cp) {
 export function splitTurn(content, events) {
   content = content || '';
   const items = []; const byTool = new Map(); const END = Infinity;
+  const liveThinking = new Map(), closedThinking = [];
   for (const ev of events || []) {
     const d = ev.data || {};
     switch (ev.type) {
+      case 'content_stream': {
+        const e = d.event || {}, key = `${d.native_message_id || ''}:${e.index ?? 0}`;
+        if (e.type === 'content_block_start' && e.content_block?.type === 'thinking') {
+          const it = { kind: 'thinking', text: e.content_block.thinking || '', truncated: false, streaming: true, at: d.at ?? 0 };
+          items.push(it); liveThinking.set(key, it);
+        } else if (e.type === 'content_block_delta' && e.delta?.type === 'thinking_delta') {
+          const it = liveThinking.get(key);
+          if (it) {
+            const text = it.text + (e.delta.thinking || '');
+            it.text = text.slice(0, 4000); it.truncated ||= text.length > 4000;
+          }
+        } else if (e.type === 'content_block_stop') {
+          const it = liveThinking.get(key);
+          if (it) { it.streaming = false; closedThinking.push(it); liveThinking.delete(key); }
+        }
+        break;
+      }
       case 'tool_use': { const it = { kind: 'tool', id: d.id || '', name: d.name || '?', input: d.input || {}, result: null, at: d.at ?? 0 }; items.push(it); if (d.id) byTool.set(d.id, it); break; }
       case 'tool_result': { const it = byTool.get(d.tool_use_id); if (it) it.result = d; break; }
-      case 'thinking': items.push({ kind: 'thinking', text: d.text || '', truncated: !!d.truncated, at: d.at ?? 0 }); break;
+      case 'thinking': {
+        const index = closedThinking.findIndex(it => it.at === (d.at ?? 0));
+        if (index >= 0) {
+          const it = closedThinking.splice(index, 1)[0]; it.text = d.text || ''; it.truncated = !!d.truncated;
+        } else items.push({ kind: 'thinking', text: d.text || '', truncated: !!d.truncated, at: d.at ?? 0 });
+        break;
+      }
       case 'compact': items.push({ kind: 'note', sub: 'compact', text: describeCompact(d), at: 0 }); break;
       case 'error': items.push({ kind: 'note', sub: 'error', text: d.message || '出错', at: END }); break;
       case 'status':
@@ -257,6 +281,9 @@ export function splitTurn(content, events) {
         break;
       default: break;
     }
+  }
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'thinking' && !items[i].streaming && !items[i].text) items.splice(i, 1);
   }
   if (!items.length) return content ? [{ kind: 'text', text: content }] : [];
   items.sort((a, b) => a.at - b.at);
