@@ -28,6 +28,7 @@ from typing import Any
 
 from claude_bridge._version import __version__
 from claude_bridge.client import BridgeClient, BridgeClientError
+from claude_bridge.local_usage import TranscriptScanner
 from claude_bridge.stream_json import (
     StreamState,
     describe_tool,
@@ -115,6 +116,11 @@ class WorkerConfig:
     version_check_interval: float = 60  # `claude --version` takes ~10 ms: a CLI update shows up on the page within a minute or two
     # account-wide 5h / weekly utilization via the zero-cost `claude -p "/usage"` (0 = off); feeds the server's quotas
     usage_probe_interval: float = 600
+    # report this machine's whole Claude Code use from ~/.claude/projects transcripts (aggregates only), so the
+    # server can calibrate what 1% of a window is; off by default since it reads every session on the machine
+    local_usage_scan: bool = False
+    local_usage_interval: float = 120
+    local_usage_root: str | Path | None = None
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
@@ -174,6 +180,9 @@ class Worker:
         self._next_version_check = 0.0
         self._probed_version: str | None = None
         self._next_usage_probe = 0.0
+        self._scanner: TranscriptScanner | None = None
+        self._scan_thread: threading.Thread | None = None
+        self._next_scan = 0.0
 
     @property
     def kinds(self) -> list[str]:
@@ -196,6 +205,7 @@ class Worker:
             try:
                 self.maybe_probe_models()
                 self.maybe_probe_usage()
+                self.maybe_scan_local_usage()
                 try:
                     self.hooks.tick()
                 except Exception:
@@ -476,6 +486,53 @@ class Worker:
         if block:
             self._probe_thread.join()
 
+    # ---------------- machine-wide use (transcripts) ----------------
+
+    def bridge_roots(self) -> list[str]:
+        """Directories the bridge runs claude in: the worker cwd and each profile's cwd up to its first placeholder."""
+        roots = [str(self.config.cwd)] if self.config.cwd else []
+        for prof in self.config.profiles.values():
+            if prof.cwd:
+                roots.append(prof.cwd.split("{", 1)[0])
+        return roots
+
+    def scan_local_usage(self) -> int:
+        if self._scanner is None:
+            root = self.config.local_usage_root
+            self._scanner = TranscriptScanner(bridge_roots=self.bridge_roots(),
+                                              **({"root": Path(root).expanduser()} if root else {}))
+        rows = self._scanner.scan()
+        for i in range(0, len(rows), 500):
+            chunk = rows[i:i + 500]
+            try:
+                self.client.report_local_usage(chunk)
+            except BridgeClientError:
+                self._scanner.requeue(rows[i:])
+                raise
+        return len(rows)
+
+    def _scan_and_report(self) -> None:
+        try:
+            n = self.scan_local_usage()
+            if n:
+                log.debug("reported %d local usage buckets", n)
+        except BridgeClientError as e:
+            log.warning("local usage report failed: %s", e)
+        except Exception:
+            log.exception("local usage scan failed")
+
+    def maybe_scan_local_usage(self, *, block: bool = False) -> None:
+        if not self.config.local_usage_scan:
+            return
+        now = time.monotonic()
+        if now < self._next_scan or (self._scan_thread and self._scan_thread.is_alive()):
+            return
+        self._next_scan = now + self.config.local_usage_interval
+        self._scan_thread = threading.Thread(target=self._scan_and_report, name="local-usage", daemon=True)
+        self._scan_thread.start()
+        if block:
+            self._scan_thread.join()
+
     # ---------------- subscription usage (`/usage`) ----------------
 
     def probe_usage(self) -> dict[str, float] | None:
@@ -584,7 +641,9 @@ class Worker:
             raise RuntimeError(f"压缩失败：{result.get('result')}")
         if meta is None:
             raise RuntimeError("claude 没有报告压缩结果（compact_boundary）")
-        meta["cost_usd"] = result.get("total_cost_usd")  # summarising calls the model; the server books it
+        # summarising calls the model; the server prices these tokens (total_cost_usd can be the whole session's)
+        meta["usage"] = result.get("usage") or {}
+        meta["model"] = next(iter(result.get("modelUsage") or {}), None) or cfg.model
         return meta
 
     def run_session_job(self, job: dict[str, Any]) -> None:

@@ -92,6 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--worker-name", default=env("WORKER_NAME"))
     w.add_argument("--profiles", default=env("PROFILES"),
                    help='JSON {scope: overrides} — e.g. "" (chat) without tools, "code" with full permissions; cwd may use {owner}')
+    w.add_argument("--scan-local-usage", action="store_true", default=env("SCAN_LOCAL_USAGE") == "1",
+                   help="report this machine's whole Claude Code use (token totals per minute from ~/.claude/projects) "
+                        "so the server can calibrate what 1%% of the 5h / weekly window is")
     w.add_argument("-v", "--verbose", action="store_true")
 
     u = sub.add_parser("users", help="manage accounts for serve --multi-user (works on the database directly)")
@@ -140,6 +143,7 @@ def worker_from_args(args: argparse.Namespace) -> Worker:
         emit_content_blocks=args.content_blocks,
         allow_client_tools=args.client_tools,
         client_tool_timeout=args.client_tool_timeout,
+        local_usage_scan=args.scan_local_usage,
     )
     if args.worker_name:
         cfg.worker_name = args.worker_name

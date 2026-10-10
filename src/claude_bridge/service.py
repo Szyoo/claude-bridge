@@ -13,13 +13,16 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from claude_bridge._version import REPO, __version__
 from claude_bridge.broker import Broker
+from claude_bridge.calibration import estimate_capacity
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
 from claude_bridge.models import AgentChatIn, ClientTool, JobEventsIn, JobFinishIn, TurnOptions
+from claude_bridge.pricing import has_tokens, token_cost, usage_cost
 from claude_bridge.principal import ANONYMOUS, Principal
 from claude_bridge.store import INFLIGHT, BridgeStore, auto_title, public_file, utc_text
 
@@ -112,6 +115,9 @@ class BridgeService:
         self.broker = broker
         self.config = config or BridgeConfig()
         self.store.init_client_tools()
+        self.reprice_ledger()
+        self.backfill_util_samples()
+        self._capacity_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 
     # ---------------- publish ----------------
 
@@ -758,23 +764,72 @@ class BridgeService:
 
     # ---------------- usage ledger / account limits ----------------
 
+    @staticmethod
+    def _ledger_tokens(usage: dict[str, Any]) -> dict[str, Any]:
+        return {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"),
+                "cache_read_tokens": usage.get("cache_read_input_tokens"),
+                "cache_write_tokens": usage.get("cache_creation_input_tokens")}
+
     def _record_usage(self, owner: str, data: dict[str, Any], **kw: Any) -> None:
-        cost = data.get("total_cost_usd")
-        if not isinstance(cost, int | float):
+        # priced from this invocation's tokens; the CLI's total_cost_usd is cumulative on resumed sessions
+        if not has_tokens(data):
             return
-        self.store.add_usage(
-            owner, cost_usd=float(cost), input_tokens=data.get("input_tokens"), output_tokens=data.get("output_tokens"),
-            model=data.get("model"), **kw,
-        )
+        self.store.add_usage(owner, cost_usd=usage_cost(data.get("model"), data), model=data.get("model"),
+                             **self._ledger_tokens(data), **kw)
+
+    @staticmethod
+    def _compact_cost(meta: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+        usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+        if has_tokens(usage):
+            return usage_cost(meta.get("model"), usage), usage
+        # compacts booked before token counts were reported: the summary reads the context and writes ~post_tokens
+        pre, post = meta.get("pre_tokens"), meta.get("post_tokens")
+        return token_cost(meta.get("model"), cache_read=pre, output_tokens=post), {}
 
     def _record_compact_usage(self, thread: str, job_id: int, result: str | None) -> None:
         try:
-            cost = ((json.loads(result or "{}") or {}).get("compact") or {}).get("cost_usd")
+            meta = (json.loads(result or "{}") or {}).get("compact") or {}
         except (json.JSONDecodeError, AttributeError):
             return
-        if isinstance(cost, int | float) and cost > 0:
+        if not isinstance(meta, dict):
+            return
+        cost, usage = self._compact_cost(meta)
+        if cost > 0:
             owner = (self.store.get_thread(thread) or {}).get("owner") or ""
-            self.store.add_usage(owner, cost_usd=float(cost), thread=thread, job_id=job_id, kind="compact")
+            self.store.add_usage(owner, cost_usd=cost, thread=thread, job_id=job_id, kind="compact",
+                                 model=meta.get("model"), **self._ledger_tokens(usage))
+
+    def reprice_ledger(self) -> int:
+        """Once per database: re-price rows booked from total_cost_usd (cumulative on resumed sessions) from tokens."""
+        if self.store.get_meta("usage_repriced") == "1":
+            return 0
+        n = kept = 0
+        with self.store.transaction():
+            for row in self.store.usage_rows_with_events():
+                if row["kind"] == "compact":
+                    job = self.store.get_job(row["job_id"]) if row["job_id"] else None
+                    try:
+                        meta = (json.loads((job or {}).get("result") or "{}") or {}).get("compact") or {}
+                    except (json.JSONDecodeError, AttributeError):
+                        meta = {}
+                    cost, usage = self._compact_cost(meta if isinstance(meta, dict) else {})
+                    self.store.set_usage_cost(row["id"], cost, **self._ledger_tokens(usage))
+                    n += 1
+                    continue
+                try:
+                    data = json.loads(row["usage"] or "{}")
+                except json.JSONDecodeError:
+                    data = {}
+                if has_tokens(data):
+                    self.store.set_usage_cost(row["id"], usage_cost(data.get("model") or row["model"], data),
+                                              **self._ledger_tokens(data))
+                    n += 1
+                else:
+                    kept += 1  # its thread (and so the usage event) was deleted: nothing to price from
+            self.store.set_meta("usage_repriced", "1")
+        if n or kept:
+            log.info("re-priced %d usage rows from token counts; %d without a usage event kept as booked", n, kept)
+        return n
 
     def _limits_raw(self) -> dict[str, Any]:
         try:
@@ -791,6 +846,7 @@ class BridgeService:
             w = data.get(name)
             if isinstance(w, dict) and isinstance(w.get("utilization"), int | float):
                 cur[name] = {"utilization": float(w["utilization"]), "resets_at": w.get("resets_at"), "at": now, "source": "turn"}
+                self._sample(name, cur[name])
         self.store.set_meta("account_limits", json.dumps(cur))
 
     def save_usage_probe(self, report: dict[str, Any]) -> dict[str, Any]:
@@ -806,8 +862,65 @@ class BridgeService:
             if isinstance(resets, int | float) and resets < now:
                 resets = None
             cur[name] = {"utilization": float(pct) / 100, "resets_at": resets, "at": now, "source": "probe"}
+            self._sample(name, cur[name])
         self.store.set_meta("account_limits", json.dumps(cur))
         return self.account_limits()
+
+    def backfill_util_samples(self) -> int:
+        """Once per database: turn the rate_limit events already stored into utilization samples."""
+        if self.store.get_meta("util_samples_backfilled") == "1":
+            return 0
+        n = 0
+        with self.store.transaction():
+            for ev in self.store.events_of_type("rate_limit"):
+                at = datetime.strptime(ev["created_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp()
+                for name in LIMIT_WINDOWS:
+                    w = ev["data"].get(name)
+                    if isinstance(w, dict) and isinstance(w.get("utilization"), int | float):
+                        self._sample(name, {"utilization": float(w["utilization"]), "resets_at": w.get("resets_at"),
+                                            "at": at, "source": "turn"})
+                        n += 1
+            self.store.set_meta("util_samples_backfilled", "1")
+        return n
+
+    SAMPLE_EVERY = 900  # an unchanged reading is stored at most every 15 minutes
+
+    def _sample(self, name: str, w: dict[str, Any]) -> None:
+        resets = w.get("resets_at") if isinstance(w.get("resets_at"), int | float) else None
+        last = self.store.last_util_sample(name)
+        if last and last["utilization"] == w["utilization"] and last["resets_at"] == resets and w["at"] - last["at"] < self.SAMPLE_EVERY:
+            return
+        self.store.add_util_sample(name, w["utilization"], resets, w["source"], w["at"])
+
+    def save_local_usage(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """The worker's per-minute totals from its machine's Claude Code transcripts (absolute, so re-sends are fine)."""
+        self.store.upsert_local_usage(rows)
+        self.store.prune_usage_history()
+        self._capacity_cache.clear()
+        return {"ok": True, "buckets": len(rows)}
+
+    CALIBRATION_DAYS = 21
+    CAPACITY_TTL = 120.0
+
+    def capacity(self, name: str) -> dict[str, Any] | None:
+        """Estimated list-price USD that 100% of window `name` holds (see calibration.py); cached briefly."""
+        now = time.time()
+        hit = self._capacity_cache.get(name)
+        if hit and now - hit[0] < self.CAPACITY_TTL:
+            return hit[1]
+        span = LIMIT_WINDOWS[name]
+        since = now - self.CALIBRATION_DAYS * 86400
+        samples = self.store.util_samples(name, since)
+        series = [(datetime.strptime(b, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp(), c)
+                  for b, c in self.store.local_usage_series(utc_text(since - span))]
+        est = estimate_capacity(samples, series, span)
+        self._capacity_cache[name] = (now, est)
+        return est
+
+    def machine_usage_in_window(self, name: str) -> dict[str, float]:
+        """{bridge, local}: the worker machine's use since the window started, from its transcripts."""
+        tot = self.store.local_usage_totals(utc_text(self.account_limits()[name]["window_start"]))
+        return {"bridge": tot.get("bridge", 0.0), "local": tot.get("local", 0.0)}
 
     def account_limits(self) -> dict[str, Any]:
         """{five_hour, seven_day}: utilization 0..1 (0 once the window has reset), resets_at, window_start (epoch)."""

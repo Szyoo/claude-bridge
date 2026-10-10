@@ -48,7 +48,9 @@ def agent(app):
 
 
 def finish_turn(agent, job_id, cost, rate_limit=None):
-    events = [{"type": "usage", "data": {"total_cost_usd": cost, "input_tokens": 10, "output_tokens": 5, "model": "m"}}]
+    # booked from tokens: Sonnet 5.5 output is $10 / Mtok. total_cost_usd is the CLI's session running total — ignored
+    usage = {"total_cost_usd": 999.0, "input_tokens": 0, "output_tokens": round(cost * 100_000), "model": "claude-sonnet-5-5"}
+    events = [{"type": "usage", "data": usage}]
     if rate_limit:
         events.insert(0, {"type": "rate_limit", "data": rate_limit})
     agent.post(f"/api/agent/jobs/{job_id}/events", json={"deltas": ["ok"], "events": events})
@@ -223,7 +225,7 @@ def test_usage_ledger_share_limit_and_guard(app, agent):
     data = boss.get("/api/admin/users").json()
     five = data["account"]["five_hour"]
     assert five["utilization_pct"] == 5.0 and five["bridge_cost_usd"] == pytest.approx(1.1)
-    assert five["estimate_cap_usd"] == pytest.approx(22.0)  # 1.1 / 0.05
+    assert five["estimate_cap_usd"] is None and five["cap_source"] is None  # no machine-wide use reported yet
 
     boss.put("/api/admin/quota", json={"cap_5h_usd": 10, "cap_7d_usd": 100})
     me = alice.get("/api/me").json()["usage"]
@@ -269,7 +271,8 @@ def test_compact_cost_is_booked(app, agent):
     t = run_turn(alice, agent, 0.2)
     assert alice.post(f"/api/threads/{t['thread']}/compact").status_code == 202
     job = agent.post("/api/agent/jobs/next", json={"kinds": ["compact"], "wait": 0}).json()["job"]
-    result = {"compact": {"pre_tokens": 1000, "post_tokens": 100, "cost_usd": 0.3}}
+    result = {"compact": {"pre_tokens": 1000, "post_tokens": 100, "model": "claude-sonnet-5-5",
+                          "usage": {"output_tokens": 30_000}, "cost_usd": 9.9}}
     agent.post(f"/api/agent/jobs/{job['id']}/finish", json={"ok": True, "result": json.dumps(result)})
     assert alice.get("/api/me").json()["usage"]["five_hour"]["cost_usd"] == pytest.approx(0.5)
 

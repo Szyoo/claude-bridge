@@ -157,7 +157,7 @@ export function meterHtml({ label, used, limit, sub = '', right = null }) {
 /** One window of a user's usage (from /api/me or /api/admin/users). */
 export function userMeter(w, label) {
   const bits = [];
-  if (w.used_pct == null) bits.push(`${fmtUsd(w.cost_usd)} 等价`);
+  if (w.used_pct == null) bits.push(`${fmtUsd(w.cost_usd)} API 标价等价`);
   bits.push(`${w.turns} 次`);
   if (w.limit_pct == null) bits.push('不限');
   const right = w.used_pct == null && w.limit_pct != null ? `上限 ${fmtPct(w.limit_pct)}` : null;

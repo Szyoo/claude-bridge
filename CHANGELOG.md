@@ -2,6 +2,17 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.7.0 — 2026-10-11
+
+- **用量记账改为按 token 计价**：CLI 的 `total_cost_usd` 在续接会话时往往是整个会话的累计值，按轮记账会把之前的花费重复计入。现在每轮按 `usage` 里的输入 / 输出 / 缓存读 / 缓存写（区分 5 分钟与 1 小时）乘 API 标价计算（新模块 `pricing.py`），compact 同理。已有数据库首次启动时用库里的 usage 事件重算历史账本（meta `usage_repriced`）
+- **「100% ≈ $X」自动标定**：
+  - worker 新增 `--scan-local-usage`（`CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1`）：增量读取本机 `~/.claude/projects/**/*.jsonl`，按 `message.id` 去重，按分钟和来源（bridge 自己的会话 / 本机其他会话）汇总后上报 `POST /api/agent/local-usage`（新模块 `local_usage.py`）
+  - 服务端保存账户使用率的历史样本（`bridge_util_samples`；首次启动时从已有 `rate_limit` 事件回填），与本机用量对齐估计每个窗口的容量（新模块 `calibration.py`）
+  - 管理员不填时自动使用估值；手填值优先
+- 账户状态新增字段：`machine_local_usd`、`machine_bridge_usd`、`estimate_range_usd`、`estimate_groups`、`effective_cap_usd`、`cap_source`、`bridge_pct`、`local_pct`、`external_pct`；`estimate_cap_usd` 的含义改为自动标定值。个人份额按 `effective_cap_usd` 换算
+- 管理页：账户用量下显示 bridge / 本机其他 / 其他设备的占比；容量输入框留空即用自动值；文案统一为「API 标价等价」
+- `bridge_usage` 新增 `cache_read_tokens`、`cache_write_tokens` 列
+
 ## v0.6.3 — 2026-10-10
 
 - **站点页面改从 CDN 加载 @szyyw/design，不再 vendor**：删除 `static/vendor/szyyw-design/`（并 gitignore），`pyproject.toml` 的 package-data 不再打包它——Python 包（宿主嵌入用的 `bridge-widget.*`）从此不含设计包文件，嵌入场景本来就不加载设计包，不受影响。页面（登录 / 账户 / 管理 / 查看用户 / Code 项目 / 403 / 单密码模式）从 `https://design.szyyw.xyz/<DESIGN_VERSION>/` 加载 `tokens.css` + `components.css`，并加 import map `"@szyyw/design/" → DESIGN_BASE`，`corner-boot.js` / `bridge-pages.js` 改为 `import … from '@szyyw/design/…'`。版本号只在 `standalone.py` 的 `DESIGN_VERSION`，`render_page` 填 `{{design_base}}` / `{{design_origin}}` 占位符；环境变量 `DESIGN_BASE` 可覆盖（本地离线开发指向本机静态服务）
