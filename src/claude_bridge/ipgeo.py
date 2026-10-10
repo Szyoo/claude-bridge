@@ -1,4 +1,4 @@
-"""IP → 归属地，给管理页（用户列表的最近访问、访问记录）显示「日本 东京都 东京 · ARTERIA Networks」。
+"""IP → 归属地，给管理页（用户列表的最近访问、访问记录）显示「日本 东京都 东京 · Example Networks」。
 
 公网地址查 ip-api.com batch（zh-CN，免 key），结果按 IP 永久缓存在 bridge_ipgeo 表；查不出的
 （status=fail）也记一行空结果，不再重查。内网 / tailnet / 保留地址不出网，直接给标签。网络失败

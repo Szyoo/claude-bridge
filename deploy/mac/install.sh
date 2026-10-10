@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在 Mac mini 上安装 / 更新 claude-bridge worker（用户级 LaunchAgent）。
+# 在常驻 macOS 机器上安装 / 更新 claude-bridge worker（用户级 LaunchAgent）。
 # 前提：.venv 已建好并 pip install -e .；仓库 .env 里有 CLAUDE_BRIDGE_URL 与 CLAUDE_BRIDGE_AGENT_TOKEN
 #       （见 deploy/mac/env.example）；claude CLI 已登录。
 # 用法：bash deploy/mac/install.sh          安装/更新并启动（改了代码后也跑这个，worker 用的是这份代码）

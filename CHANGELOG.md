@@ -42,7 +42,7 @@
   - 删除对话：⋯ 菜单里首点「删除对话」变红成「再点一次确认删除」并在菜单里展开影响说明（菜单保持打开），5 秒内再点才删；关菜单 / 点别处即取消
   - 压缩会话（`/context` 面板，`renderContextPanel`）：首点变成「再点一次确认压缩」并在面板里说明后果，再点才调 `onCompact`
   - 重命名：组件自带的输入弹层（`role="dialog"` + `aria-modal`、标题做 label、焦点进输入框并全选、Tab 不出框、Enter 保存、Esc / 点外 / ✕ / 取消关闭、关闭后焦点回到 ⋯ 按钮；手机上是底部抽屉；`prefers-reduced-motion` 不做动画）
-- 新导出（对外 API，故为 minor）：`armConfirm` / `disarmConfirm` / `promptDialog`，宿主自己的外壳（如 app-a 的线程菜单）可以直接用。新文案键 `strings.delArm / renameLabel / save / cancel`
+- 新导出（对外 API，故为 minor）：`armConfirm` / `disarmConfirm` / `promptDialog`，宿主自己的外壳（如线程菜单）可以直接用。新文案键 `strings.delArm / renameLabel / save / cancel`
 - 新样式类：`.bridge-armed`、`.bridge-menu-warn`、`.bridge-ctx-warn`、`.bridge-dlg*`（z-index 70，挂在 body 下、带 `bridge-root`，宿主祖先的 transform / backdrop-filter 困不住它）
 
 ## v0.5.1 — 2026-10-09
@@ -61,8 +61,8 @@
 - `scripts/update-design.sh` 从目标 tag 取 `sync.sh`（之前取 main）
 
 - **IP 归属地**：管理页用户行的最近访问、`/admin/users/<id>` 的访问记录，IP 下面多一行「国家 省 市 · 运营商」（同门户首页公网 IP 卡片）。服务端 `ipgeo.py` 查 ip-api.com batch（zh-CN），按 IP 永久缓存在新表 `bridge_ipgeo`；tailnet 显示「Tailscale 内网」、其他内网 / 保留地址显示「内网」，不出网；查询失败不缓存、不影响页面。接口 `last_access.geo`、访问记录每行 `geo`（`{country, region, city, isp}` / `{label}` / `null`），仅管理员接口
-- **站点 favicon**：独立站点（`serve` 单密码 / 多用户）根路径提供 `/favicon.svg`、`/favicon.ico`、`/apple-touch-icon.png`（文件在 `static/site/`，来自平台仓库 `branding/`，应用层路由不要求登录），全部 HTML 页面 head 带三个 `<link>`。嵌入式组件（`create_bridge` + `bridge-widget.*`）不注册这些路由、不碰宿主的 favicon
-- **部署改为 git clone + 推送即上线**：VPS 的 `/srv/claude-bridge` 现在是 git clone，由平台的 `deploy.sh`（`auto-deploy` 每 10 分钟）部署 main，健康检查失败自动回滚。`scripts/deploy-vps.sh` 不再 rsync：检查在 main / 工作区干净 / 已推送后 ssh 触发立即部署，新增 `--rollback <ref>`、`--status`，去掉 `--dry-run`
+- **站点 favicon**：独立站点（`serve` 单密码 / 多用户）根路径提供 `/favicon.svg`、`/favicon.ico`、`/apple-touch-icon.png`（文件在 `static/site/`，来自门户的品牌素材，应用层路由不要求登录），全部 HTML 页面 head 带三个 `<link>`。嵌入式组件（`create_bridge` + `bridge-widget.*`）不注册这些路由、不碰宿主的 favicon
+- **部署改为 git clone + 推送即上线**：服务器上的部署目录现在是 git clone，由定时部署任务拉取 main 并部署，健康检查失败自动回滚。`scripts/deploy-vps.sh` 不再 rsync：检查在 main / 工作区干净 / 已推送后 ssh 触发立即部署，新增 `--rollback <ref>`、`--status`，去掉 `--dry-run`
 - **自动升级共享包**：`scripts/upgrade-shared.sh` + `.github/workflows/upgrade-shared.yml`（每 6 小时 / 手动）检测 `szyyw-auth` 与 `@szyyw/design` 的上游最新正式 tag，升级（含 vendored 副本）后跑 ruff + pytest，通过才以 bot 身份推到 main；失败不推送
 
 ## v0.4.2 — 2026-10-05

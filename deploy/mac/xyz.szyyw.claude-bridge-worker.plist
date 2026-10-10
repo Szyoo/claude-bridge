@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Mac mini 常驻 worker：claude-bridge worker（执行 claude -p）。用户级 LaunchAgent（GUI 域），由 deploy/mac/install.sh 安装。
+  常驻 macOS 机器上的 worker：claude-bridge worker（执行 claude -p）。用户级 LaunchAgent（GUI 域），由 deploy/mac/install.sh 安装。
   路径按仓库位置渲染，勿手改；配置在仓库 .env（--env-file 读，令牌不进 plist），日志在 logs/worker.log。
   直接启动 venv 里的程序而不是 shell 脚本：macOS 隐私保护不让 launchd 下的 /bin/bash 读 ~/Documents。
 -->

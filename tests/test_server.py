@@ -31,7 +31,7 @@ def test_send_stream_events_finish_roundtrip(web, agent, bridge):
         json={
             "status": "streaming",
             "deltas": ["你持有 ", "**1** 只。"],
-            "events": [{"type": "tool_use", "data": {"id": "tu1", "name": "Bash", "input": {"command": "app-a positions"}}}],
+            "events": [{"type": "tool_use", "data": {"id": "tu1", "name": "Bash", "input": {"command": "git status"}}}],
         },
     )
     assert r.json() == {"ok": True, "cancel": False}

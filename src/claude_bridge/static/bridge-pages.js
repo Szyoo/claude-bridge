@@ -135,7 +135,7 @@ function shortIsp(isp = '') {
     .replace(/(,?\s+(communications?|corporation|corp\.?|co\.?,?\s*ltd\.?|inc\.?|llc|limited|k\.k\.))+\s*$/i, '').trim();
 }
 
-/** "日本 东京都 东京 · ARTERIA Networks" from the server's geo ({country, region, city, isp} or {label}); same as the portal's 公网 IP card. */
+/** "日本 东京都 东京 · Example Networks" from the server's geo ({country, region, city, isp} or {label}); same as the portal's 公网 IP card. */
 export function fmtGeo(g) {
   if (!g) return '';
   if (g.label) return g.label;

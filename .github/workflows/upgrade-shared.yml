@@ -1,5 +1,5 @@
-# 共享包（szyyw-auth、@szyyw/design）有新正式 tag → 升级 → 测试通过就直接推到 main → VPS 的 auto-deploy
-# 在 2 分钟内上线（测试失败就不推；上线后健康检查失败由 deploy.sh 自动回滚）。
+# 共享包（szyyw-auth、@szyyw/design）有新正式 tag → 升级 → 测试通过就直接推到 main → 自动部署随后上线
+# （测试失败就不推；上线后健康检查失败由部署脚本自动回滚）。
 # 注意：bot 用 GITHUB_TOKEN 推送不会再触发 test.yml，所以这里自己跑一遍完整测试。
 name: upgrade-shared
 on:

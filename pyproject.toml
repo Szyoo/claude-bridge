@@ -33,7 +33,7 @@ claude-bridge = "claude_bridge.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-# "static/*" does not recurse; static/site: favicon files of the standalone site, from platform/branding.
+# "static/*" does not recurse; static/site: favicon files of the standalone site.
 # @szyyw/design is not packaged: the site pages load it from https://design.szyyw.xyz (DESIGN_VERSION in standalone.py)
 "claude_bridge" = ["static/*", "static/site/*"]
 
