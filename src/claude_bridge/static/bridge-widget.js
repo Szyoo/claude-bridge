@@ -65,6 +65,12 @@ export function fmtRelative(utc, now = new Date()) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// 对话列表里「占本周额度」：服务端给的 quota_pct（未标定时为 null，不显示）
+export function quotaText(pct) {
+  if (pct == null) return '';
+  return ` · 周额度 ${pct > 0 && pct < 0.1 ? '<0.1' : pct < 10 ? (Math.round(pct * 10) / 10) : Math.round(pct)}%`;
+}
+
 export const CONTEXT_HELP = '当前会话上下文 = 每次请求送给模型的全部内容：系统提示、工具定义、对话历史、工具输出。'
   + '越大每次回答越慢越贵；接近上限时 Claude Code 会自动压缩历史（保留摘要），也可手动压缩；新开对话则归零。';
 
@@ -991,7 +997,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       const d = await client.threads(o.scope);
       $('.bridge-threads').innerHTML = d.items.map(t => `<button type="button" class="bridge-thread ${t.id === state.thread ? 'active' : ''}" data-id="${esc(t.id)}">`
         + `<span class="t">${t.pinned ? '<span class="pin">📌</span>' : ''}${esc(t.title || S.threadTitle)}</span>`
-        + `<span class="p">${esc(t.preview || '')}</span><span class="m">${t.n ?? 0} 条 · ${esc(fmtRelative(t.updated_at))}</span></button>`).join('');
+        + `<span class="p">${esc(t.preview || '')}</span><span class="m">${t.n ?? 0} 条 · ${esc(fmtRelative(t.updated_at))}${quotaText(t.quota_pct)}</span></button>`).join('');
       if (!state.thread && d.current) subscribe(d.current);
     } catch (e) { toast(e.message, true); }
   }

@@ -29,7 +29,7 @@
       <form class="glass panel" id="quota">
         <h2 class="panel-title">订阅额度</h2>
         <p class="muted small bp-lead">账户用量是整个 Claude 订阅 / 席位的百分比，由 helper 本机的 <code>claude</code> 报告（每轮对话结束时，外加每 10 分钟一次零费用的 <code>/usage</code>），你在别处用的也算在内。
-          每轮对话按实际 token 数折成「API 标价等价」（只是统一的计量单位，不是实际花费；席位 / 订阅按固定月费计）。「100% ≈ $X」默认自动标定（helper 本机所有 Claude Code 会话的用量 ÷ 账户用量），也可以手填覆盖。有了它，按人份额上限才生效。</p>
+          每个对话按实际 token 数（不同模型、输入 / 输出 / 缓存权重不同）折算成占 5 小时 / 本周额度的百分比；换算比例由 helper 本机所有 Claude Code 会话的用量与账户用量自动标定，标定出来后按人份额上限才生效。</p>
         <div class="bp-grid" id="windows"></div>
         <div class="actions"><button type="submit" class="btn">保存额度设置</button></div>
       </form>
@@ -84,7 +84,7 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armConfirm, disarm, confirmTyped, fmtUsd, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armConfirm, disarm, confirmTyped, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
     const $ = (s, el = document) => el.querySelector(s);
     const CAP = { five_hour: 'cap_5h_usd', seven_day: 'cap_7d_usd' };
     const GUARD = { five_hour: 'guard_5h_pct', seven_day: 'guard_7d_pct' };
@@ -105,27 +105,34 @@
         const seen = a.observed_at ? `${ago(a.observed_at)}（${SOURCE[a.source] || a.source || '?'}）` : '还没有数据：helper 上线或有人发消息后出现';
         const split = a.bridge_pct == null ? '' : [`bridge ${fmtPct(a.bridge_pct)}`, `本机其他 ${fmtPct(a.local_pct)}`,
           a.external_pct == null ? '' : `其他设备 ${fmtPct(a.external_pct)}`].filter(Boolean).join(' · ');
-        const sub = [split, `经 bridge ${fmtUsd(a.bridge_cost_usd)} · 本机其他 ${fmtUsd(a.machine_local_usd)}`,
-          a.resets_at ? `重置 ${esc(fmtWhen(a.resets_at))}` : '', `更新于 ${esc(seen)}`].filter(Boolean).join('<br>');
-        const est = a.estimate_cap_usd, range = a.estimate_range_usd;
+        const sub = [split, a.resets_at ? `重置 ${esc(fmtWhen(a.resets_at))}` : '', `更新于 ${esc(seen)}`].filter(Boolean).join('<br>');
+        const range = a.estimate_range_usd, est = a.estimate_cap_usd;
+        const err = est && range ? Math.round((range[1] - range[0]) / 2 / est * 100) : null;
+        const calib = a.cap_source === 'manual'
+          ? `换算比例：使用手动设定值（经接口设置）。<button type="button" class="btn-ghost btn-small" data-clear="${CAP[k]}">改用自动标定</button>`
+          : est ? `换算比例：已自动标定（${a.estimate_groups} 个用量档位，误差约 ±${err}%）。`
+            : '换算比例：还在积累数据，暂时算不出每个人的百分比。需要 helper 上报本机用量（<code>CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1</code>），且账户用量到 3% 以上、出现 4 个不同的百分比档位。';
         return `<div>
           ${meterHtml({ label: `账户${label}用量`, used: a.utilization_pct, limit: a.guard_pct, sub })}
-          <div class="form-row bp-gap"><label for="q-${CAP[k]}">${label} 100% ≈ 多少 API 标价等价（美元）</label>
-            <div class="bp-num-row">$<input id="q-${CAP[k]}" class="field small" name="${CAP[k]}" type="number" min="0" step="0.01" value="${q[CAP[k]] ?? ''}" placeholder="${est ? `自动 ${est}` : '自动（数据不足）'}" /></div>
-            <p class="hint">${est
-            ? `自动标定 $${est}（区间 $${range[0]}–$${range[1]}，${a.estimate_groups} 个用量档位）。${a.cap_source === 'manual' ? '现在用的是手填值；清空就改用自动值。' : '留空就用它。'}`
-            : `${a.cap_source === 'manual' ? '现在用的是手填值。' : ''}自动标定需要 helper 上报本机用量（<code>CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1</code>），且账户用量到 3% 以上、积累 4 个不同的百分比档位。`}</p></div>
+          <p class="hint bp-gap">${calib}</p>
           <div class="form-row"><label for="q-${GUARD[k]}">保护线：账户${label}用到</label>
             <div class="bp-num-row"><input id="q-${GUARD[k]}" class="field small" name="${GUARD[k]}" type="number" min="0" max="100" step="1" value="${q[GUARD[k]] ?? ''}" placeholder="不设" />% 时暂停普通用户</div></div>
         </div>`;
       }).join('');
     }
 
+    $('#windows').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-clear]');
+      if (!b) return;
+      try { const d = await api('PUT', '/api/admin/quota', { [b.dataset.clear]: null }); Object.assign(data, d); renderWindows(); toast('已改用自动标定'); load(); }
+      catch (err) { toast(err.message, true); }
+    });
+
     $('#quota').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target, num = (n) => f[n].value === '' ? null : Number(f[n].value);
       try {
-        const d = await api('PUT', '/api/admin/quota', Object.fromEntries([...Object.values(CAP), ...Object.values(GUARD)].map(n => [n, num(n)])));
+        const d = await api('PUT', '/api/admin/quota', Object.fromEntries(Object.values(GUARD).map(n => [n, num(n)])));
         Object.assign(data, d); renderWindows(); toast('已保存'); load();
       } catch (err) { toast(err.message, true); }
     });
@@ -137,7 +144,7 @@
         const tags = [u.role === 'admin' ? '<span class="pill cyan">管理员</span>' : '', u.disabled ? '<span class="pill red">已停用</span>' : '',
           u.id === data.me ? '<span class="pill">我</span>' : ''].join(' ');
         const meters = u.role === 'admin'
-          ? WINDOWS.map(([k, l]) => meterHtml({ label: l, used: null, right: fmtUsd(u.usage[k].cost_usd), sub: `${u.usage[k].turns} 次 · 不限` })).join('')
+          ? WINDOWS.map(([k, l]) => meterHtml({ label: l, used: u.usage[k].used_pct, sub: `${u.usage[k].turns} 次 · 不限` })).join('')
           : WINDOWS.map(([k, l]) => userMeter(u.usage[k], l)).join('');
         return `<div class="bp-user${u.disabled ? ' is-off' : ''}">
           <div class="who"><div class="n">${esc(u.display_name || u.username)} ${tags}</div>
@@ -152,7 +159,7 @@
       });
       $('#users').innerHTML = `<div class="bp-user head"><div>用户</div><div>5 小时</div><div>本周</div><div>最近</div><div></div></div>${rows.join('')}`
         + (noCap && data.items.some(u => u.role !== 'admin' && (u.limit_5h_pct != null || u.limit_7d_pct != null))
-          ? '<div class="callout warn bp-gap">⚠ 「100% ≈ $X」还没有自动值也没有手填，按人份额上限暂不生效（只有保护线生效）。</div>' : '');
+          ? '<div class="callout warn bp-gap">⚠ 换算比例还没标定出来，按人份额上限暂不生效（只有保护线生效）。</div>' : '');
       for (const b of document.querySelectorAll('#users button[data-edit]')) b.addEventListener('click', () => openUser(data.items.find(u => u.id === Number(b.dataset.edit))));
     }
 

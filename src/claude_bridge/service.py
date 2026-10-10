@@ -105,6 +105,8 @@ class BridgeConfig:
     orphan_seconds: int = 86400  # uploads never sent are removed after this long
     # called before a chat / compact is queued; raise QuotaExceeded (or any BridgeError) to refuse it
     check_quota: Callable[[Principal], None] | None = None
+    # an admin-set "100% of window ≈ $X" (window name → USD or None); without one the calibrated estimate is used
+    cap_override: Callable[[str], float | None] | None = None
     projects: bool = False  # Code-mode projects (GET/POST/DELETE /projects); needs a worker that handles "project" jobs
     client_tools_enabled: bool = False
 
@@ -916,6 +918,21 @@ class BridgeService:
         est = estimate_capacity(samples, series, span)
         self._capacity_cache[name] = (now, est)
         return est
+
+    def effective_cap(self, name: str) -> float | None:
+        """List-price USD that 100% of window `name` is: the admin's override, else the calibrated estimate."""
+        manual = self.config.cap_override(name) if self.config.cap_override else None
+        if manual:
+            return float(manual)
+        est = self.capacity(name)
+        return est["cap_usd"] if est else None
+
+    def thread_quota_pct(self, owner: str) -> dict[str, float]:
+        """{thread: % of the weekly window} for everything each of the owner's threads has used so far."""
+        cap = self.effective_cap("seven_day")
+        if not cap:
+            return {}
+        return {t: round(c / cap * 100, 2) for t, c in self.store.usage_by_thread(owner).items()}
 
     def machine_usage_in_window(self, name: str) -> dict[str, float]:
         """{bridge, local}: the worker machine's use since the window started, from its transcripts."""

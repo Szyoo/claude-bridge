@@ -275,8 +275,19 @@ def test_scanner_sums_nested_files_by_bucket_and_source(tree):
     assert rows[(bucket_text(b), "local")]["output_tokens"] == 20  # nested file, other cwd
     assert rows[(bucket_text(b + 60), "local")]["requests"] == 1
     assert len(rows) == 3
-    assert set(next(iter(rows.values()))) == {"bucket", "source", "cost_usd", "input_tokens", "output_tokens",
+    assert set(next(iter(rows.values()))) == {"bucket", "source", "model", "cost_usd", "input_tokens", "output_tokens",
                                               "cache_read_tokens", "cache_write_tokens", "requests"}
+
+
+def test_scanner_splits_models_within_a_minute(tree):
+    b = tree["base"]
+    write_lines(tree["root"] / "p" / "m.jsonl",
+                tline("m-1", b + 1, 100, model="claude-opus-5-5-20260901"),
+                tline("m-2", b + 2, 100, model="claude-sonnet-5-5"),
+                tline("m-3", b + 3, 100, model="claude-sonnet-5-5[1m]"))
+    rows = {(r["model"]): r for r in scanner(tree).scan()}
+    assert set(rows) == {"claude-opus-5-5", "claude-sonnet-5-5"}  # normalized ids, one row each
+    assert rows["claude-sonnet-5-5"]["requests"] == 2 and rows["claude-opus-5-5"]["output_tokens"] == 100
 
 
 def test_scanner_bridge_root_is_a_directory_prefix(tree, tmp_path):
@@ -514,6 +525,7 @@ def app(tmp_path):
     acc = Accounts(store)
     acc.create("boss", PW, role="admin")
     acc.create("alice", PW, display_name="Alice")
+    acc.create("bob", PW)
     store.close()
     return create_multiuser_app(db_path=db, agent_token="tok", tz="UTC")
 
@@ -731,3 +743,27 @@ def test_worker_bridge_roots(tmp_path):
     roots = Worker(UsageClient(), cfg).bridge_roots()
     assert roots == [str(tmp_path / "w"), f"{tmp_path}/chat/", f"{tmp_path}/code/", str(tmp_path / "plain")]
     assert Worker(UsageClient(), WorkerConfig()).bridge_roots() == []
+
+
+def test_users_see_their_own_share_apart_from_everyone_else(app, agent):
+    resets, _ = build_calibrated_window(app, agent)
+    alice, bob, boss = login(app, "alice"), login(app, "bob"), login(app, "boss")
+    week = {"utilization": 0.1, "resets_at": resets + 4 * 86400}
+    run_turn(alice, agent, 2.0, rate_limit={"five_hour": {"utilization": 0.30, "resets_at": resets}, "seven_day": week})
+    run_turn(bob, agent, 1.0)
+    boss.put("/api/admin/quota", json={"cap_5h_usd": 100, "cap_7d_usd": 200})
+
+    me = alice.get("/api/me").json()["usage"]["five_hour"]
+    assert me["used_pct"] == pytest.approx(2.0) and me["others_pct"] == pytest.approx(1.0)
+    assert me["account_pct"] == 30.0 and me["outside_pct"] == pytest.approx(27.0)  # the admin's own clients etc.
+
+    # each conversation's share of the weekly window, in the thread list
+    items = alice.get("/api/threads").json()["items"]
+    assert [t["quota_pct"] for t in items] == [pytest.approx(1.0)]  # $2 of a $200 week
+    assert bob.get("/api/threads").json()["items"][0]["quota_pct"] == pytest.approx(0.5)
+
+
+def test_thread_quota_pct_is_none_until_calibrated(app, agent):
+    alice = login(app, "alice")
+    run_turn(alice, agent, 1.0)
+    assert [t["quota_pct"] for t in alice.get("/api/threads").json()["items"]] == [None]

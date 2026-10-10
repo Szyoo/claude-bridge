@@ -55,7 +55,7 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, fmtWhen, userMeter, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, fmtWhen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
     const $ = (s) => document.querySelector(s);
     const profile = $('#profile'), pw = $('#password');
 
@@ -70,11 +70,12 @@
         $('#logout').hidden = true;  // sign-out is the corner account menu's (portal) 登出
         $('#profile .bp-lead').textContent = `通过门户登录（${d.sso.portal_user || ''}）；用户名与显示名只出现在这里的界面上。`;
       }
-      $('#usage').innerHTML = u.role === 'admin'
-        ? '<p class="muted small">管理员不受额度限制。整个订阅的用量在「管理」页。</p>'
-        : WINDOWS.map(([k, label]) => {
-          const w = us[k], reset = fmtWhen(w.resets_at);
-          return `<div>${userMeter(w, label)}${reset ? `<div class="tiny muted">重置：${esc(reset)}</div>` : ''}</div>`;
+      // your own share of each window, and where the rest of the account's use went (other users / outside the bridge)
+      $('#usage').innerHTML = (u.role === 'admin' ? '<p class="muted small">管理员不受额度限制；整个账户的用量在「管理」页。</p>' : '')
+        + WINDOWS.map(([k, label]) => {
+          const w = us[k], reset = fmtWhen(w.resets_at), share = shareLine(w);
+          return `<div>${userMeter(w, `你在${label}额度里用了`)}${share ? `<div class="tiny muted">${esc(share)}</div>` : ''}`
+            + `${reset ? `<div class="tiny muted">重置：${esc(reset)}</div>` : ''}</div>`;
         }).join('');
       $('#blocked').innerHTML = us.blocked ? `<div class="callout err bp-gap">${esc(us.blocked)}</div>` : '';
     }

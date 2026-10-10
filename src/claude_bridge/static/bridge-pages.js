@@ -94,8 +94,7 @@ export function confirmTyped({ title, message, expect, okLabel = '删除' }) {
 
 export const WINDOWS = [['five_hour', '5 小时'], ['seven_day', '本周']];
 
-export const fmtPct = (v) => v == null ? '—' : `${v < 10 && v % 1 ? v.toFixed(1) : Math.round(v)}%`;
-export const fmtUsd = (v) => v == null ? '—' : `$${v < 1 ? v.toFixed(3) : v.toFixed(2)}`;
+export const fmtPct = (v) => v == null ? '—' : v > 0 && v < 0.1 ? '<0.1%' : `${v < 10 && v % 1 ? v.toFixed(1).replace(/\.0$/, '') : Math.round(v)}%`;
 
 export function fmtWhen(epoch) {
   if (!epoch) return '';
@@ -157,11 +156,19 @@ export function meterHtml({ label, used, limit, sub = '', right = null }) {
 /** One window of a user's usage (from /api/me or /api/admin/users). */
 export function userMeter(w, label) {
   const bits = [];
-  if (w.used_pct == null) bits.push(`${fmtUsd(w.cost_usd)} API 标价等价`);
+  if (w.used_pct == null) bits.push('额度尚未标定');
   bits.push(`${w.turns} 次`);
   if (w.limit_pct == null) bits.push('不限');
   const right = w.used_pct == null && w.limit_pct != null ? `上限 ${fmtPct(w.limit_pct)}` : null;
   return meterHtml({ label, used: w.used_pct, limit: w.limit_pct, sub: esc(bits.join(' · ')), right });
+}
+
+/** Where the whole account's use of a window went, from one user's point of view (/api/me usage window). */
+export function shareLine(w) {
+  if (w.account_pct == null || w.used_pct == null) return '';
+  const bits = [`你 ${fmtPct(w.used_pct)}`, `其他 bridge 用户 ${fmtPct(w.others_pct)}`];
+  if (w.outside_pct != null) bits.push(`bridge 之外 ${fmtPct(w.outside_pct)}`);
+  return `整个账户已用 ${fmtPct(w.account_pct)}：${bits.join(' · ')}`;
 }
 
 export function copyText(text) {

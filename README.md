@@ -66,7 +66,7 @@ claude-bridge users --db bridge.db add <用户名> --admin   # 先建管理员
 claude-bridge serve --multi-user --db bridge.db
 ```
 
-用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮实际的 token 数折成 API 标价等价记账（只是计量单位，与订阅 / 席位的实际计费无关），再换算为 5 小时 / 每周额度的百分比；「100% 相当于多少」由账户使用率与 worker 本机用量自动标定（需 `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1`），也可在 `/admin` 手填。另可设置整体用量阈值。`users` 还有 `list` / `passwd` / `enable` / `map` / `unmap` 子命令。
+用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮实际的 token 数（按模型与输入 / 输出 / 缓存加权）换算为 5 小时 / 每周额度的百分比，换算比例由账户使用率与 worker 本机用量自动标定（需 `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1`）。用户在 `/account` 能看到自己用了多少，以及账户总用量里其他用户、bridge 之外各占多少；对话列表显示每个对话占本周额度的比例。另可设置整体用量阈值。`users` 还有 `list` / `passwd` / `enable` / `map` / `unmap` 子命令。
 
 **门户 SSO**（`SZYYW_SSO=1`，或 `CLAUDE_BRIDGE_SSO=1`）：浏览器身份只取前置门卫注入的 `X-User` / `X-Role` / `X-Portal-Sub`，本地密码登录与会话 cookie 不再生效；只能部署在会剥掉客户端同名头的门卫之后，且不发布端口。`X-Portal-Sub` 对应本地账户行（`users map <用户名> <portal_sub>` 手动绑定；未绑定时按同名用户名认领一次），`X-Role` 逐请求决定管理权限。`SZYYW_SSO_AUTOCREATE=1` 时自动为新门户用户建账户；`PORTAL_ORIGIN` 指定登录 / 登出跳转的门户（缺省 `https://szyyw.xyz`）。`/api/agent/*`（Bearer）与 `/api/health` 不受影响。
 

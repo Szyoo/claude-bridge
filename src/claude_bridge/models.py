@@ -145,6 +145,7 @@ class AgentLimitsIn(BaseModel):
 class LocalUsageBucket(BaseModel):
     bucket: str = Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$")  # UTC minute
     source: Literal["bridge", "local"]
+    model: str = Field("", max_length=60)  # pricing.price_key of the model ("" from workers before 0.8)
     cost_usd: float = Field(ge=0, le=1e6)
     input_tokens: int = Field(0, ge=0)
     output_tokens: int = Field(0, ge=0)

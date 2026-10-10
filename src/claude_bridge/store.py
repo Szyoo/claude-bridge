@@ -114,19 +114,22 @@ CREATE TABLE IF NOT EXISTS bridge_usage (
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_owner ON bridge_usage(owner, created_at);
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_time ON bridge_usage(created_at);
 
--- the worker machine's whole Claude Code use (its transcripts), absolute totals per minute and source
+-- the worker machine's whole Claude Code use (its transcripts), absolute totals per minute, source and model
 -- ('bridge' = sessions the bridge ran, 'local' = everything else on that machine)
-CREATE TABLE IF NOT EXISTS bridge_local_usage (
+CREATE TABLE IF NOT EXISTS bridge_machine_usage (
   bucket             TEXT NOT NULL,
   source             TEXT NOT NULL,
+  model              TEXT NOT NULL DEFAULT '',
   cost_usd           REAL NOT NULL DEFAULT 0,
   input_tokens       INTEGER NOT NULL DEFAULT 0,
   output_tokens      INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   requests           INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (bucket, source)
+  PRIMARY KEY (bucket, source, model)
 );
+-- 0.7 kept these per minute and source only; the worker re-sends its last 8 days per model on restart
+DROP TABLE IF EXISTS bridge_local_usage;
 
 -- account-wide utilization as the server reported it over time (per turn and from `/usage`), for calibration
 CREATE TABLE IF NOT EXISTS bridge_util_samples (
@@ -707,6 +710,10 @@ class BridgeStore:
              cache_read_tokens, cache_write_tokens, model, _now()),
         )
 
+    def usage_by_thread(self, owner: str) -> dict[str, float]:
+        rows = self._q("SELECT thread, SUM(cost_usd) AS c FROM bridge_usage WHERE owner=? AND thread IS NOT NULL GROUP BY thread", (owner,))
+        return {r["thread"]: float(r["c"] or 0) for r in rows}
+
     def usage_rows_with_events(self) -> list[dict[str, Any]]:
         """Ledger rows joined to the turn's `usage` event (for re-pricing rows booked from total_cost_usd)."""
         return self._q(
@@ -735,20 +742,20 @@ class BridgeStore:
         with self.transaction():
             for r in rows:
                 self._x(
-                    f"INSERT INTO bridge_local_usage(bucket, source, {', '.join(cols)}) VALUES(?,?,{','.join('?' * len(cols))}) "
-                    f"ON CONFLICT(bucket, source) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in cols)}",
-                    (r["bucket"], r["source"], *(r[c] for c in cols)),
+                    f"INSERT INTO bridge_machine_usage(bucket, source, model, {', '.join(cols)}) VALUES(?,?,?,{','.join('?' * len(cols))}) "
+                    f"ON CONFLICT(bucket, source, model) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in cols)}",
+                    (r["bucket"], r["source"], r.get("model") or "", *(r[c] for c in cols)),
                 )
 
     def local_usage_totals(self, since: str, until: str | None = None) -> dict[str, float]:
         """{source: cost_usd} for buckets in [since, until)."""
         where, params = ("bucket >= ?", (since,)) if until is None else ("bucket >= ? AND bucket < ?", (since, until))
-        rows = self._q(f"SELECT source, SUM(cost_usd) AS c FROM bridge_local_usage WHERE {where} GROUP BY source", params)
+        rows = self._q(f"SELECT source, SUM(cost_usd) AS c FROM bridge_machine_usage WHERE {where} GROUP BY source", params)
         return {r["source"]: float(r["c"] or 0) for r in rows}
 
     def local_usage_series(self, since: str) -> list[tuple[str, float]]:
         """(bucket, cost_usd of all sources) from `since`, oldest first."""
-        rows = self._q("SELECT bucket, SUM(cost_usd) AS c FROM bridge_local_usage WHERE bucket >= ? GROUP BY bucket ORDER BY bucket", (since,))
+        rows = self._q("SELECT bucket, SUM(cost_usd) AS c FROM bridge_machine_usage WHERE bucket >= ? GROUP BY bucket ORDER BY bucket", (since,))
         return [(r["bucket"], float(r["c"] or 0)) for r in rows]
 
     def events_of_type(self, type: str) -> list[dict[str, Any]]:
@@ -773,7 +780,7 @@ class BridgeStore:
 
     def prune_usage_history(self, keep_days: int = 35) -> None:
         cutoff = time.time() - keep_days * 86400
-        self._x("DELETE FROM bridge_local_usage WHERE bucket < ?", (utc_text(cutoff),))
+        self._x("DELETE FROM bridge_machine_usage WHERE bucket < ?", (utc_text(cutoff),))
         self._x("DELETE FROM bridge_util_samples WHERE at < ?", (cutoff,))
 
     # ---------------- owners ----------------
