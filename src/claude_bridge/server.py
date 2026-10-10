@@ -14,11 +14,14 @@ from starlette.concurrency import run_in_threadpool
 
 from claude_bridge.auth import bearer_auth
 from claude_bridge.broker import Broker
+from claude_bridge.client_tools import ClientToolService
 from claude_bridge.errors import BridgeError
 from claude_bridge.models import (
     AgentChatIn,
     AgentLimitsIn,
     AgentModelsIn,
+    ClientToolCallIn,
+    ClientToolResultIn,
     JobEventsIn,
     JobFinishIn,
     JobNextIn,
@@ -58,6 +61,7 @@ class Bridge:
     service: BridgeService
     browser_router: APIRouter
     agent_router: APIRouter
+    client_tool_router: APIRouter | None = None
 
     def mount(
         self,
@@ -69,6 +73,8 @@ class Bridge:
     ) -> None:
         app.include_router(self.browser_router, prefix=browser_prefix)
         app.include_router(self.agent_router, prefix=agent_prefix)
+        if self.client_tool_router is not None:
+            app.include_router(self.client_tool_router,prefix=agent_prefix+'/client-tools')
         if static_prefix:
             app.mount(static_prefix, StaticFiles(directory=str(static_dir())), name="bridge-static")
 
@@ -97,6 +103,38 @@ def create_bridge(
 
     browser = APIRouter(dependencies=[Depends(who)])
     agent = APIRouter(dependencies=[Depends(agent_auth)])
+    tool_worker = APIRouter()
+    client_tools = ClientToolService(service)
+
+    def tool_token(request: Request) -> str:
+        auth = request.headers.get('authorization','')
+        return auth[7:] if auth.startswith('Bearer ') else ''
+
+    @agent.post('/jobs/{job_id}/client-tool-session')
+    def open_client_tools(job_id: int):
+        return _svc(client_tools.open,job_id)
+
+    @tool_worker.get('/{job_id}/definition')
+    def client_tool_definition(job_id: int, request: Request):
+        return _svc(client_tools.definition,job_id,tool_token(request))
+
+    @tool_worker.post('/{job_id}/calls')
+    def client_tool_call(job_id: int, body: ClientToolCallIn, request: Request):
+        return _svc(client_tools.call,job_id,tool_token(request),body.model_dump())
+
+    @tool_worker.get('/{job_id}/calls/{call_id}')
+    def client_tool_result(job_id: int, call_id: str, request: Request):
+        return _svc(client_tools.result,job_id,tool_token(request),call_id)
+
+    @browser.get('/threads/{thread_id}/client-tools')
+    def pending_client_tools(thread_id: str, p: Principal = Depends(who)):
+        import time
+        _svc(service.own_thread,thread_id,p.owner)
+        return {'items':store.pending_client_tools(thread_id,time.time())}
+
+    @browser.post('/messages/{message_id}/client-tools/{call_id}/result')
+    def respond_client_tool(message_id: int, call_id: str, body: ClientToolResultIn, p: Principal = Depends(who)):
+        return _svc(client_tools.respond,message_id,call_id,body,p.owner)
 
     # ---------------- browser ----------------
 
@@ -149,13 +187,14 @@ def create_bridge(
 
     @browser.post("/threads/{thread_id}/messages", status_code=201)
     def send_to_thread(thread_id: str, body: ThreadMessageIn, p: Principal = Depends(who)):
-        return _svc(service.start_chat, body.text, thread_id=thread_id, files=body.files, principal=p)
+        return _svc(service.start_chat, body.text, thread_id=thread_id, files=body.files, principal=p, options=body.options,
+                    client_tools=body.client_tools,client_environment=body.client_environment)
 
     @browser.post("/send", status_code=201)
     def send(body: SendIn, p: Principal = Depends(who)):
         return _svc(
             service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread, files=body.files,
-            principal=p,
+            principal=p, options=body.options,client_tools=body.client_tools,client_environment=body.client_environment,
         )
 
     # image upload: the request body is the image itself (no multipart dependency); ?name= is an optional label
@@ -309,5 +348,6 @@ def create_bridge(
         return service.save_agent_models(body.model_dump())
 
     return Bridge(
-        store=store, config=config, broker=broker, service=service, browser_router=browser, agent_router=agent
+        store=store, config=config, broker=broker, service=service, browser_router=browser, agent_router=agent,
+        client_tool_router=tool_worker,
     )

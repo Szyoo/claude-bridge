@@ -13,6 +13,7 @@ import logging
 import re
 import shlex
 from collections.abc import Iterator
+from copy import deepcopy
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -135,10 +136,12 @@ def tool_result_text(content: Any) -> str:
 
 
 class StreamState:
-    def __init__(self, *, resumed: bool = False, thinking_max: int = 4000, tool_result_max: int = 4000) -> None:
+    def __init__(self, *, resumed: bool = False, thinking_max: int = 4000, tool_result_max: int = 4000,
+                 emit_content_blocks: bool = False) -> None:
         self.resumed = resumed
         self.thinking_max = thinking_max
         self.tool_result_max = tool_result_max
+        self.emit_content_blocks = emit_content_blocks
         self.session_id: str | None = None
         self.init: dict[str, Any] | None = None
         self.result: dict[str, Any] | None = None
@@ -165,9 +168,17 @@ class StreamState:
         if kind == "system":
             return self._system(ev)
         if kind == "stream_event":
-            return self._stream_event(ev.get("event") or {})
+            event = ev.get("event") or {}
+            out = self._stream_event(event)
+            if self.emit_content_blocks:
+                out.insert(0, ("event", {"type": "content_stream", "data": {
+                    "native_message_id": self._cur_msg, "event": deepcopy(event), "at":self.text_total}}))
+            return out
         if kind == "assistant":
-            return self._assistant(ev)
+            out = self._assistant(ev)
+            if self.emit_content_blocks:
+                out.insert(0, ("event", {"type": "content_message", "data": {"message": deepcopy(ev.get("message") or {})}}))
+            return out
         if kind == "user":
             return self._user(ev)
         if kind == "rate_limit_event":

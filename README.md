@@ -139,6 +139,8 @@ worker.run_forever()
 
 ## 浏览器端
 
+新增的[完整内容流、逐轮控制与调用方工具](docs/caller-tools-and-content.md)包括未截断的 CLI 内容块和签名、思考/参数增量、冻结到单轮任务的生成选项，以及由请求应用执行的受控 MCP 工具。普通聊天保持原接口；完整内容与调用方工具由宿主显式启用。
+
 ```html
 <script type="module">
   import { BridgeClient } from '/static/bridge/bridge-client.js';

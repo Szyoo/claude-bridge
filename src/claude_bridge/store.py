@@ -112,6 +112,13 @@ CREATE INDEX IF NOT EXISTS idx_bridge_usage_owner ON bridge_usage(owner, created
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_time ON bridge_usage(created_at);
 
 -- Code-mode projects: directories on the worker's machine (git init / git clone), one row per owner + name
+CREATE TABLE IF NOT EXISTS bridge_client_tools (
+  job_id INTEGER NOT NULL, call_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+  request TEXT NOT NULL, result TEXT, deadline REAL NOT NULL,
+  PRIMARY KEY(job_id,call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_client_tools_message ON bridge_client_tools(message_id);
+
 CREATE TABLE IF NOT EXISTS bridge_projects (
   owner      TEXT NOT NULL DEFAULT '',
   name       TEXT NOT NULL,
@@ -211,6 +218,34 @@ class BridgeStore:
         if self._owns_conn:
             with self.lock:
                 self.conn.close()
+
+    def init_client_tools(self) -> None:
+        self._x('''CREATE TABLE IF NOT EXISTS bridge_client_tools (
+          job_id INTEGER NOT NULL, call_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+          request TEXT NOT NULL, result TEXT, deadline REAL NOT NULL,
+          PRIMARY KEY(job_id,call_id))''')
+
+    def client_tool_call(self, job_id: int, call_id: str) -> dict[str, Any] | None:
+        row = self._one('SELECT * FROM bridge_client_tools WHERE job_id=? AND call_id=?',(job_id,call_id))
+        if row:
+            row['request'] = json.loads(row['request'])
+            row['result'] = json.loads(row['result']) if row['result'] is not None else None
+        return row
+
+    def add_client_tool_call(self, job_id: int, call_id: str, message_id: int, request: dict, deadline: float) -> None:
+        self._x('INSERT INTO bridge_client_tools(job_id,call_id,message_id,request,deadline) VALUES(?,?,?,?,?)',
+                (job_id,call_id,message_id,json.dumps(request,ensure_ascii=False,sort_keys=True),deadline))
+
+    def save_client_tool_result(self, job_id: int, call_id: str, result: dict) -> None:
+        self._x('UPDATE bridge_client_tools SET result=? WHERE job_id=? AND call_id=?',
+                (json.dumps(result,ensure_ascii=False,sort_keys=True),job_id,call_id))
+
+    def pending_client_tools(self, thread_id: str, now: float) -> list[dict[str, Any]]:
+        rows = self._q('''SELECT c.* FROM bridge_client_tools c JOIN bridge_messages m ON m.id=c.message_id
+            JOIN bridge_jobs j ON j.id=c.job_id WHERE m.thread=? AND c.result IS NULL AND c.deadline>?
+            AND j.status='running' AND j.cancel_requested=0 ORDER BY c.rowid''',(thread_id,now))
+        return [{**json.loads(row['request']),'message_id':row['message_id'],'job_id':row['job_id'],
+                 'deadline':row['deadline']} for row in rows]
 
     # ---------------- plumbing ----------------
 
@@ -336,6 +371,8 @@ class BridgeStore:
 
     def delete_thread(self, thread_id: str) -> int:
         with self.transaction():
+            self._x('DELETE FROM bridge_client_tools WHERE message_id IN (SELECT id FROM bridge_messages WHERE thread=?)',
+                    (thread_id,))
             n = self._x("SELECT COUNT(*) AS n FROM bridge_messages WHERE thread=?", (thread_id,)).fetchone()["n"]
             self._x(
                 "DELETE FROM bridge_events WHERE message_id IN (SELECT id FROM bridge_messages WHERE thread=?)",
