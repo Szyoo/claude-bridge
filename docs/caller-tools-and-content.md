@@ -9,7 +9,9 @@ worker 使用 `--content-blocks`，或设置 `CLAUDE_BRIDGE_CONTENT_BLOCKS=1`（
 - `content_stream`：`data.event` 原样保存 CLI 的 `stream_event.event`，包括文本、`thinking_delta`、`signature_delta`、工具参数 `input_json_delta`、使用量和结束原因。`data.native_message_id` 是模型消息标识，区别于事件外层的 bridge 消息 ID；`at` 是网页展示用的累计正文位置。
 - `content_message`：`data.message` 是 CLI 输出的完整 assistant 消息，包括最终内容块、完整思考文本及 opaque signature/redacted data。CLI 不输出 partial events 时也可使用这个事件。
 
-原有 thinking 预览继续遵守 `thinking_max_chars`；完整内容事件不使用这个预览截断。组件在收到思考增量时即更新预览，并合并最后的预览事件，不显示 opaque 签名。未开启的 worker 行为不变。
+原有 thinking 预览继续遵守 `thinking_max_chars`；完整内容事件不使用这个预览截断。开启完整内容流的 worker 会通过 CLI 的 `--thinking-display summarized` 请求可公开的思考摘要（需要 CLI 支持此参数），不改变模型是否实际生成思考的决定。未开启的 worker 行为不变。
+
+网页收到 `thinking_delta` 即更新思考卡片，思考中自动展开，可手动折叠；正文保留完整原生文本，不被最后的旧预览截断。没有 partial events 时从 `content_message` 恢复完整块。SSE 重连合并先前事件并按事件 ID 去重，保留起始块与用户展开状态。仅返回签名时显示“未返回思考文本”，redacted 块显示“思考内容未公开”，都不显示 opaque 数据。部署后刷新已打开的网页以加载新组件。
 
 **只保留 CLI 真正提供的数据**：签名未提供时保持缺失，不生成替代签名。模型可能提供摘要或不公开思考内容。消费完整内容流时不要同时把网页 `delta` 当成原始模型文本拼接：网页轨道会插入段落分隔，重复消费也会把内容计算两遍。
 

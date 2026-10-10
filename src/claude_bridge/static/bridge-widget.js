@@ -249,33 +249,67 @@ function cpIndex(text, cp) {
 export function splitTurn(content, events) {
   content = content || '';
   const items = []; const byTool = new Map(); const END = Infinity;
-  const liveThinking = new Map(), closedThinking = [];
+  const liveThinking = new Map(), nativeByMessage = new Map(), closedThinking = [];
+  const nativeItem = (mid, block, at, index) => {
+    const rows = nativeByMessage.get(mid) || [];
+    const it = { kind: 'thinking', native: true, text: block.thinking || '', rawText: block.thinking || '',
+      redacted: block.type === 'redacted_thinking', truncated: false, streaming: true,
+      signed: false, key: `native-thinking:${mid}:${index}`, at: at ?? 0, unknownAt: at == null, fullSeen: false };
+    items.push(it); rows.push(it); nativeByMessage.set(mid, rows); return it;
+  };
   for (const ev of events || []) {
     const d = ev.data || {};
     switch (ev.type) {
       case 'content_stream': {
-        const e = d.event || {}, key = `${d.native_message_id || ''}:${e.index ?? 0}`;
-        if (e.type === 'content_block_start' && e.content_block?.type === 'thinking') {
-          const it = { kind: 'thinking', text: e.content_block.thinking || '', truncated: false, streaming: true, at: d.at ?? 0 };
-          items.push(it); liveThinking.set(key, it);
+        const e = d.event || {}, mid = d.native_message_id || '', key = `${mid}:${e.index ?? 0}`;
+        if (e.type === 'content_block_start' && ['thinking', 'redacted_thinking'].includes(e.content_block?.type)) {
+          const it = nativeItem(mid, e.content_block, d.at, e.index ?? 0);
+          liveThinking.set(key, it);
         } else if (e.type === 'content_block_delta' && e.delta?.type === 'thinking_delta') {
           const it = liveThinking.get(key);
           if (it) {
-            const text = it.text + (e.delta.thinking || '');
-            it.text = text.slice(0, 4000); it.truncated ||= text.length > 4000;
+            it.rawText += e.delta.thinking || '';
+            if (!it.fullSeen) it.text = it.rawText;
           }
+        } else if (e.type === 'content_block_delta' && e.delta?.type === 'signature_delta') {
+          const it = liveThinking.get(key);
+          if (it) it.signed ||= !!e.delta.signature; // presence only; opaque bytes are never rendered
         } else if (e.type === 'content_block_stop') {
           const it = liveThinking.get(key);
-          if (it) { it.streaming = false; closedThinking.push(it); liveThinking.delete(key); }
+          if (it) { it.streaming = false; if (!it.previewSeen) closedThinking.push(it); liveThinking.delete(key); }
+        }
+        break;
+      }
+      case 'content_message': {
+        const message = d.message || {}, mid = message.id || '';
+        let ordinal = 0;
+        for (const block of message.content || []) {
+          if (!['thinking', 'redacted_thinking'].includes(block.type)) continue;
+          const redacted = block.type === 'redacted_thinking', text = block.thinking || '';
+          const rows = nativeByMessage.get(mid) || [];
+          let it = rows.find(row => row.redacted === redacted && !row.fullSeen
+            && (redacted || text.startsWith(row.rawText)));
+          // Cumulative assistant messages can repeat already finalized blocks.
+          if (!it) it = rows.find(row => row.fullSeen && row.redacted === redacted && row.text === text);
+          if (!it) { it = nativeItem(mid, block, d.at, `full-${ordinal}`); closedThinking.push(it); }
+          it.text = text; it.fullSeen = true; it.signed ||= !!block.signature;
+          // A full block can precede its raw stop event. Keep its live status
+          // until that stop, while no-partial workers are already complete.
+          if (![...liveThinking.values()].includes(it)) it.streaming = false;
+          ordinal++;
         }
         break;
       }
       case 'tool_use': { const it = { kind: 'tool', id: d.id || '', name: d.name || '?', input: d.input || {}, result: null, at: d.at ?? 0 }; items.push(it); if (d.id) byTool.set(d.id, it); break; }
       case 'tool_result': { const it = byTool.get(d.tool_use_id); if (it) it.result = d; break; }
       case 'thinking': {
-        const index = closedThinking.findIndex(it => it.at === (d.at ?? 0));
-        if (index >= 0) {
-          const it = closedThinking.splice(index, 1)[0]; it.text = d.text || ''; it.truncated = !!d.truncated;
+        const index = closedThinking.findIndex(it => it.at === (d.at ?? 0) || it.unknownAt);
+        const it = index >= 0 ? closedThinking.splice(index, 1)[0]
+          : [...liveThinking.values()].find(row => !row.previewSeen && row.at === (d.at ?? 0));
+        if (it) {
+          // A display preview must never replace or truncate the native block.
+          it.previewSeen = true;
+          if (it.unknownAt) { it.at = d.at ?? 0; it.unknownAt = false; }
         } else items.push({ kind: 'thinking', text: d.text || '', truncated: !!d.truncated, at: d.at ?? 0 });
         break;
       }
@@ -289,7 +323,7 @@ export function splitTurn(content, events) {
     }
   }
   for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i].kind === 'thinking' && !items[i].streaming && !items[i].text) items.splice(i, 1);
+    if (items[i].kind === 'thinking' && !items[i].streaming && !items[i].text && !items[i].redacted && !items[i].signed) items.splice(i, 1);
   }
   if (!items.length) return content ? [{ kind: 'text', text: content }] : [];
   items.sort((a, b) => a.at - b.at);
@@ -359,8 +393,12 @@ export function stepsHtml(items, opts = {}) {
       i = j; continue;
     }
     if (it.kind === 'thinking') {
-      out.push(`<details class="bridge-step thinking" data-k="${o.key}-t${i}"${o.open ? ' open' : ''}><summary><i class="bridge-caret"></i><span class="bridge-step-name">思考过程</span><span class="bridge-step-desc">${esc(firstLine(it.text))}</span></summary>`
-        + `<div class="bridge-step-body">${esc(it.text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`);
+      const running = !!it.streaming && o.streaming;
+      const signatureOnly = it.signed && !it.text && !running;
+      const label = it.redacted ? '思考内容未公开' : signatureOnly ? '未返回思考文本' : running ? '正在思考' : '思考过程';
+      const text = it.redacted ? '模型未公开这段思考内容。' : signatureOnly ? '上游只提供了思考块签名，没有提供可显示的思考文本。' : it.text;
+      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i><span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text))}</span>${running ? '<i class="bridge-run" aria-label="思考中"></i>' : ''}</summary>`
+        + `<div class="bridge-step-body">${esc(text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`);
     } else if (it.kind === 'trace') {
       out.push(`<details class="bridge-step trace" data-k="${o.key}-r${i}"><summary><i class="bridge-caret"></i><span class="bridge-step-name">执行轨迹</span></summary><div class="bridge-term"><pre class="out">${esc(it.text)}</pre></div></details>`);
     } else if (it.kind === 'note') {

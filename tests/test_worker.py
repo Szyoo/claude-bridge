@@ -415,6 +415,15 @@ def test_run_once_chat_with_broken_binary_reports_failure(tmp_path):
     assert client.finished[0]["ok"] is False and "FileNotFoundError" in client.finished[0]["error"]
 
 
+def test_content_block_worker_requests_public_thinking_summaries_only_when_enabled():
+    for enabled in (False, True):
+        worker = Worker(FakeClient(), WorkerConfig(emit_content_blocks=enabled))
+        cmd, _ = worker.build_chat_command("hi", None, {}, "")
+        assert ("--thinking-display" in cmd) is enabled
+        if enabled:
+            assert cmd[cmd.index("--thinking-display") + 1] == "summarized"
+
+
 def test_build_chat_command_defaults(tmp_path):
     worker = Worker(FakeClient(), WorkerConfig(claude_bin="claude", include_partial=False))
     cmd, via_stdin = worker.build_chat_command("hi", None, {}, "")

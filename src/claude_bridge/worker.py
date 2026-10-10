@@ -681,6 +681,10 @@ class Worker:
         cmd += ["--output-format", "stream-json", "--verbose"]
         if cfg.include_partial:
             cmd.append("--include-partial-messages")
+        if cfg.emit_content_blocks:
+            # Newer models otherwise default to an empty thinking block with
+            # only a signature. Ask for the public summary, never invent text.
+            cmd += ["--thinking-display", "summarized"]
         cmd += ["--max-turns", str(max(1, min(max_turns, 100)))]
         if cfg.tools is not None:  # [] → `--tools ""`: no built-in tools at all
             cmd += ["--tools", ",".join(cfg.tools)]

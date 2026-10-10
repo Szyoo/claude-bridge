@@ -1,7 +1,7 @@
 // Pure-function tests for bridge-widget.js (run by test_widget_js.py via `node --test`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BridgeClient, checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
+import { BridgeClient, Subscription, mergeMessageEvents, checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
 import {
   splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
   armConfirm, disarmConfirm, quotaText,
@@ -22,8 +22,86 @@ test('native thinking displays before completion, deduplicates preview, and neve
   rows.push(ev({ type: 'content_block_stop', index: 0 }), { type: 'thinking', data: { text: 'final preview', at: 0 } });
   segs = splitTurn('', rows);
   assert.equal(segs[0].items.length, 1);
-  assert.equal(segs[0].items[0].text, 'final preview');
+  assert.equal(segs[0].items[0].text, 'live thinking');
   assert.ok(!stepsHtml(segs[0].items).includes('opaque-secret-signature'));
+});
+
+test('native thinking preserves full text through final assistant and truncated preview', () => {
+  const text = '完整思考\n'.repeat(1500);
+  const stream = (event) => ({ type: 'content_stream', data: { native_message_id: 'm1', at: 0, event } });
+  const rows = [stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: text } }),
+    { type: 'content_message', data: { message: { id: 'm1', content: [{ type: 'thinking', thinking: text, signature: 'do-not-render' }] } } },
+    { type: 'thinking', data: { at: 0, text: text.slice(0, 4000), truncated: true } },
+    stream({ type: 'content_block_stop', index: 0 })];
+  const items = splitTurn('', rows)[0].items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].text, text);
+  assert.equal(items[0].truncated, false);
+  assert.equal(items[0].streaming, false);
+  assert.ok(!stepsHtml(items).includes('do-not-render'));
+  assert.ok(!stepsHtml(items).includes('已截断'));
+});
+
+test('full content messages render without partials and do not duplicate cumulative blocks', () => {
+  const thought = { type: 'thinking', thinking: 'Full native text <script>alert(1)</script>', signature: 'opaque-signature' };
+  const full = content => ({ type: 'content_message', data: { message: { id: 'm1', content } } });
+  const items = splitTurn('answer', [full([thought]), full([thought, { type: 'text', text: 'answer' }]),
+    { type: 'thinking', data: { at: 0, text: 'truncated preview', truncated: true } }])[0].items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].text, thought.thinking);
+  const html = stepsHtml(items);
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(!html.includes('<script>'));
+  assert.ok(!html.includes('opaque-signature'));
+});
+
+test('live thinking expands with a stable key and redacted content stays opaque', () => {
+  const ev = (mid, event) => ({ type: 'content_stream', data: { native_message_id: mid, at: 0, event } });
+  const rows = [ev('m1', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    ev('m1', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'live' } })];
+  let html = stepsHtml(splitTurn('', rows)[0].items, { streaming: true });
+  assert.ok(html.includes('正在思考'));
+  assert.ok(html.includes(' open'));
+  assert.ok(html.includes('data-k="native-thinking:m1:0"'));
+  rows.push(ev('m1', { type: 'content_block_stop', index: 0 }),
+    ev('m2', { type: 'content_block_start', index: 0, content_block: { type: 'redacted_thinking', data: 'opaque-redacted' } }),
+    ev('m2', { type: 'content_block_stop', index: 0 }));
+  html = stepsHtml(splitTurn('', rows)[0].items);
+  assert.ok(html.includes('data-k="native-thinking:m1:0"'));
+  assert.ok(html.includes('data-k="native-thinking:m2:0"'));
+  assert.ok(html.includes('思考内容未公开'));
+  assert.ok(!html.includes('opaque-redacted'));
+  assert.ok(!html.includes('正在思考'));
+});
+
+test('signature-only thinking shows an honest placeholder without exposing the signature', () => {
+  const ev = event => ({ type: 'content_stream', data: { native_message_id: 'm1', event } });
+  const segments = splitTurn('answer', [ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'opaque' } }),
+    ev({ type: 'content_block_stop', index: 0 })]);
+  const html = stepsHtml(segments[0].items);
+  assert.ok(html.includes('未返回思考文本'));
+  assert.ok(!html.includes('opaque'));
+  assert.deepEqual(splitTurn('answer', [ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    ev({ type: 'content_block_stop', index: 0 })]), [{ kind: 'text', text: 'answer' }]);
+});
+
+test('partial reconnect snapshots and duplicate live events retain exactly one thinking stream', () => {
+  let snapshot, delivered = 0;
+  const sub = Object.create(Subscription.prototype);
+  Object.assign(sub, { messageEvents: new Map(), lastEventId: 0, h: { onSnapshot: snap => { snapshot = snap; }, onEvent: () => delivered++ } });
+  const stream = (id, event) => ({ id, message_id: 1, type: 'content_stream', data: { native_message_id: 'm1', event } });
+  const start = stream(1, { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } });
+  const first = stream(2, { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'first ' } });
+  const second = stream(3, { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'second' } });
+  sub._applySnapshot({ messages: [{ id: 1, rev: 0, events: [start, first] }], cursor: 2, inflight: 1 });
+  sub._applyEvent(second); sub._applyEvent(second);
+  assert.equal(delivered, 1);
+  sub._applySnapshot({ messages: [{ id: 1, rev: 0, events: [second] }], cursor: 3, inflight: 1 });
+  assert.equal(snapshot.messages[0].events.length, 3);
+  assert.equal(splitTurn('', snapshot.messages[0].events)[0].items[0].text, 'first second');
+  assert.deepEqual(mergeMessageEvents([second, start], [first, second]).map(ev => ev.id), [1, 2, 3]);
 });
 
 test('caller tool options are sent without changing the normal chat request', async () => {
