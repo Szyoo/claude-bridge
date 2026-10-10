@@ -1,229 +1,123 @@
 # claude-bridge
 
-把「网页聊天框」接到「某台机器上登录好的 `claude` 命令行」:
+把网页聊天接到一台已登录 `claude` 命令行的机器上：
 
 ```
-浏览器 ──SSE/REST──▶ 服务端（FastAPI + SQLite 任务队列） ◀──长轮询/POST── worker（本机 `claude -p`）
+浏览器 ──SSE/REST──▶ 服务端（FastAPI + SQLite 任务队列） ◀──长轮询/POST── worker（`claude -p`）
 ```
 
-- 服务端不跑模型、不需要任何 Anthropic 凭证,只做信箱:收消息、排任务、把 worker 回传的增量推给浏览器。
-- worker 在有 `claude` 登录态的机器上跑,领任务 → `claude -p --output-format stream-json --include-partial-messages` → 把文本增量、工具调用 / 结果、thinking、用量、额度事件批量回传;支持中途取消、超时、进程组回收、SIGTERM 收尾。
-- 浏览器端是无框架的 ES module 客户端(`bridge-client.js`,SSE + 轮询兜底)和一个可直接用的参考组件(`bridge-widget.js/.css`)。
-- 既能**独立运行**(`claude-bridge serve` + `claude-bridge worker`),也能**嵌入**现有 FastAPI 应用(两个 router + 一套 hooks)。
+- **服务端**不跑模型、不需要 Anthropic 凭证：收消息、排任务，把 worker 回传的增量推给浏览器。
+- **worker** 在有 `claude` 登录态的机器上运行：领任务 → `claude -p --output-format stream-json` → 批量回传文本增量、工具调用与结果、thinking、用量和额度事件；支持取消、超时、进程组回收。
+- **浏览器端**是无框架的 ES module：客户端 `bridge-client.js`（SSE，失败时降级为轮询）和可直接使用的聊天组件 `bridge-widget.js/.css`。
+- 可以**独立运行**（`claude-bridge serve` + `claude-bridge worker`），也可以**嵌入**已有的 FastAPI 应用。
+
+## 功能
+
+- 流式回复；工具调用折叠显示，并按真实顺序与正文交错
+- 发送图片（浏览器端按尺寸处理后上传，worker 以 stream-json 输入交给 Claude）
+- 模型列表由 worker 按本机 CLI 探测上报，CLI 更新后自动跟上
+- 会话上下文构成（`/context`）与压缩（`/compact`）
+- 多用户模式：账户、按用户隔离的对话与设置、按订阅额度比例的配额
+- Chat / Code 两种模式：Code 按项目工作（克隆仓库或新建空项目），worker 按模式使用不同的工具与权限
+- 可选：完整内容流与调用方工具，见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)
 
 ## 安装
 
-不在 PyPI，按 tag 装（`vX.Y.Z` 见 [tags](https://github.com/Szyoo/claude-bridge/tags) / [CHANGELOG](CHANGELOG.md)）：
-
 ```bash
-pip install "claude-bridge @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.1.tar.gz"
-pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/v0.3.1.tar.gz"   # 独立运行还需要 uvicorn
+pip install "claude-bridge[serve] @ https://github.com/Szyoo/claude-bridge/archive/refs/tags/vX.Y.Z.tar.gz"
 ```
 
-或者**把 `src/ pyproject.toml README.md CHANGELOG.md LICENSE` 拷进宿主仓库**（vendoring）（例如 `packages/claude-bridge/`，只读），用一个更新脚本从 tag 覆盖，再 `pip install -e packages/claude-bridge`——宿主的构建和部署就不需要访问 GitHub。
-
-依赖:`fastapi`、`pydantic>=2`、`requests`。Python ≥ 3.11。**单进程**部署(`Broker` 在内存里,多 worker 进程会让订阅者收不到发布)。
+只运行 worker 或只嵌入组件时不需要 `[serve]`。版本见 [tags](https://github.com/Szyoo/claude-bridge/tags) 与 [CHANGELOG](CHANGELOG.md)。需要 Python ≥ 3.11。服务端需单进程部署（推送依赖进程内的 `Broker`）。
 
 ## 独立运行
 
 ```bash
-# 服务端(任何有公网 / 内网可达的机器)
-CLAUDE_BRIDGE_PASSWORD=口令 CLAUDE_BRIDGE_SECRET=随机串 CLAUDE_BRIDGE_AGENT_TOKEN=共享令牌 \
-CLAUDE_BRIDGE_DB=/data/bridge.db claude-bridge serve --host 0.0.0.0 --port 8770
+# 服务端
+CLAUDE_BRIDGE_PASSWORD=口令 CLAUDE_BRIDGE_AGENT_TOKEN=共享令牌 \
+claude-bridge serve --host 0.0.0.0 --port 8770
 
-# worker(装了 claude 并 `claude login` 过的机器)
+# worker（已执行过 claude login 的机器）
 CLAUDE_BRIDGE_URL=https://bridge.example.com CLAUDE_BRIDGE_AGENT_TOKEN=共享令牌 \
-CLAUDE_BRIDGE_CWD=/path/to/project CLAUDE_BRIDGE_ALLOWED_TOOLS="Read,Glob,Grep,Bash(git log *)" \
-claude-bridge worker
+CLAUDE_BRIDGE_CWD=/path/to/workdir claude-bridge worker
 
-claude-bridge status    # 服务端可达性 + claude --version + claude auth status
+claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 ```
 
-| 变量 | 用途 | 默认 |
-|---|---|---|
-| `CLAUDE_BRIDGE_DB` | SQLite 文件 | `claude-bridge.db` |
-| `CLAUDE_BRIDGE_FILES` | 聊天里上传的图片存放目录 | DB 同目录下的 `claude-bridge-files/` |
-| `CLAUDE_BRIDGE_PASSWORD` / `_SECRET` | 登录口令 / cookie 签名密钥(不设则每次重启失效) | — |
-| `CLAUDE_BRIDGE_AGENT_TOKEN` | 服务端与 worker 的共享 Bearer 令牌 | — |
-| `CLAUDE_BRIDGE_COOKIE_SECURE` | `1`/`0`;默认非 localhost 为 1 | — |
-| `CLAUDE_BRIDGE_URL` | worker 连的服务端地址 | — |
-| `CLAUDE_BRIDGE_CWD` | `claude` 的工作目录 | 当前目录 |
-| `CLAUDE_BRIDGE_ALLOWED_TOOLS` | 逗号分隔的 `--allowedTools` | 空(不加参数) |
-| `CLAUDE_BRIDGE_SYSTEM_PROMPT` / `_FILE` | `--append-system-prompt` | — |
-| `CLAUDE_BRIDGE_MODEL` / `_MAX_TURNS` / `_PERMISSION_MODE` / `_CHAT_TIMEOUT` / `_CLAUDE_BIN` | 同名 CLI 参数 | `""` / 40 / — / 900 / `claude` |
-| `CLAUDE_BRIDGE_MULTI_USER` / `_TZ` | `1` = `serve --multi-user`（见下）/ 配额提示里重置时间用的时区 | — / 系统时区 |
+| 变量 | 用途 |
+|---|---|
+| `CLAUDE_BRIDGE_DB` / `_FILES` | SQLite 文件 / 上传图片目录 |
+| `CLAUDE_BRIDGE_PASSWORD` / `_SECRET` | 单口令登录 / cookie 签名密钥 |
+| `CLAUDE_BRIDGE_AGENT_TOKEN` | 服务端与 worker 的共享令牌 |
+| `CLAUDE_BRIDGE_URL` / `_CWD` | worker 连接的服务端 / `claude` 的工作目录 |
+| `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_SYSTEM_PROMPT` / `_MODEL` / `_MAX_TURNS` / `_PERMISSION_MODE` | 对应的 CLI 参数 |
+| `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
 
-命令行 flag 覆盖环境变量,`--env-file PATH`(任意位置)先从 KEY=VALUE 文件读入(已有的环境变量优先);`worker --once` 只处理一个任务就退出(调试用),`serve --no-auth` 关掉登录(本地调试)。
+命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。
 
-## 多用户模式（给熟人分发账户）
-
-`serve --multi-user`：用户名 + 密码登录，每个人的对话、上传、「当前对话」和设置各自独立；管理员在 `/admin` 分发账户、设配额；每个人在 `/account` 自己改用户名 / 显示名 / 密码、看自己的用量。
+## 多用户模式
 
 ```bash
-# 先建第一个管理员（直接写数据库；单口令时代的旧对话会归到这个账户）
-claude-bridge users --db /data/bridge.db add me --admin          # 交互输入密码；非终端时自动生成并打印
-CLAUDE_BRIDGE_AGENT_TOKEN=共享令牌 CLAUDE_BRIDGE_DB=/data/bridge.db CLAUDE_BRIDGE_TZ=Asia/Tokyo \
-claude-bridge serve --multi-user --host 127.0.0.1 --port 8770     # 前面放 nginx / Caddy 做 HTTPS
-claude-bridge users --db /data/bridge.db passwd me               # 忘了密码：重设（该用户所有设备登出）
-claude-bridge users --db /data/bridge.db list | enable <名字>
+claude-bridge users --db bridge.db add <用户名> --admin   # 先建管理员
+claude-bridge serve --multi-user --db bridge.db
 ```
 
-- **登录态**：签名 cookie 有效期 365 天，每打开一次页面（满一天后）自动续期，经常用的人不会被要求重新登录。改密码、管理员重置密码、停用账户会让该用户其他设备上的登录立刻失效。cookie 签名密钥不设 `CLAUDE_BRIDGE_SECRET` 时自动生成并存在数据库里，重启不掉登录。
-- **隔离**：别人的线程、消息、SSE、上传的图片、任务一律 404；用户之间互相看不到。所有人共用 worker 的 `cwd` / `--allowedTools`（worker 仍然是你那台机器上的 `claude`）。
-- **管理员查看**：管理页每个用户一行显示最近一次访问的 IP 和设备；「查看」进入 `/admin/users/<id>`：只读浏览他的全部对话（Chat 与各 Code 项目分组，含工具调用和图片）和访问记录（`bridge_access`：同一 IP + 设备连续访问合并为一行、本地模式的登录 / 登录失败，保留 180 天）。这些接口不写任何东西（不改他的当前对话、对话更新时间、最近在线），用户侧的页面和接口里也没有任何痕迹。
-- **配额 = 订阅额度的百分比**：CLI 只报整个账号 5 小时 / 每周窗口的用量（整数 %，一轮对话通常不到 1%，没法直接拆到人头上），所以：
-  - 每轮的等价费用 `total_cost_usd`（精确）记到 `bridge_usage` 账本里（`/compact` 也记；删对话不退额度），按账户真实窗口的起点累计；
-  - 管理员填「5 小时 100% ≈ $X」「每周 100% ≈ $Y」，个人用量 = 费用 ÷ X，按人设 5 小时 / 每周上限（%）。页面给出估值：本窗口经 bridge 的花费 ÷ 账户用量（你在 bridge 之外用得越多，真实值越高于估值）；
-  - **保护线**：账户整体 5 小时 / 每周用量到 N% 时暂停所有普通用户，给自己留余量。账户用量来自每轮的 `rate_limit_event`，外加 worker 每 10 分钟一次零费用的 `claude -p "/usage"`（`WorkerConfig(usage_probe_interval=...)`，0 关闭），所以你在本机其它地方用的也算进去；
-  - 管理员不受任何限制；超额时发送返回 429，页面提示原因和重置时间。
-- worker 一次处理一个任务。人多排队时可以在同一台机器上多开几个 `claude-bridge worker`（领任务是原子的）。
-- 部署：
-  - **Docker + 共用 Caddy**（现在 `claude.szyyw.xyz` 的形态）：[`Dockerfile`](Dockerfile) + [`deploy/vps/`](deploy/vps/)（compose 不映射端口、只挂 ingress 网络，`.env` 见 `env.example`），**推送 `main` 即上线**：VPS 的 `/opt/claude-bridge` 是 git clone，`szyyw-autodeploy` 每 10 分钟跑平台的 `deploy-app.sh`（拉取 main → build → `up -d --no-deps` → 健康检查，失败自动回滚；只改 `docs/`、`*.md`、`.github/` 的提交不重建）。立即部署：`bash scripts/deploy-vps.sh`（要求在 main、工作区干净、已推送）；回滚：`bash scripts/deploy-vps.sh --rollback <tag|提交>`；状态：`--status`（都是 ssh 调 `/opt/ingress/deploy/deploy-app.sh claude-bridge`）。共享包（`szyyw-auth`、`@szyyw/design` 的 CDN 版本号）由 `.github/workflows/upgrade-shared.yml` 每 6 小时检查上游正式 tag，有新版就升级（设计包要等 CDN 上出现该版本才升，没出现就下一轮再试）、跑完整测试，通过后以 bot 身份推到 main（随后自动上线）；本地可手动 `bash scripts/upgrade-shared.sh`。首次部署先在 VPS 上准备 `deploy/vps/.env`（见 `env.example`），再建管理员：`docker compose run --rm -T bridge claude-bridge users add <名字> --admin`（服务端没有管理员时拒绝启动）。
-  - **Mac 上的 worker**：[`deploy/mac/`](deploy/mac/)，仓库 `.env`（见 `env.example`）+ `bash deploy/mac/install.sh` 装成用户级 LaunchAgent。plist 直接启动 venv 里的 `claude-bridge worker --env-file .env`，不经 shell 脚本：macOS 隐私保护不让 launchd 下的 `/bin/bash` 读 `~/Documents`。
-  - 不用 Docker 的通用模板（systemd / Caddy / nginx / launchd）：[`deploy/examples/`](deploy/examples/)。
+用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮的等价费用记账，换算为订阅 5 小时 / 每周额度的百分比，另可设置整体用量阈值。
 
-- **Chat / Code**：页面顶栏切换。Code 像平时用 Claude Code 一样先选项目：每人一片独立空间 `~/claude-bridge-work/code/u<id>/`，里面每个项目一个目录（在页面上克隆 Git 仓库或新建空项目，由 worker 执行 `git clone` / `git init`），每个项目有自己的对话列表。worker 用 `--profiles deploy/mac/profiles.json` 按模式给不同的工具和权限：Chat 只能联网搜索；Code 是编程工具（Bash / 读写文件 / 子任务 / 联网）+ `bypassPermissions`，工作目录就是项目目录。两种模式都带 `--strict-mcp-config`，本机的 MCP 连接器（邮箱、日历、Slack…）一律不加载；Artifact、云端定时任务等挂在你 claude.ai 账号上的工具也不给。
-
-### 门户 SSO（`*.szyyw.xyz` 门卫）
-
-`SZYYW_SSO=1`（别名 `CLAUDE_BRIDGE_SSO=1`）时多用户模式改由 [szyyw-auth](https://github.com/Szyoo/szyyw-auth) 契约认人：Caddy 剥掉客户端自带的 `X-User` / `X-Role` / `X-Portal-Sub`，`forward_auth` 到门户，再给已登录的浏览器请求注入真实值。**只在容器没有 publish 端口、站点已挂门卫时才安全。** 未设置时行为与 v0.3.x 完全一致。只影响 `serve --multi-user`；嵌入式宿主（`create_bridge`）不读这些变量，照旧用自己的 `browser_auth`。
-
-- **按门户 ID 认人**：门户用户名（`X-User`）用户自己可以改，`X-Portal-Sub`（门户账号的固定 ID，uuid 字符串）不会变，所以映射存的是 sub。
-- **认人顺序**（每个请求，cookie 不参与）：① `bridge_users.portal_sub = X-Portal-Sub`（精确）；② 否则 `username = X-User`（精确大小写）**且该行 `portal_sub IS NULL`** → 认领，把 `portal_sub` 填成 `X-Portal-Sub` 并写日志（之后门户改名也还是这一行）；③ 否则看 `SZYYW_SSO_AUTOCREATE`：`1` = 新建一行（用户名 = `X-User`，被占用时 `X-User-2`…；`portal_sub` = `X-Portal-Sub`；存储角色 = `X-Role`；不可用的密码；默认不限额），未设 / `0`（默认）= 403「此账号尚未在 claude-bridge 开通，请联系管理员」。同名但该行已映射到别的 sub 不会被认领。已停用的行 403。没有 `X-User` **或没有 `X-Portal-Sub`** = 未登录（API 401，页面跳门户登录），绝不退回只按用户名匹配。
-- **显示名**：顶栏、账户页、管理页自己那一行显示本次请求的 `X-User`（门户当前用户名）；本地 `username` 是数据键，门户改名时**不跟着改**（避免撞名和校验问题），需要的话管理员手动改。
-- **角色**：管理页、管理 API、额度豁免一律按本次请求的 `X-Role`；`bridge_users.role` 不改写（关掉 SSO 后仍按存储的角色）。
-- **登录 / 登出**：`GET /login` → `302 $PORTAL_ORIGIN/login?rd=<https://本站/>`（按 `X-Forwarded-Proto` / `-Host` 拼）；没身份的页面 → 门户登录并回到当前地址；`POST /login`、`POST /api/me/password` → 403；`POST /logout` 清掉本地 cookie 后 303 到 `PORTAL_ORIGIN`（默认 `https://szyyw.xyz`）。
-- **映射**：`bridge_users.portal_sub`（可空、唯一；ids 不变，threads / files / usage / projects 的 owner 也不变）。设置方式：`claude-bridge users [--db PATH] map <用户名> <门户ID>` / `unmap <用户名>`，`users list` 显示 `门户ID=`；或管理页编辑用户里的「门户 ID」/ `POST /api/admin/users/<id>/portal-user {"portal_sub": "<门户ID>" | null}`。映射在 SSO 关着时也能设，先映射再开门卫；同名行不映射也行，第一次登录会自动认领。
-- **右上角工具**：页面外观来自 [@szyyw/design](https://github.com/Szyoo/szyyw-design)（v0.5.0 起所有页面都加载 `tokens.css` + `components.css`，卡片 / 表单 / 弹层 / toast 用包的公开类）。`static/corner-boot.js` 调 `mountChrome`：🌗 与外观弹层总是挂；SSO 开启时（`<html data-sso="1" data-portal="…">`）再挂应用切换器与账户菜单（登出 = 门户登出，所以页面里不再有「退出」按钮）。外观存在 `cb_theme / cb_palette / cb_scheme` cookie，服务端读它渲染 `<html data-theme / data-palette / data-scheme>`，首屏不闪。设计包**不再 vendor**（v0.6.3 起）：页面直接从自托管 CDN `https://design.szyyw.xyz/<版本>/` 加载（每个 tag 不可变）。版本号只有一处——`src/claude_bridge/standalone.py` 的 `DESIGN_VERSION`；服务端渲染页面时把它填进 `{{design_base}}` 占位符（`tokens.css` / `components.css` 的 `<link>`、`preconnect`，以及 import map `{"imports": {"@szyyw/design/": "<DESIGN_BASE>/"}}`），所以 `corner-boot.js` / `bridge-pages.js` 里只写 `import … from '@szyyw/design/chrome.js'`，不带版本号。升级：`bash scripts/update-design.sh [vX.Y.Z]`（默认最新 tag；先确认 CDN 上有该版本，再改 `DESIGN_VERSION`）。**本地离线开发**：在 szyyw-design 目录起一个带 CORS 的静态服务（如 `npx http-server -p 8000 --cors`），再以 `DESIGN_BASE=http://localhost:8000 claude-bridge serve …` 启动，页面就改从本机加载。v0.5.1 起 standalone 单密码模式的页面与「账号未开通」403 页也用同一套（不挂切换器 / 账户菜单）；只有嵌入式组件不加载设计包。管理页的破坏性操作按 DESIGN §8：重置密码 / 停用是「再点一次确认」+ 影响说明，删除用户 / 删除项目是弹层里输入名字确认。
-- **不经门卫的路径**：`/api/agent/*`（worker，`Authorization: Bearer`）与 `/api/health`。浏览器的 SSE（`/api/threads/<id>/stream`，EventSource）和图片（`/api/files/<id>`）都是同源请求，带门户 cookie 过门卫，应用从头里认人。
-
-嵌入式宿主也能用同一套隔离：`browser_auth` 依赖返回 `claude_bridge.Principal(owner=..., admin=...)`，线程 / 设置 / 上传就按 `owner` 分开；`BridgeConfig(check_quota=fn)` 在排对话 / 压缩任务前调用，抛 `QuotaExceeded` 拒绝。返回别的（`None` 等）= 原来的单一命名空间。
-
-## 嵌入现有 FastAPI 应用
+## 嵌入 FastAPI 应用
 
 ```python
-from claude_bridge import BridgeConfig, BridgeStore, create_bridge, static_dir
+from claude_bridge import BridgeConfig, BridgeStore, create_bridge
 
-store = BridgeStore(conn=my_sqlite_conn, lock=my_rlock)      # 或 BridgeStore("bridge.db")
 bridge = create_bridge(
-    store=store,
-    config=BridgeConfig(scopes=("stock", "fund"), new_thread_notice="新对话已开始",
-                        model_choices=[{"id": "", "label": "默认"}, {"id": "sonnet", "label": "Sonnet"}],
-                        on_thread_deleted=lambda tid: cleanup(tid)),
-    browser_auth=my_cookie_dependency,       # FastAPI 依赖;None = 不鉴权
-    agent_auth=my_bearer_dependency,         # 或传 agent_token=... 让包自己生成
+    store=BridgeStore("bridge.db"),
+    config=BridgeConfig(new_thread_notice="新对话已开始"),
+    browser_auth=my_auth_dependency,     # 返回 claude_bridge.Principal 即可按用户隔离
+    agent_token="共享令牌",
 )
 bridge.mount(app, browser_prefix="/api/bridge", agent_prefix="/api/agent", static_prefix="/static/bridge")
 ```
 
-宿主可以直接用 `bridge.service`(`start_chat / cancel / find_thread / settings / requeue_stale …`)和 `bridge.store`(`enqueue_job / recent_jobs …`)——任务表是通用的,宿主自己的任务类型(比如「跑一遍复盘」)也走同一个队列,由 worker 的 `handlers` 处理。
-
-worker 侧嵌入:
+worker 侧可以通过 `Hooks`（拼接上下文、注入环境变量、完成回调）和 `handlers`（自定义任务类型）扩展：
 
 ```python
 from claude_bridge.client import BridgeClient
-from claude_bridge.worker import Hooks, Worker, WorkerConfig
+from claude_bridge.worker import Worker, WorkerConfig
 
-class MyHooks(Hooks):
-    def build_context(self, *, thread_id, is_new_session, payload):   # 新会话自动拼的【背景】
-        return "【背景】...\n\n【用户消息】\n" if is_new_session else ""
-    def env(self, payload): return {"MY_TOKEN": "..."}                  # 注给 claude 子进程的环境变量
-    def on_chat_finished(self, job, text, summary): notify(text)      # 完成回调(summary 含 usage / 费用 / 额度)
-    def tick(self): scheduler.maybe_run()                              # 每次领任务前
-
-worker = Worker(BridgeClient(url, token),
-                WorkerConfig(cwd=REPO, allowed_tools=[...], system_prompt=SP, model="sonnet"),
-                hooks=MyHooks(), handlers={"review": run_review})     # handler(job, worker) -> dict|str|None
-worker.run_forever()
+Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=MyHooks()).run_forever()
 ```
 
 ## 浏览器端
-
-新增的[完整内容流、逐轮控制与调用方工具](docs/caller-tools-and-content.md)包括未截断的 CLI 内容块和签名、思考/参数增量、冻结到单轮任务的生成选项，以及由请求应用执行的受控 MCP 工具。普通聊天保持原接口；完整内容与调用方工具由宿主显式启用。
 
 ```html
 <script type="module">
   import { BridgeClient } from '/static/bridge/bridge-client.js';
   import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
   const client = new BridgeClient({ baseUrl: '/api/bridge', onAuthLost: () => location.href = '/login' });
-  mountBridgeWidget(document.getElementById('chat'), client, { scope: 'stock', markdown: myMarkdownFn });
+  mountBridgeWidget(document.getElementById('chat'), client, { scope: '' });
 </script>
 ```
 
-只要传输层时用 `client.subscribe(threadId, handlers)`:`onSnapshot / onMessage / onDelta / onEvent / onStatus / onDone / onThread / onContext / onJob / onFallback / onError`。增量按 `rev` 去重(重复跳过、断档自动重拉整条);EventSource 连续失败会降级为轮询,30 秒后再尝试 SSE;401 触发 `onAuthLost`。组件的样式全部通过 `--bridge-*` 自定义属性覆盖,markdown 渲染优先用 `opts.markdown`,其次 `window.marked`(先转义),否则纯文本。
-
-**主题**（v0.5.0）：`bridge-widget.css` 的 `--bridge-*` 缺省值跟随宿主的 @szyyw/design token（`--bridge-bg: var(--bg, 回退)`、`--bridge-accent: var(--accent, …)`、`/context` 分段色 `--bridge-chart-1…6: var(--chart-1…6, …)` 等），明暗用 `light-dark()` 跟随宿主的 `color-scheme`（而不是系统的 `prefers-color-scheme`）；字体缺省 `inherit`。所以加载了 `tokens.css` 的宿主**不用再映射任何 token**，换配色 / 🌗 时组件即时跟着变。没有设计包的宿主拿到回退色板；宿主根上没有 `color-scheme` 时是浅色，想跟随系统就设 `color-scheme: light dark`（或 `<meta name="color-scheme" content="light dark">`）。`--bridge-*` 仍是对外覆写接口，原有变量名都保留；新增 `--bridge-err-fg` / `--bridge-scrim` / `--bridge-term-border` / `--bridge-on-image-bg|fg` / `--bridge-chart-1…6`。只用 `renderTurn` / `renderContextPanel` 等函数、自己搭外壳的宿主：引入 `bridge-widget.css`，并把消息 / 弹层所在容器加上 `bridge-root` 类（缺省 token 声明在 `.bridge-root, .bridge` 上），就能删掉自己那套 `.bridge-*` 皮肤。
-
-界面照 Claude Code 客户端:助手消息通栏无容器、用户消息浅底块、工具调用折叠成一行灰字(连续多条合并为「执行了 N 条命令」)、正文与工具组**按真实顺序交错**(每个 `tool_use` / `thinking` 事件带 `at` = 当时已输出的正文字数,在下一个段落边界切开,不会切进代码块)。宿主想自己排版但复用这套渲染时,`bridge-widget.js` 还导出:
-
-| 导出 | 用途 |
-|---|---|
-| `splitTurn(content, events)` | 纯函数:一条回答 → `[{kind:'text'}, {kind:'steps', items}]` 交错段 |
-| `renderTurn(el, message, {markdown, head, timestamps, open})` | 把一条消息渲染进 `el`(结构类名 `bridge-turn / bridge-md / bridge-steps / bridge-step / bridge-term`,重渲保留用户展开状态) |
-| `renderSteps / stepsHtml` | 只渲染工具组 |
-| `sessionSummary(messages, {context})` | 模型 / 上下文占用(`pct`)/ 本轮调用与 tokens / 5h·7d 额度 |
-| `renderSessionPanel(el, summary, {onRefresh, onCompact, busy})` · `renderContextPanel` | 会话弹层内容(含 `/context` 构成) |
-| `DEFAULT_PREFS / loadPrefs / savePrefs / sanitizePrefs / applyPrefs(root, prefs)` | 每台设备自己的界面偏好(文字大小、密度三档 13/14/16px、正文宽度、发送键、时间戳、工具默认展开、代码换行、侧栏、聊天区高度、拖过的输入框高 / 侧栏宽),`applyPrefs` 只写 CSS 变量与 class |
-| `renderPrefsPanel(el, prefs, {onChange, classes, fields})` | 偏好控件;`classes` 可把结构类名映射到宿主设计系统的开关 / 胶囊 |
-| `isSendKey(e, prefs) / sendHint(prefs) / placePopover(anchor, pop) / attachDrag(handle, onMove, onEnd) / fmtTime / fmtRelative` | 发送键判定、fixed 弹层定位(窄屏由样式改成底部抽屉)、拖拽改高 / 改宽 |
-| `planImage / prepareImages / mountAttachments({button, input, tray, textarea, dropZone, client})` | 发图:见下 |
-| `armConfirm(btn, {label, warnEl, warning, timeout})` / `disarmConfirm(btn)` | 破坏性按钮的二次确认（v0.6.0，DESIGN §8）：首点变红换文案并在 `warnEl` 显示影响（role=alert），5 秒内再点返回 `true`；组件的删除对话、压缩会话用它 |
-| `promptDialog({title, label, value, placeholder, okLabel, cancelLabel, returnFocus})` | 组件自带的文本输入弹层（v0.6.0，替代 `window.prompt`）：`role=dialog` + `aria-modal`，焦点进输入框、Tab 不出框、Esc / 点外 / ✕ 取消（resolve `null`），关闭后焦点回到 `returnFocus`；只用 `--bridge-*` 着色，手机上是底部抽屉 |
-
-### 图片
-
-宿主在 `BridgeConfig(files_dir=...)` 里给一个目录就开启上传(`None` = 关闭,`GET /settings` 的 `uploads.enabled` 会告诉前端)。
-
-- **浏览器**:`mountAttachments` 接管 📎 按钮 / 输入框粘贴 / 拖入,选好就处理并上传,托盘显示缩略图;发送时 `client.send(text, {files: att.ids()})`,有图时文字可以为空。处理只管尺寸不压画质:长边 > 2000px 才等比缩(同一请求图超过 20 张时 API 要求每张 ≤2000px,CLI 每轮都会重发历史里的图),长截图(长宽比 > 2.4)不缩、切成 ≤2000px 的段按顺序发;PNG 截图保持 PNG,相册照片(JPEG / HEIC)出 JPEG。
-- **服务端**:按文件头魔数认 PNG / JPEG / GIF / WebP(不信任 Content-Type,不收 SVG),单张默认 ≤7MB(API 单图 10MB 上限是按 base64 算的);文件落盘 `<files_dir>/<id>.<ext>`,表 `bridge_files` 记元数据;发送时绑定到用户消息,删对话一起删,24 小时没发出去的上传自动清掉。
-- **worker**:任务 payload 带 `files` 时,从 `GET /api/agent/files/{id}` 取回、base64,改用 `claude -p --input-format stream-json` 把图片和文字放进同一条用户消息(图在前,多张时逐张标注);不带图的消息命令行不变。
-
-### 模型列表
-
-worker 启动后在后台用本地、零费用的 `claude -p "/model" --no-session-persistence` 探测本机 CLI:别名(`opus` / `sonnet` / `haiku` / `fable` / `opus[1m]`…,各自指向这版 CLI 的最新模型)和宿主 `model_choices` 里哪些固定版本本机认得(`/model <id>` 会回 "not found"),`POST /api/agent/models` 上报;之后每 6 小时、以及 `claude --version` 变化时重探（每分钟查一次版本，更新 CLI 后一两分钟页面就跟上）。`GET /settings` 的 `models` 优先用上报(带 `group`:「跟随 CLI 最新」/「固定版本」,前端用 `modelOptionsHtml` 渲染成 `<optgroup>`),没上报时退回 `model_choices`;`models_info.source` 说明来源。`WorkerConfig(model_probe=False)` 可关掉。
+只用传输层时调用 `client.subscribe(threadId, handlers)`。组件样式通过 `--bridge-*` CSS 变量覆盖；`bridge-widget.js` 还导出 `renderTurn`、`splitTurn` 等渲染函数，供宿主自行排版。
 
 ## HTTP API
 
-浏览器 router(宿主决定前缀):
+浏览器路由（前缀由宿主决定）：
 
-| 方法 路径 | 说明 |
+| 路径 | 说明 |
 |---|---|
-| `GET /threads?scope=` · `POST /threads` · `GET /threads/find?scope=&key=` · `GET /threads/{id}` · `POST /threads/{id}/select` · `PATCH /threads/{id}` · `DELETE /threads/{id}` | 线程管理;`key` 是宿主自定义查找键(如「某天的复盘」) |
-| `GET /threads/{id}/messages?after=&limit=&events=1` | 消息(含结构化事件);`after=0` 取最新 N 条 |
-| `POST /send {text, scope?, key?, new_thread?}` · `POST /threads/{id}/messages {text}` | 发消息,同一线程有未完成回答时 409 |
-| `GET /threads/{id}/stream` | SSE,见下 |
-| `POST /messages/{id}/cancel` | `{status: cancelled \| cancelling \| noop}` |
-| `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 排一个 worker 任务：`claude -p "/context"`（本地计算、零费用）刷新这段会话的上下文构成 / `claude -p "/compact"` 压缩历史；结果存在线程上（`thread.context`），并以 SSE `context` / `job` 帧推给浏览器。每次回答结束 worker 也会自动刷新一次构成 |
-| `POST /files?name=` · `GET /files/{id}` | 上传图片(请求体就是图片本身)/ 取图;发送时 `/send` 与 `/threads/{id}/messages` 带 `files: [id…]` |
-| `GET/PUT /settings` · `GET /jobs` · `GET /jobs/{id}` · `GET /status` | 模型 / effort / 轮数 / 是否带背景 / 上传开关;任务表;helper 在线状态 |
+| `GET/POST /threads` · `GET/PATCH/DELETE /threads/{id}` | 对话管理 |
+| `GET /threads/{id}/messages` · `GET /threads/{id}/stream` | 消息 / SSE 推送 |
+| `POST /send` · `POST /threads/{id}/messages` | 发送消息 |
+| `POST /messages/{id}/cancel` | 取消回答 |
+| `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 上下文构成 / 压缩会话 |
+| `POST /files` · `GET /files/{id}` | 上传 / 读取图片 |
+| `GET/PUT /settings` · `GET /status` | 设置 / 状态 |
 
-Agent router(Bearer 令牌):`POST /jobs/next`(长轮询)· `GET /jobs/{id}` · `GET /files/{id}` · `POST /jobs/{id}/events {status?, deltas?, events?}` → `{ok, cancel}` · `POST /jobs/{id}/finish {ok, cancelled?, result?, error?, error_kind?, session_id?, reset_session?}` · `POST /chat` · `GET /status`。
+worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish` 等。
 
-SSE 帧:`snapshot`(首帧:线程(含 `context` 构成)+ 消息 + 进行中的消息 id + helper 状态 + 事件游标)、`message`、`delta {message_id, text, rev}`、`event`(`init | tool_use | tool_result | thinking | usage | rate_limit | compact | status | error`)、`status`、`thread`、`context`、`job`、`done`;每 15 s 一个 `: ping`。`id:` 是事件表的全局自增 id,浏览器重连时带 `Last-Event-ID` 只补新事件。
-
-## 数据表
-
-`bridge_threads / bridge_messages / bridge_events / bridge_jobs / bridge_meta / bridge_files / bridge_usage`（多用户模式另有 `bridge_users`）；线程和上传带 `owner` 列（旧库启动时自动加列），建表幂等,可与宿主共用一个 SQLite 文件(共享连接时不改任何 PRAGMA 和 `row_factory`)。心跳超过 `stale_seconds`(默认 120 s)的运行中任务会被判失败并把关联消息置为 `error`,不会出现永远「正在回答」的线程。
-
-## 测试
+## 开发
 
 ```bash
 pip install -e ".[dev,serve]"
-pytest -q && ruff check src tests      # 浏览器端的纯函数测试也在里面（node --test，需要 Node ≥ 18）
+pytest -q && ruff check src tests
 ```
-
-GitHub Actions 在每次 push / PR 上跑同样的检查（Python 3.11 / 3.12）。
-
-## 发版流程
-
-1. 改 `src/claude_bridge/_version.py` 与 `pyproject.toml` 里的版本号，`CHANGELOG.md` 写上这一版
-2. 提交，打 tag：`git tag vX.Y.Z && git push && git push --tags`
-3. 等 Actions 绿
-
-## 宿主如何更新
-
-- **拷贝方式**（推荐）：宿主里放一个 `update-bridge.sh`，默认拉 GitHub 最新 tag 覆盖副本、`--local` 从本机 clone 同步（联调没发版的改动）；随后 `pip install -e <副本>`、跑宿主测试、部署服务端，**再重启 worker**（worker 用的是同一份代码）
-- **pip 方式**：把 tag 地址里的版本号改掉重新安装
-- 网页上可以提示更新：`GET /settings` 的 `bridge` 给出服务端版本、worker 最近一次上报的版本（不一致 = worker 还没重启），前端用 `checkBridgeUpdate({current})`（`bridge-client.js`）比对 GitHub 最新 tag，结果在 localStorage 缓存 6 小时
-
-`tests/` 用一个可执行的假 `claude` 脚本回放真实 stream-json 形态,覆盖增量去重、工具配对、取消(响应标记 / 轮询两条路径)、超时、SIGTERM、坏会话重置、SSE 快照与重连、独立模式登录。
