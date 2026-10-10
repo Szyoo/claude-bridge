@@ -184,6 +184,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-term pre.cmd { color: var(--bridge-term-dim); }
 .bridge-term pre.cmd + pre.out { border-top: 1px solid var(--bridge-term-border); }
 .bridge-step-body { margin: 4px 0 6px 1.3em; padding: .3em .8em; border-left: 2px solid var(--bridge-border); white-space: pre-wrap; max-height: 320px; overflow: auto; }
+.bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; }
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
 

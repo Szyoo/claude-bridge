@@ -112,6 +112,17 @@ export class BridgeClient {
 
 // Keeps one thread's view in sync. Handlers: onSnapshot, onMessage, onDelta, onEvent, onStatus, onDone,
 // onThread, onFallback(bool), onError(err). Deltas are applied only when rev === known + 1; a gap re-fetches the row.
+export function mergeMessageEvents(previous = [], incoming = []) {
+  const out = previous.slice(), byId = new Map();
+  out.forEach((ev, i) => { if (Number.isInteger(ev.id)) byId.set(ev.id, i); });
+  for (const ev of incoming) {
+    if (Number.isInteger(ev.id) && byId.has(ev.id)) out[byId.get(ev.id)] = ev;
+    else if (!out.includes(ev)) { if (Number.isInteger(ev.id)) byId.set(ev.id, out.length); out.push(ev); }
+  }
+  if (out.every(ev => Number.isInteger(ev.id))) out.sort((a, b) => a.id - b.id);
+  return out;
+}
+
 export class Subscription {
   constructor(client, threadId, handlers, { after = 0, lastEventId = 0, maxErrors = 3, retrySseAfter = 30000 } = {}) {
     this.client = client;
@@ -122,6 +133,7 @@ export class Subscription {
     this.maxErrors = maxErrors;
     this.retrySseAfter = retrySseAfter;
     this.revs = new Map();
+    this.messageEvents = new Map();
     this.inflight = null;
     this.closed = false;
     this.es = null;
@@ -152,9 +164,9 @@ export class Subscription {
       fn(data);
     });
     on('snapshot', (snap) => this._applySnapshot(snap));
-    on('message', (m) => { this.revs.set(m.id, m.rev || 0); if (m.role === 'assistant' && (m.status === 'pending' || m.status === 'streaming')) this.inflight = m.id; this.h.onMessage?.(m); });
+    on('message', (m) => { this.revs.set(m.id, m.rev || 0); if (m.role === 'assistant' && (m.status === 'pending' || m.status === 'streaming')) this.inflight = m.id; m.events = mergeMessageEvents(this.messageEvents.get(m.id), m.events || []); this.messageEvents.set(m.id, m.events); this.h.onMessage?.(m); });
     on('delta', (d) => this._applyDelta(d));
-    on('event', (ev) => this.h.onEvent?.(ev));
+    on('event', (ev) => this._applyEvent(ev));
     on('status', (s) => { if (s.status !== 'pending' && s.status !== 'streaming' && this.inflight === s.message_id) this.inflight = null; this.h.onStatus?.(s); });
     on('done', (d) => { if (this.inflight === d.message_id) this.inflight = null; this.h.onDone?.(d); });
     on('thread', (t) => this.h.onThread?.(t));
@@ -177,10 +189,25 @@ export class Subscription {
   }
 
   _applySnapshot(snap) {
+    // Inflight reconnect snapshots contain only events newer than the cursor.
+    // Retain the earlier thinking start/deltas before replacing the UI rows.
+    const cache = new Map();
+    snap = { ...snap, messages: snap.messages.map(m => {
+      const events = mergeMessageEvents(this.messageEvents.get(m.id), m.events || []);
+      cache.set(m.id, events); return { ...m, events };
+    }) };
+    this.messageEvents = cache;
     this.revs = new Map(snap.messages.map(m => [m.id, m.rev || 0]));
     this.inflight = snap.inflight ?? null;
     if (snap.cursor) this.lastEventId = Math.max(this.lastEventId, snap.cursor);
     this.h.onSnapshot?.(snap);
+  }
+
+  _applyEvent(ev) {
+    const previous = this.messageEvents.get(ev.message_id) || [];
+    if (Number.isInteger(ev.id) && previous.some(old => old.id === ev.id)) return;
+    this.messageEvents.set(ev.message_id, mergeMessageEvents(previous, [ev]));
+    this.h.onEvent?.(ev);
   }
 
   async _applyDelta(d) {
@@ -194,7 +221,11 @@ export class Subscription {
     try { // gap: replace the whole row
       const r = await this.client.messages(this.threadId, { after: d.message_id - 1, limit: 1 });
       const m = r.items?.[0];
-      if (m) { this.revs.set(m.id, m.rev || 0); this.h.onMessage?.(m); }
+      if (m) {
+        this.revs.set(m.id, m.rev || 0);
+        m.events = mergeMessageEvents(this.messageEvents.get(m.id), m.events || []);
+        this.messageEvents.set(m.id, m.events); this.h.onMessage?.(m);
+      }
     } catch (err) { this.h.onError?.(err); }
   }
 
