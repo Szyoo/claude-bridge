@@ -45,12 +45,16 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 
 | 变量 | 用途 |
 |---|---|
+| `CLAUDE_BRIDGE_HOST` / `_PORT` | 服务端监听地址（缺省 `127.0.0.1:8770`） |
 | `CLAUDE_BRIDGE_DB` / `_FILES` | SQLite 文件 / 上传图片目录 |
-| `CLAUDE_BRIDGE_PASSWORD` / `_SECRET` | 单口令登录 / cookie 签名密钥 |
+| `CLAUDE_BRIDGE_PASSWORD` / `_SECRET` / `_COOKIE_SECURE` | 单口令登录 / cookie 签名密钥 / cookie 的 Secure 属性（缺省：非本机监听时开启） |
+| `CLAUDE_BRIDGE_MULTI_USER` / `_TZ` | `1` = 多用户模式 / 配额提示里重置时间的时区 |
 | `CLAUDE_BRIDGE_AGENT_TOKEN` | 服务端与 worker 的共享令牌 |
-| `CLAUDE_BRIDGE_URL` / `_CWD` | worker 连接的服务端 / `claude` 的工作目录 |
-| `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_SYSTEM_PROMPT` / `_MODEL` / `_MAX_TURNS` / `_PERMISSION_MODE` | 对应的 CLI 参数 |
+| `CLAUDE_BRIDGE_URL` / `_CWD` / `_WORKER_NAME` | worker 连接的服务端 / `claude` 的工作目录 / worker 名称 |
+| `CLAUDE_BRIDGE_CLAUDE_BIN` / `_MODEL` / `_MAX_TURNS` / `_CHAT_TIMEOUT` | `claude` 可执行文件 / 缺省模型 / 最大轮数 / 单次超时秒数 |
+| `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_PERMISSION_MODE` / `_SYSTEM_PROMPT` / `_SYSTEM_PROMPT_FILE` | 对应的 `claude` 参数 |
 | `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
+| `CLAUDE_BRIDGE_CLIENT_TOOLS` / `_CONTENT_BLOCKS` | `1` = 启用调用方工具 / 完整内容流（见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)） |
 
 命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。
 
@@ -61,7 +65,9 @@ claude-bridge users --db bridge.db add <用户名> --admin   # 先建管理员
 claude-bridge serve --multi-user --db bridge.db
 ```
 
-用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮的等价费用记账，换算为订阅 5 小时 / 每周额度的百分比，另可设置整体用量阈值。
+用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮的等价费用记账，换算为订阅 5 小时 / 每周额度的百分比，另可设置整体用量阈值。`users` 还有 `list` / `passwd` / `enable` / `map` / `unmap` 子命令。
+
+**门户 SSO**（`SZYYW_SSO=1`，或 `CLAUDE_BRIDGE_SSO=1`）：浏览器身份只取前置门卫注入的 `X-User` / `X-Role` / `X-Portal-Sub`，本地密码登录与会话 cookie 不再生效；只能部署在会剥掉客户端同名头的门卫之后，且不发布端口。`X-Portal-Sub` 对应本地账户行（`users map <用户名> <portal_sub>` 手动绑定；未绑定时按同名用户名认领一次），`X-Role` 逐请求决定管理权限。`SZYYW_SSO_AUTOCREATE=1` 时自动为新门户用户建账户；`PORTAL_ORIGIN` 指定登录 / 登出跳转的门户（缺省 `https://szyyw.xyz`）。`/api/agent/*`（Bearer）与 `/api/health` 不受影响。
 
 ## 嵌入 FastAPI 应用
 
@@ -109,11 +115,17 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 | `GET /threads/{id}/messages` · `GET /threads/{id}/stream` | 消息 / SSE 推送 |
 | `POST /send` · `POST /threads/{id}/messages` | 发送消息 |
 | `POST /messages/{id}/cancel` | 取消回答 |
+| `GET /threads/find?scope=&key=` · `POST /threads/{id}/select` | 按 scope + key 找对话 / 设为当前对话 |
 | `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 上下文构成 / 压缩会话 |
 | `POST /files` · `GET /files/{id}` | 上传 / 读取图片 |
+| `GET/POST /projects` · `DELETE /projects/{name}` | Code 模式的项目（克隆或新建） |
+| `GET /jobs` · `GET /jobs/{id}` | 任务状态 |
+| `GET /threads/{id}/client-tools` · `POST /messages/{id}/client-tools/{call_id}/result` | 调用方工具（启用时） |
 | `GET/PUT /settings` · `GET /status` | 设置 / 状态 |
 
-worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish` 等。
+worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`GET /jobs/{id}`、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish`、`POST /chat`（持令牌的后端直接发起对话）、`GET /status`、`GET /files/{id}`、`POST /limits`（额度上报）、`GET/POST /models`（模型列表）。
+
+独立运行时另有 `/login`、`/logout`、`/api/health`；多用户模式另有 `/api/me`、`/account`、`/admin` 与 `/api/admin/*`。
 
 ## 开发
 
@@ -121,3 +133,7 @@ worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`POST /jo
 pip install -e ".[dev,serve]"
 pytest -q && ruff check src tests
 ```
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
