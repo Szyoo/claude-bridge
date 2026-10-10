@@ -92,4 +92,6 @@ worker 强制只加载受控 MCP 配置，但保留宿主的内建工具和原�
 
 工具声明不能指定启动命令、环境变量或 cwd。受控 server 以隔离 Python 模式启动，避免工作区文件遮蔽模块；参数按声明的 JSON Schema 校验，schema 的远程引用不下载。配置文件仅包含受限 token，运行结束后清理；CLI 子进程不继承 bridge 控制面的 password/secret/agent token。
 
+schema 检查与参数验证在独立、可终止的进程运行，单次最长 2 秒，同一服务进程最多并发 4 次。输入限制为 6 MB、50,000 个节点、48 层嵌套；POSIX 上另设 2 秒 CPU 和 384 MB 地址空间上限，Windows 使用进程超时及输入/并发限制。复杂正则、递归引用、验证超时或容量不足会拒绝本次请求，调用方不能依赖任意复杂 schema 均能通过。子进程不继承服务凭证和代理变量。
+
 只有 `POST /api/agent/jobs/{job_id}/client-tool-session` 使用原有全局 agent token。`/api/agent/client-tools/{job_id}/definition`、`/calls` 和 `/calls/{call_id}` 使用受限 token；沿用现有 agent 前缀，因此门户部署不需要给浏览器接口新增免登录路径。

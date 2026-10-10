@@ -122,6 +122,23 @@ def test_undeclared_invalid_arguments_and_remote_references_are_refused(runtime)
     assert call(web, other, key).status_code == 400
 
 
+def test_hostile_schema_is_terminated_and_service_recovers(runtime):
+    _, web = runtime
+    hostile = {
+        **TOOL,
+        "input_schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string", "pattern": "^(a+)+$"}},
+        },
+    }
+    _, job, token = start(runtime, [hostile])
+    started = time.monotonic()
+    assert call(web, job, token, input={"value": "a" * 40 + "!"}).status_code == 400
+    assert time.monotonic() - started < 6
+    # The expired computation does not hold the service GIL or validation slot.
+    assert call(web, job, token, call_id="after-timeout", input={"value": "aaaa"}).status_code == 200
+
+
 def test_cancel_expiry_and_scope_rotation_invalidate_pending_calls(runtime):
     b, web = runtime
     sent, job, token = start(runtime)

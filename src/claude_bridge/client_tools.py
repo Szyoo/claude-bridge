@@ -10,11 +10,8 @@ import json
 import secrets
 import time
 
-from jsonschema import Draft202012Validator, SchemaError, ValidationError
-from referencing import Registry
-from referencing.exceptions import Unresolvable
-
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
+from claude_bridge.schema_validation import SchemaValidationError, validate_schema
 
 
 def validate_tools(tools: list[dict]) -> None:
@@ -25,12 +22,12 @@ def validate_tools(tools: list[dict]) -> None:
         names.add(tool["name"])
         if tool["input_schema"].get("type") != "object":
             raise BadRequest("client tool input_schema must describe an object")
-        try:
-            Draft202012Validator.check_schema(tool["input_schema"])
-        except SchemaError as exc:
-            raise BadRequest("invalid client tool schema") from exc
         if len(json.dumps(tool, ensure_ascii=False).encode()) > 100000:
             raise BadRequest("client tool declaration is too large")
+    try:
+        validate_schema({"schemas": [tool["input_schema"] for tool in tools]})
+    except SchemaValidationError as exc:
+        raise BadRequest(str(exc)) from exc
 
 
 class ClientToolService:
@@ -89,10 +86,9 @@ class ClientToolService:
         if tool is None:
             raise BadRequest("unknown client tool")
         try:
-            # An explicit empty registry refuses remote schema retrieval.
-            Draft202012Validator(tool["input_schema"], registry=Registry()).validate(request["input"])
-        except (ValidationError, Unresolvable) as exc:
-            raise BadRequest("client tool arguments failed validation") from exc
+            validate_schema({"schema": tool["input_schema"], "input": request["input"]})
+        except SchemaValidationError as exc:
+            raise BadRequest(str(exc)) from exc
         mid = job["payload"]["message_id"]
         timeout = request.pop("timeout")
         with self.store.transaction():
