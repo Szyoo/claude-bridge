@@ -19,6 +19,7 @@ from claude_bridge.errors import BridgeError
 from claude_bridge.models import (
     AgentChatIn,
     AgentLimitsIn,
+    AgentLocalUsageIn,
     AgentModelsIn,
     ClientToolCallIn,
     ClientToolResultIn,
@@ -337,6 +338,11 @@ def create_bridge(
     @agent.post("/limits")
     def a_report_limits(body: AgentLimitsIn):
         return service.save_usage_probe(body.model_dump())
+
+    # the worker machine's whole Claude Code use, per minute: calibrates how much use 1% of a window is
+    @agent.post("/local-usage")
+    def a_report_local_usage(body: AgentLocalUsageIn):
+        return service.save_local_usage([b.model_dump() for b in body.buckets])
 
     # the worker validates these pinned ids against its local CLI and reports what it supports
     @agent.get("/models")

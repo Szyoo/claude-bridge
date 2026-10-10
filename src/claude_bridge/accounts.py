@@ -1,9 +1,10 @@
 """Multi-user accounts for `claude-bridge serve --multi-user`: users, password login, long-lived sessions, quotas.
 
-Quotas are shares of the subscription the worker's `claude` is logged into. The CLI only reports the
-account-wide 5h / weekly utilization in whole percent, far too coarse to split per turn, so each user's
-use is booked in USD-equivalent (`total_cost_usd`, exact per turn) and turned into a percentage with the
-admin's "100% of the window ≈ $X". Separately, a guard stops ordinary users once the whole account's
+Quotas are shares of the subscription or seat the worker's `claude` is logged into. The server only reports
+the account-wide 5h / weekly utilization in whole percent, far too coarse to split per turn, so each user's
+use is booked in list-price USD from the turn's token counts (pricing.py) and turned into a percentage with
+"100% of the window ≈ $X": calibrated from utilization samples against the worker machine's transcripts
+(calibration.py), or set by the admin. Separately, a guard stops ordinary users once the whole account's
 utilization reaches a threshold, so the admin always keeps some for themself.
 """
 
@@ -33,7 +34,6 @@ PBKDF2_ITERATIONS = 390_000
 USERNAME_RE = re.compile(r"^[\w.@-]{2,32}$")
 MIN_PASSWORD = 8
 LAST_SEEN_EVERY = 300  # seconds between last_seen_at writes for one user
-MIN_ESTIMATE_UTILIZATION = 0.05  # below this the whole-percent utilization is too coarse to estimate from
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bridge_users (
@@ -501,7 +501,7 @@ class Accounts:
         return datetime.fromtimestamp(ts, self.tz).strftime("%m-%d %H:%M")
 
     def account_status(self) -> dict[str, Any]:
-        """The subscription as a whole: utilization, reset times, what the bridge spent, and a capacity estimate."""
+        """The subscription / seat as a whole: utilization, reset times, who used it, and what 100% is worth."""
         svc = self._svc()
         limits = svc.account_limits()
         cfg = self.quota_config()
@@ -509,15 +509,32 @@ class Accounts:
         for name in LIMIT_WINDOWS:
             w = limits[name]
             spent = sum(v["cost_usd"] for v in svc.usage_in_window(name).values())
+            machine = svc.machine_usage_in_window(name)
             util = w.get("utilization")
-            # util covers the bridge plus anything else on this account, so spent/util can only undershoot 100%'s worth
-            estimate = spent / util if util and util >= MIN_ESTIMATE_UTILIZATION and spent > 0 else None
+            util_pct = round(util * 100, 1) if isinstance(util, int | float) else None
+            est = svc.capacity(name)
+            manual = cfg[CAP_FIELD[name]]
+            cap = manual or (est["cap_usd"] if est else None)
+            # shares of the window: the bridge (ledger), the rest of the worker machine, and whatever is left
+            # of the reported utilization (claude.ai, other devices: use the transcripts can't see)
+            bridge_pct = spent / cap * 100 if cap else None
+            local_pct = machine["local"] / cap * 100 if cap else None
+            external_pct = (max(0.0, util_pct - bridge_pct - local_pct)
+                            if util_pct is not None and bridge_pct is not None and local_pct is not None else None)
             out[name] = {
-                "utilization_pct": round(util * 100, 1) if isinstance(util, int | float) else None,
+                "utilization_pct": util_pct,
                 "resets_at": w.get("resets_at"), "window_start": w["window_start"], "observed_at": w.get("at"),
                 "source": w.get("source"), "bridge_cost_usd": round(spent, 4),
-                "estimate_cap_usd": round(estimate, 2) if estimate else None,
-                "cap_usd": cfg[CAP_FIELD[name]], "guard_pct": cfg[GUARD_FIELD[name]],
+                "machine_local_usd": round(machine["local"], 4), "machine_bridge_usd": round(machine["bridge"], 4),
+                "estimate_cap_usd": round(est["cap_usd"], 2) if est else None,
+                "estimate_range_usd": [round(est["low"], 2), round(est["high"], 2)] if est else None,
+                "estimate_groups": est["groups"] if est else 0,
+                "cap_usd": manual, "effective_cap_usd": round(cap, 2) if cap else None,
+                "cap_source": "manual" if manual else ("auto" if est else None),
+                "bridge_pct": round(bridge_pct, 1) if bridge_pct is not None else None,
+                "local_pct": round(local_pct, 1) if local_pct is not None else None,
+                "external_pct": round(external_pct, 1) if external_pct is not None else None,
+                "guard_pct": cfg[GUARD_FIELD[name]],
             }
         return out
 
@@ -531,7 +548,7 @@ class Accounts:
         for name in LIMIT_WINDOWS:
             acc = account[name]
             cost = svc.usage_in_window(name, owner).get(owner, {"cost_usd": 0.0, "turns": 0})
-            cap = acc["cap_usd"]
+            cap = acc["effective_cap_usd"]
             pct = cost["cost_usd"] / cap * 100 if cap else None
             limit = None if admin else user.get(LIMIT_FIELD[name])
             out[name] = {"cost_usd": round(cost["cost_usd"], 4), "turns": cost["turns"],

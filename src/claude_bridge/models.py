@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -140,6 +140,23 @@ class AgentLimitsIn(BaseModel):
 
     five_hour_pct: float | None = Field(None, ge=0, le=1000)
     seven_day_pct: float | None = Field(None, ge=0, le=1000)
+
+
+class LocalUsageBucket(BaseModel):
+    bucket: str = Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:00$")  # UTC minute
+    source: Literal["bridge", "local"]
+    cost_usd: float = Field(ge=0, le=1e6)
+    input_tokens: int = Field(0, ge=0)
+    output_tokens: int = Field(0, ge=0)
+    cache_read_tokens: int = Field(0, ge=0)
+    cache_write_tokens: int = Field(0, ge=0)
+    requests: int = Field(0, ge=0)
+
+
+class AgentLocalUsageIn(BaseModel):
+    """Absolute per-minute totals from the worker machine's Claude Code transcripts (see local_usage.py)."""
+
+    buckets: list[LocalUsageBucket] = Field(max_length=1000)
 
 
 class AgentChatIn(BaseModel):

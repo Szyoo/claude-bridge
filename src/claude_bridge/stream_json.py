@@ -380,6 +380,7 @@ class StreamState:
             "output_tokens": u.get("output_tokens"),
             "cache_read_input_tokens": u.get("cache_read_input_tokens"),
             "cache_creation_input_tokens": u.get("cache_creation_input_tokens"),
+            "cache_creation": u.get("cache_creation"),  # {ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}: priced differently
             "context_tokens": self.context_tokens,
             "total_cost_usd": r.get("total_cost_usd"),
             "num_turns": r.get("num_turns"),

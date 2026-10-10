@@ -54,6 +54,7 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 | `CLAUDE_BRIDGE_CLAUDE_BIN` / `_MODEL` / `_MAX_TURNS` / `_CHAT_TIMEOUT` | `claude` 可执行文件 / 缺省模型 / 最大轮数 / 单次超时秒数 |
 | `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_PERMISSION_MODE` / `_SYSTEM_PROMPT` / `_SYSTEM_PROMPT_FILE` | 对应的 `claude` 参数 |
 | `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
+| `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE` | `1` = worker 上报本机所有 Claude Code 会话的用量（读 `~/.claude/projects` 的 transcript，只发送每分钟的 token 合计与 API 标价等价，不含内容），用于自动标定额度 |
 | `CLAUDE_BRIDGE_CLIENT_TOOLS` / `_CONTENT_BLOCKS` | `1` = 启用调用方工具 / 完整内容流（见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)） |
 
 命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。
@@ -65,7 +66,7 @@ claude-bridge users --db bridge.db add <用户名> --admin   # 先建管理员
 claude-bridge serve --multi-user --db bridge.db
 ```
 
-用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮的等价费用记账，换算为订阅 5 小时 / 每周额度的百分比，另可设置整体用量阈值。`users` 还有 `list` / `passwd` / `enable` / `map` / `unmap` 子命令。
+用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮实际的 token 数折成 API 标价等价记账（只是计量单位，与订阅 / 席位的实际计费无关），再换算为 5 小时 / 每周额度的百分比；「100% 相当于多少」由账户使用率与 worker 本机用量自动标定（需 `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1`），也可在 `/admin` 手填。另可设置整体用量阈值。`users` 还有 `list` / `passwd` / `enable` / `map` / `unmap` 子命令。
 
 **门户 SSO**（`SZYYW_SSO=1`，或 `CLAUDE_BRIDGE_SSO=1`）：浏览器身份只取前置门卫注入的 `X-User` / `X-Role` / `X-Portal-Sub`，本地密码登录与会话 cookie 不再生效；只能部署在会剥掉客户端同名头的门卫之后，且不发布端口。`X-Portal-Sub` 对应本地账户行（`users map <用户名> <portal_sub>` 手动绑定；未绑定时按同名用户名认领一次），`X-Role` 逐请求决定管理权限。`SZYYW_SSO_AUTOCREATE=1` 时自动为新门户用户建账户；`PORTAL_ORIGIN` 指定登录 / 登出跳转的门户（缺省 `https://szyyw.xyz`）。`/api/agent/*`（Bearer）与 `/api/health` 不受影响。
 
@@ -123,7 +124,7 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 | `GET /threads/{id}/client-tools` · `POST /messages/{id}/client-tools/{call_id}/result` | 调用方工具（启用时） |
 | `GET/PUT /settings` · `GET /status` | 设置 / 状态 |
 
-worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`GET /jobs/{id}`、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish`、`POST /chat`（持令牌的后端直接发起对话）、`GET /status`、`GET /files/{id}`、`POST /limits`（额度上报）、`GET/POST /models`（模型列表）。
+worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`GET /jobs/{id}`、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish`、`POST /chat`（持令牌的后端直接发起对话）、`GET /status`、`GET /files/{id}`、`POST /limits`（额度上报）、`POST /local-usage`（本机用量的每分钟合计）、`GET/POST /models`（模型列表）。
 
 独立运行时另有 `/login`、`/logout`、`/api/health`；多用户模式另有 `/api/me`、`/account`、`/admin` 与 `/api/admin/*`。
 

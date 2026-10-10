@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -105,11 +106,38 @@ CREATE TABLE IF NOT EXISTS bridge_usage (
   cost_usd      REAL NOT NULL DEFAULT 0,
   input_tokens  INTEGER,
   output_tokens INTEGER,
+  cache_read_tokens  INTEGER,
+  cache_write_tokens INTEGER,
   model         TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_owner ON bridge_usage(owner, created_at);
 CREATE INDEX IF NOT EXISTS idx_bridge_usage_time ON bridge_usage(created_at);
+
+-- the worker machine's whole Claude Code use (its transcripts), absolute totals per minute and source
+-- ('bridge' = sessions the bridge ran, 'local' = everything else on that machine)
+CREATE TABLE IF NOT EXISTS bridge_local_usage (
+  bucket             TEXT NOT NULL,
+  source             TEXT NOT NULL,
+  cost_usd           REAL NOT NULL DEFAULT 0,
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  requests           INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, source)
+);
+
+-- account-wide utilization as the server reported it over time (per turn and from `/usage`), for calibration
+CREATE TABLE IF NOT EXISTS bridge_util_samples (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          REAL NOT NULL,
+  window      TEXT NOT NULL,
+  utilization REAL NOT NULL,
+  resets_at   REAL,
+  source      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_util_samples ON bridge_util_samples(window, at);
 
 -- Code-mode projects: directories on the worker's machine (git init / git clone), one row per owner + name
 CREATE TABLE IF NOT EXISTS bridge_client_tools (
@@ -142,6 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_bridge_threads_owner ON bridge_threads(owner, sco
 MIGRATIONS: list[tuple[str, str, str]] = [
     ("bridge_threads", "owner", "ALTER TABLE bridge_threads ADD COLUMN owner TEXT NOT NULL DEFAULT ''"),
     ("bridge_files", "owner", "ALTER TABLE bridge_files ADD COLUMN owner TEXT NOT NULL DEFAULT ''"),
+    ("bridge_usage", "cache_read_tokens", "ALTER TABLE bridge_usage ADD COLUMN cache_read_tokens INTEGER"),
+    ("bridge_usage", "cache_write_tokens", "ALTER TABLE bridge_usage ADD COLUMN cache_write_tokens INTEGER"),
 ]
 
 
@@ -666,13 +696,28 @@ class BridgeStore:
         kind: str = "chat",
         input_tokens: int | None = None,
         output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
         model: str | None = None,
     ) -> None:
         self._x(
-            "INSERT INTO bridge_usage(owner, thread, message_id, job_id, kind, cost_usd, input_tokens, output_tokens, model, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (owner, thread, message_id, job_id, kind, float(cost_usd or 0), input_tokens, output_tokens, model, _now()),
+            "INSERT INTO bridge_usage(owner, thread, message_id, job_id, kind, cost_usd, input_tokens, output_tokens, "
+            "cache_read_tokens, cache_write_tokens, model, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (owner, thread, message_id, job_id, kind, float(cost_usd or 0), input_tokens, output_tokens,
+             cache_read_tokens, cache_write_tokens, model, _now()),
         )
+
+    def usage_rows_with_events(self) -> list[dict[str, Any]]:
+        """Ledger rows joined to the turn's `usage` event (for re-pricing rows booked from total_cost_usd)."""
+        return self._q(
+            "SELECT u.id, u.kind, u.job_id, u.model, e.data AS usage FROM bridge_usage u "
+            "LEFT JOIN bridge_events e ON e.message_id = u.message_id AND e.type = 'usage'"
+        )
+
+    def set_usage_cost(self, row_id: int, cost_usd: float, **tokens: int | None) -> None:
+        cols = ", ".join(f"{k}=?" for k in tokens)
+        self._x(f"UPDATE bridge_usage SET cost_usd=?{', ' + cols if cols else ''} WHERE id=?",
+                (float(cost_usd), *tokens.values(), row_id))
 
     def usage_totals(self, since: str, owner: str | None = None) -> dict[str, dict[str, Any]]:
         """{owner: {cost_usd, turns}} for rows at or after `since` (UTC text)."""
@@ -682,6 +727,54 @@ class BridgeStore:
             params,
         )
         return {r["owner"]: {"cost_usd": float(r["cost_usd"]), "turns": int(r["turns"])} for r in rows}
+
+    # ---------------- machine-wide use / utilization samples ----------------
+
+    def upsert_local_usage(self, rows: list[dict[str, Any]]) -> None:
+        cols = ("cost_usd", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "requests")
+        with self.transaction():
+            for r in rows:
+                self._x(
+                    f"INSERT INTO bridge_local_usage(bucket, source, {', '.join(cols)}) VALUES(?,?,{','.join('?' * len(cols))}) "
+                    f"ON CONFLICT(bucket, source) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in cols)}",
+                    (r["bucket"], r["source"], *(r[c] for c in cols)),
+                )
+
+    def local_usage_totals(self, since: str, until: str | None = None) -> dict[str, float]:
+        """{source: cost_usd} for buckets in [since, until)."""
+        where, params = ("bucket >= ?", (since,)) if until is None else ("bucket >= ? AND bucket < ?", (since, until))
+        rows = self._q(f"SELECT source, SUM(cost_usd) AS c FROM bridge_local_usage WHERE {where} GROUP BY source", params)
+        return {r["source"]: float(r["c"] or 0) for r in rows}
+
+    def local_usage_series(self, since: str) -> list[tuple[str, float]]:
+        """(bucket, cost_usd of all sources) from `since`, oldest first."""
+        rows = self._q("SELECT bucket, SUM(cost_usd) AS c FROM bridge_local_usage WHERE bucket >= ? GROUP BY bucket ORDER BY bucket", (since,))
+        return [(r["bucket"], float(r["c"] or 0)) for r in rows]
+
+    def events_of_type(self, type: str) -> list[dict[str, Any]]:
+        rows = self._q("SELECT data, created_at FROM bridge_events WHERE type=? ORDER BY id", (type,))
+        out = []
+        for r in rows:
+            try:
+                out.append({"data": json.loads(r["data"] or "{}"), "created_at": r["created_at"]})
+            except json.JSONDecodeError:
+                continue
+        return out
+
+    def add_util_sample(self, window: str, utilization: float, resets_at: float | None, source: str, at: float) -> None:
+        self._x("INSERT INTO bridge_util_samples(at, window, utilization, resets_at, source) VALUES(?,?,?,?,?)",
+                (at, window, utilization, resets_at, source))
+
+    def last_util_sample(self, window: str) -> dict[str, Any] | None:
+        return self._one("SELECT * FROM bridge_util_samples WHERE window=? ORDER BY at DESC, id DESC LIMIT 1", (window,))
+
+    def util_samples(self, window: str, since: float) -> list[dict[str, Any]]:
+        return self._q("SELECT * FROM bridge_util_samples WHERE window=? AND at >= ? ORDER BY at", (window, since))
+
+    def prune_usage_history(self, keep_days: int = 35) -> None:
+        cutoff = time.time() - keep_days * 86400
+        self._x("DELETE FROM bridge_local_usage WHERE bucket < ?", (utc_text(cutoff),))
+        self._x("DELETE FROM bridge_util_samples WHERE at < ?", (cutoff,))
 
     # ---------------- owners ----------------
 
