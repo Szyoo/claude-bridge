@@ -169,6 +169,7 @@ def create_multiuser_app(
         files_dir=files_dir or Path(db_path).resolve().parent / "claude-bridge-files",
     )
     cfg.check_quota = accounts.check_quota
+    cfg.cap_override = accounts.cap_override
     if client_tools_enabled:
         cfg.client_tools_enabled = True
 

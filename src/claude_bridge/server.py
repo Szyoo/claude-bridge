@@ -142,7 +142,11 @@ def create_bridge(
     @browser.get("/threads")
     def list_threads(scope: str = Query(""), p: Principal = Depends(who)):
         current = _svc(service.current_thread, scope, p.owner)
-        return {"items": store.threads(scope, p.owner), "current": current, "scope": scope}
+        items = store.threads(scope, p.owner)
+        pct = service.thread_quota_pct(p.owner)
+        for t in items:
+            t["quota_pct"] = pct.get(t["id"])  # share of the weekly window this conversation has used (None = not calibrated)
+        return {"items": items, "current": current, "scope": scope}
 
     @browser.post("/threads", status_code=201)
     def create_thread(body: ThreadIn | None = None, p: Principal = Depends(who)):

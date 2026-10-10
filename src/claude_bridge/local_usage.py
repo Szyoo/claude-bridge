@@ -3,7 +3,7 @@
 The account's 5h / weekly utilization counts everything on the subscription or seat, not just the bridge.
 Claude Code writes each API response's `usage` into `~/.claude/projects/**/*.jsonl`, so the worker can add
 up the machine's whole use (the bridge's own sessions and everything else run there) in one-minute
-buckets and report them; the server lines these up with the utilization samples to calibrate how much
+buckets per model and report them; the server lines these up with the utilization samples to calibrate how much
 use 1% of each window is. Only aggregates leave the machine: token counts and list-price USD per bucket.
 """
 
@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_bridge.pricing import usage_cost
+from claude_bridge.pricing import price_key, usage_cost
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def _parse_ts(v: Any) -> float | None:
 
 @dataclass
 class _Seen:
-    key: tuple[str, str]
+    key: tuple[str, str, str]
     ts: float
     tokens: tuple[int, ...]
     cost: float
@@ -59,8 +59,8 @@ class TranscriptScanner:
     horizon_days: float = 8.0  # the weekly window plus a day
     _offsets: dict[str, tuple[int, int]] = field(default_factory=dict)  # path → (inode, bytes consumed)
     _seen: dict[str, _Seen] = field(default_factory=dict)  # message id → what was booked for it
-    _buckets: dict[tuple[str, str], dict[str, float]] = field(default_factory=dict)
-    _dirty: set[tuple[str, str]] = field(default_factory=set)
+    _buckets: dict[tuple[str, str, str], dict[str, float]] = field(default_factory=dict)  # (minute, source, model)
+    _dirty: set[tuple[str, str, str]] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.bridge_roots = [os.path.realpath(os.path.expanduser(r)).rstrip("/") + "/" for r in self.bridge_roots if r]
@@ -133,7 +133,7 @@ class TranscriptScanner:
         cost = usage_cost(model, usage)
         prev = self._seen.get(mid)
         if prev is None:
-            bkey = (bucket_text(ts), self.source_of(ev.get("cwd")))
+            bkey = (bucket_text(ts), self.source_of(ev.get("cwd")), price_key(model))
             self._add(bkey, tokens, cost, 1)
             self._seen[mid] = _Seen(bkey, ts, tokens, cost)
         elif tokens != prev.tokens and sum(tokens) > sum(prev.tokens):
@@ -141,7 +141,7 @@ class TranscriptScanner:
             self._add(prev.key, tuple(a - b for a, b in zip(tokens, prev.tokens, strict=True)), cost - prev.cost, 0)
             prev.tokens, prev.cost = tokens, cost
 
-    def _add(self, key: tuple[str, str], tokens: tuple[int, ...], cost: float, requests: int) -> None:
+    def _add(self, key: tuple[str, str, str], tokens: tuple[int, ...], cost: float, requests: int) -> None:
         b = self._buckets.setdefault(key, {"cost_usd": 0.0, "requests": 0, **{v: 0 for v in ROW_FIELDS.values()}})
         b["cost_usd"] += cost
         b["requests"] += requests
@@ -161,11 +161,11 @@ class TranscriptScanner:
     # ---------------- reporting ----------------
 
     def take_dirty(self) -> list[dict[str, Any]]:
-        rows = [{"bucket": k[0], "source": k[1], **{f: (round(v, 6) if f == "cost_usd" else int(v)) for f, v in self._buckets[k].items()}}
+        rows = [{"bucket": k[0], "source": k[1], "model": k[2], **{f: (round(v, 6) if f == "cost_usd" else int(v)) for f, v in self._buckets[k].items()}}
                 for k in sorted(self._dirty) if k in self._buckets]
         self._dirty.clear()
         return rows
 
     def requeue(self, rows: list[dict[str, Any]]) -> None:
         """Report failed: send these buckets (their latest totals) next time."""
-        self._dirty.update((r["bucket"], r["source"]) for r in rows)
+        self._dirty.update((r["bucket"], r["source"], r["model"]) for r in rows)

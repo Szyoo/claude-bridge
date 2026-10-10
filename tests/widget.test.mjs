@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { BridgeClient, checkBridgeUpdate } from '../src/claude_bridge/static/bridge-client.js';
 import {
   splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
-  armConfirm, disarmConfirm,
+  armConfirm, disarmConfirm, quotaText,
 } from '../src/claude_bridge/static/bridge-widget.js';
 
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
@@ -243,4 +243,11 @@ test('armConfirm: first click arms (label + warning), second confirms; disarm re
   assert.equal(b.textContent, '压缩'); assert.equal(b.dataset.bridgeArmed, undefined);
   disarmConfirm(b); disarmConfirm(null);                           // idempotent / null-safe
   delete globalThis.document;
+});
+
+test('quotaText shows a conversation\'s share of the weekly window, hidden until calibrated', () => {
+  assert.equal(quotaText(null), '');
+  assert.equal(quotaText(0.03), ' · 周额度 <0.1%');
+  assert.equal(quotaText(1.26), ' · 周额度 1.3%');
+  assert.equal(quotaText(12.6), ' · 周额度 13%');
 });

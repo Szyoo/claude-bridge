@@ -2,6 +2,14 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.8.0 — 2026-10-11
+
+- **界面只显示额度百分比**：管理页、账户页、用户列表不再出现美元；「100% ≈ $X」的手填输入框移除（`PUT /api/admin/quota` 的 `cap_*_usd` 仍可用，管理页会提示并可一键改回自动标定）
+- **用户能看清自己用了多少**：`/api/me` 的每个窗口新增 `account_pct`（整个账户的使用率）、`others_pct`（其他 bridge 用户）、`outside_pct`（bridge 之外，如管理员自己的客户端、claude.ai）；账户页显示「你在 5 小时 / 本周额度里用了 x%」及这三者的拆分，顶栏总是显示自己的占比
+- **每个对话占本周额度**：`GET /api/threads` 的每项新增 `quota_pct`（该对话累计占本周额度的百分比，未标定时为 null），对话列表显示「周额度 x%」；新导出 `quotaText`
+- 本机用量按模型分开记录：上报的每分钟合计新增 `model`（规范化的模型 id），表 `bridge_local_usage` 换成 `bridge_machine_usage`（主键含模型；worker 重启后会重发最近 8 天）
+- `BridgeConfig.cap_override` / `BridgeService.effective_cap()`：手动值优先、否则用自动标定值；`fmtPct` 对 0.1% 以下显示 `<0.1%`
+
 ## v0.7.0 — 2026-10-11
 
 - **用量记账改为按 token 计价**：CLI 的 `total_cost_usd` 在续接会话时往往是整个会话的累计值，按轮记账会把之前的花费重复计入。现在每轮按 `usage` 里的输入 / 输出 / 缓存读 / 缓存写（区分 5 分钟与 1 小时）乘 API 标价计算（新模块 `pricing.py`），compact 同理。已有数据库首次启动时用库里的 usage 事件重算历史账本（meta `usage_repriced`）

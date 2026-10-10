@@ -165,10 +165,11 @@
       let d;
       try { d = await api('GET', '/api/me'); } catch { return; }
       const u = d.user, us = d.usage;
+      // your own use of each window (of your share, when the admin set one)
       const parts = [['five_hour', '5h'], ['seven_day', '周']]
-        .filter(([k]) => us[k].limit_pct != null && us[k].used_pct != null)
-        .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}/${fmtPct(us[k].limit_pct)}`);
-      const sub = us.blocked ? '额度已用完' : u.role === 'admin' ? '管理员' : (parts.join(' · ') || '账户设置');
+        .filter(([k]) => us[k].used_pct != null)
+        .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}${us[k].limit_pct != null ? `/${fmtPct(us[k].limit_pct)}` : ''}`);
+      const sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
       box.innerHTML = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
         + `<span class="n">${esc((d.sso && d.sso.portal_user) || u.display_name || u.username)}</span><span class="u${us.blocked ? ' full' : ''}">${esc(sub)}</span></a>`
         + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin">管理</a>' : '')

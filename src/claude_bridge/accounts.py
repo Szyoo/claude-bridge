@@ -500,6 +500,10 @@ class Accounts:
             return ""
         return datetime.fromtimestamp(ts, self.tz).strftime("%m-%d %H:%M")
 
+    def cap_override(self, name: str) -> float | None:
+        """`BridgeConfig.cap_override`: the admin's "100% ≈ $X" for a window, if any."""
+        return self.quota_config()[CAP_FIELD[name]]
+
     def account_status(self) -> dict[str, Any]:
         """The subscription / seat as a whole: utilization, reset times, who used it, and what 100% is worth."""
         svc = self._svc()
@@ -514,7 +518,7 @@ class Accounts:
             util_pct = round(util * 100, 1) if isinstance(util, int | float) else None
             est = svc.capacity(name)
             manual = cfg[CAP_FIELD[name]]
-            cap = manual or (est["cap_usd"] if est else None)
+            cap = svc.effective_cap(name)
             # shares of the window: the bridge (ledger), the rest of the worker machine, and whatever is left
             # of the reported utilization (claude.ai, other devices: use the transcripts can't see)
             bridge_pct = spent / cap * 100 if cap else None
@@ -547,12 +551,20 @@ class Accounts:
         out: dict[str, Any] = {"blocked": None}
         for name in LIMIT_WINDOWS:
             acc = account[name]
-            cost = svc.usage_in_window(name, owner).get(owner, {"cost_usd": 0.0, "turns": 0})
+            everyone = svc.usage_in_window(name)
+            cost = everyone.get(owner, {"cost_usd": 0.0, "turns": 0})
             cap = acc["effective_cap_usd"]
             pct = cost["cost_usd"] / cap * 100 if cap else None
+            # the rest of the account's utilization, so a user can tell their own use from everyone else's:
+            # other bridge users (the ledger) and everything outside the bridge (the admin's own clients, claude.ai…)
+            others = (sum(v["cost_usd"] for v in everyone.values()) - cost["cost_usd"]) / cap * 100 if cap else None
+            util = acc["utilization_pct"]
+            outside = max(0.0, util - pct - others) if util is not None and pct is not None and others is not None else None
             limit = None if admin else user.get(LIMIT_FIELD[name])
             out[name] = {"cost_usd": round(cost["cost_usd"], 4), "turns": cost["turns"],
-                         "used_pct": round(pct, 1) if pct is not None else None, "limit_pct": limit,
+                         "used_pct": round(pct, 2) if pct is not None else None, "limit_pct": limit,
+                         "account_pct": util, "others_pct": round(others, 2) if others is not None else None,
+                         "outside_pct": round(outside, 2) if outside is not None else None,
                          "resets_at": acc["resets_at"], "window_start": acc["window_start"]}
             if admin or out["blocked"]:
                 continue
