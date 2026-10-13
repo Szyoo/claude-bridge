@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 import subprocess
 import threading
 
@@ -42,3 +44,18 @@ def test_validator_launch_is_isolated_and_does_not_inherit_secrets(monkeypatch):
     assert kwargs["timeout"] == validation.MAX_SECONDS
     assert "private-" not in str(kwargs["env"])
     assert "HTTPS_PROXY" not in kwargs["env"]
+
+
+@pytest.mark.parametrize(("platform", "memory_capped"), [("linux", True), ("darwin", False)])
+def test_child_budget_per_platform(monkeypatch, capsysbinary, platform, memory_capped):
+    resource = pytest.importorskip("resource")
+    limits = {}
+    monkeypatch.setattr(validation.os, "name", "posix")
+    monkeypatch.setattr(validation.sys, "platform", platform)
+    monkeypatch.setattr(resource, "setrlimit", lambda kind, value: limits.setdefault(kind, value))
+    stdin = io.BytesIO(json.dumps({"schema": {"type": "object"}, "input": {}}).encode())
+    monkeypatch.setattr(validation.sys, "stdin", io.TextIOWrapper(stdin))
+    validation._child()
+    assert capsysbinary.readouterr().out == b"ok"
+    assert limits[resource.RLIMIT_CPU] == (2, 2)
+    assert (resource.RLIMIT_AS in limits) is memory_capped

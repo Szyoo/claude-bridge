@@ -65,7 +65,11 @@ def _child() -> None:
         import resource
 
         resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
-        resource.setrlimit(resource.RLIMIT_AS, (384 * 1024 * 1024, 384 * 1024 * 1024))
+        # macOS rejects memory rlimits (setrlimit RLIMIT_AS/RLIMIT_DATA -> EINVAL), which made every
+        # validation fail there; the CPU limit, the parent's timeout and the input limits remain the budget.
+        # Elsewhere a failure to set the memory cap still fails closed.
+        if sys.platform != "darwin":
+            resource.setrlimit(resource.RLIMIT_AS, (384 * 1024 * 1024, 384 * 1024 * 1024))
     # Imports, regex matching, reference expansion and recursion all share the budget.
     from jsonschema import Draft202012Validator
     from referencing import Registry
