@@ -1,4 +1,4 @@
-# claude-bridge server image (multi-user). Deployment: deploy/vps — no published ports, only Caddy's ingress network.
+# claude-bridge server image (multi-user). Put it behind a reverse proxy that terminates HTTPS; don't publish the port directly.
 # The server never runs claude; the worker does, on the machine that is logged in (deploy/mac).
 FROM python:3.12-slim
 

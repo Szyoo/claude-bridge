@@ -59,6 +59,21 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 
 命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。
 
+### Docker
+
+仓库根目录的 `Dockerfile` 构建服务端镜像（多用户模式，数据在 `/data` 卷，端口 8770，健康检查 `/api/health`）。建议放在能终止 HTTPS 的反向代理之后，不要直接发布端口：
+
+```bash
+docker build -t claude-bridge .
+docker run -d --name claude-bridge --restart unless-stopped \
+  -e CLAUDE_BRIDGE_AGENT_TOKEN=共享令牌 \
+  -e CLAUDE_BRIDGE_COOKIE_SECURE=1 \
+  -v claude-bridge-data:/data \
+  claude-bridge
+```
+
+worker 不放进镜像：它需要在已执行过 `claude login` 的机器上运行。
+
 ## 多用户模式
 
 ```bash

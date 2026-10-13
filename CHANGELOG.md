@@ -62,7 +62,7 @@
 
 - **IP 归属地**：管理页用户行的最近访问、`/admin/users/<id>` 的访问记录，IP 下面多一行「国家 省 市 · 运营商」（同门户首页公网 IP 卡片）。服务端 `ipgeo.py` 查 ip-api.com batch（zh-CN），按 IP 永久缓存在新表 `bridge_ipgeo`；tailnet 显示「Tailscale 内网」、其他内网 / 保留地址显示「内网」，不出网；查询失败不缓存、不影响页面。接口 `last_access.geo`、访问记录每行 `geo`（`{country, region, city, isp}` / `{label}` / `null`），仅管理员接口
 - **站点 favicon**：独立站点（`serve` 单密码 / 多用户）根路径提供 `/favicon.svg`、`/favicon.ico`、`/apple-touch-icon.png`（文件在 `static/site/`，来自门户的品牌素材，应用层路由不要求登录），全部 HTML 页面 head 带三个 `<link>`。嵌入式组件（`create_bridge` + `bridge-widget.*`）不注册这些路由、不碰宿主的 favicon
-- **部署改为 git clone + 推送即上线**：服务器上的部署目录现在是 git clone，由定时部署任务拉取 main 并部署，健康检查失败自动回滚。`scripts/deploy-vps.sh` 不再 rsync：检查在 main / 工作区干净 / 已推送后 ssh 触发立即部署，新增 `--rollback <ref>`、`--status`，去掉 `--dry-run`
+- 部署方式调整：服务端改为从 git 仓库构建镜像部署，健康检查失败自动回滚
 - **自动升级共享包**：`scripts/upgrade-shared.sh` + `.github/workflows/upgrade-shared.yml`（每 6 小时 / 手动）检测 `szyyw-auth` 与 `@szyyw/design` 的上游最新正式 tag，升级（含 vendored 副本）后跑 ruff + pytest，通过才以 bot 身份推到 main；失败不推送
 
 ## v0.4.2 — 2026-10-05
@@ -84,7 +84,7 @@
 - **门户 SSO**（`serve --multi-user`，`SZYYW_SSO=1` / 别名 `CLAUDE_BRIDGE_SSO=1`，默认关）：身份来自 `*.szyyw.xyz` Caddy 门卫注入的 `X-Portal-Sub` / `X-User` / `X-Role`（[szyyw-auth](https://github.com/Szyoo/szyyw-auth) v0.1.0 契约），cookie 不再认人；`/login` 跳门户（`PORTAL_ORIGIN`，默认 `https://szyyw.xyz`，带 `?rd=`），`/logout` 回门户，本地密码登录和改密码关闭；管理权限按每次请求的 `X-Role`，不改写存储的角色。未开启时行为不变
 - `bridge_users` 新增可空唯一列 `portal_sub`（门户账号的固定 ID；门户用户名可改，所以不按名字存；启动时自动迁移，ids 与数据归属不变）。认人：先按 `portal_sub = X-Portal-Sub`，再按 `username = X-User` 且未映射的行（认领：填入 sub 并记日志），否则 `SZYYW_SSO_AUTOCREATE=1` 自动建号、默认 403「此账号尚未在 claude-bridge 开通」。缺 `X-Portal-Sub` = 未登录，不按用户名兜底。本地用户名不随门户改名；页面上显示本次请求的 `X-User`
 - 设置映射：`claude-bridge users map <用户名> <门户ID>` / `users unmap <用户名>`，管理页「门户 ID」，`POST /api/admin/users/<id>/portal-user {"portal_sub": …}`；`/api/admin/users` 的每行多了 `portal_sub`
-- `deploy/vps/compose.yml` 加 `SZYYW_SSO` / `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN`（默认全关）；`szyyw-auth` 进 `[serve]` 依赖（worker 与嵌入式宿主不需要）
+- 容器部署新增 `SZYYW_SSO` / `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN` 三个环境变量（默认全关）；`szyyw-auth` 进 `[serve]` 依赖（worker 与嵌入式宿主不需要）
 
 ## v0.3.5 — 2026-10-01
 
@@ -109,7 +109,7 @@
 ## v0.3.1 — 2026-09-24
 
 - `--env-file PATH`：先从 KEY=VALUE 文件读 `CLAUDE_BRIDGE_*`（已设置的环境变量优先），令牌不必写进 plist / unit 文件
-- 部署：`Dockerfile` + `deploy/vps/`（compose 只挂 ingress 网络、显式项目名）+ `scripts/deploy-vps.sh`；`deploy/mac/` 的 LaunchAgent 与安装脚本；通用模板移到 `deploy/examples/`
+- 部署：`Dockerfile`；`deploy/mac/` 的 LaunchAgent 与安装脚本；通用模板移到 `deploy/examples/`
 
 ## v0.3.0 — 2026-09-24
 
