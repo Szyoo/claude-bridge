@@ -72,18 +72,21 @@ _APPEARANCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 def appearance_attrs(cookies: dict[str, str]) -> str:
     """`<html>` attributes from the appearance cookies, like @szyyw/design appearance-data's
-    readAppearanceFromCookies + appearanceAttrs: defaults nebula / default palette (no data-palette) / dark.
-    Theme / palette ids are only shape-checked (the option list lives in the package; an unknown id has no CSS block
-    and the client resets it)."""
+    readAppearanceFromCookies + appearanceAttrs: default theme "random" / default palette (no data-palette) / dark.
+    Random (stored "random", or never explicitly chosen — no cb_theme_set mark — with a stored "nebula" / nothing, the
+    pre-random default) renders only data-theme-mode="random": the client picks the day's theme and mounts it.
+    Theme ids are only shape-checked (the option list lives in the package; an unknown id has no CSS block and the client
+    resets it). Only the default palette is left, so data-palette is never rendered."""
     def get(key: str) -> str:
         return unquote(cookies.get(f"{APPEARANCE_COOKIE_PREFIX}{key}", "")).strip()
 
-    theme = get("theme") if _APPEARANCE_ID.match(get("theme")) else "nebula"
-    palette = get("palette") if _APPEARANCE_ID.match(get("palette")) else "default"
+    theme = get("theme") if _APPEARANCE_ID.match(get("theme")) else ""
+    chosen = get("theme_set") == "1"
     scheme = get("scheme") if get("scheme") in _SCHEMES else "dark"
-    attrs = f' data-theme="{theme}"'
-    if palette != "default":
-        attrs += f' data-palette="{palette}"'
+    if theme == "random" or (not chosen and theme in ("", "nebula")):
+        attrs = ' data-theme-mode="random"'
+    else:
+        attrs = f' data-theme="{theme}"'
     return attrs + f' data-scheme="{scheme}"'
 
 

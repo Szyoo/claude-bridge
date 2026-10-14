@@ -23,7 +23,7 @@ def test_password_login_flow(tmp_path):
     page = c.get("/").text  # @szyyw/design look + 🌗 / appearance, never the portal switcher / account menu
     assert f"{CDN}/components.css" in page and "corner-boot" in page and "data-sso" not in page
     assert_design_refs(page)
-    assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in page
+    assert '<html lang="zh-CN" data-theme-mode="random" data-scheme="dark">' in page
     assert c.get("/api/status").status_code == 200
     assert c.get("/api/threads?scope=").json()["current"] == "main"
     assert c.get("/static/bridge/bridge-client.js").status_code == 200

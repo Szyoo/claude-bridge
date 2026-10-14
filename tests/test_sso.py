@@ -275,7 +275,7 @@ def test_sso_pages_load_corner_tools(db, monkeypatch):
         r = c.get(path)
         assert r.status_code == 200, path
         # no appearance cookies: @szyyw/design defaults (nebula / default palette → no data-palette / dark)
-        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-theme="nebula" data-scheme="dark">' in r.text
+        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-theme-mode="random" data-scheme="dark">' in r.text
         assert_design_refs(r.text)
         assert "/static/bridge/corner-boot.js" in r.text
     assert c.get("/static/bridge/corner-boot.js").status_code == 200
@@ -286,12 +286,21 @@ def test_sso_pages_load_corner_tools(db, monkeypatch):
 def test_pages_render_appearance_cookies(db, monkeypatch):
     c = gated(make(db, monkeypatch), "alice", role="admin")
     c.cookies.set("cb_scheme", "light")
-    c.cookies.set("cb_palette", "aurora")
-    assert 'data-theme="nebula" data-palette="aurora" data-scheme="light">' in c.get("/account").text
+    c.cookies.set("cb_palette", "aurora")  # removed palette: never rendered
+    assert 'data-theme-mode="random" data-scheme="light">' in c.get("/account").text
+    c.cookies.set("cb_theme", "nebula")  # the pre-random default, not an explicit choice
+    assert 'data-theme-mode="random" data-scheme="light">' in c.get("/account").text
+    c.cookies.set("cb_theme_set", "1")  # explicitly chosen in the panel: kept
+    assert 'data-theme="nebula" data-scheme="light">' in c.get("/account").text
+    c.cookies.set("cb_theme", "particles")
+    assert 'data-theme="particles" data-scheme="light">' in c.get("/account").text
+    c.cookies.set("cb_theme", "random")
+    assert 'data-theme-mode="random" data-scheme="light">' in c.get("/account").text
+    c.cookies.delete("cb_theme"); c.cookies.delete("cb_theme_set")
     c.cookies.set("cb_scheme", "auto")
     c.cookies.set("cb_palette", '"><script>')  # not an id: ignored, never echoed
     r = c.get("/account").text
-    assert 'data-theme="nebula" data-scheme="auto">' in r and "<script>\"" not in r and 'data-palette' not in r
+    assert 'data-theme-mode="random" data-scheme="auto">' in r and "<script>\"" not in r and 'data-palette' not in r
 
 
 def test_sso_off_pages_have_no_portal_tools(db):
@@ -300,13 +309,13 @@ def test_sso_off_pages_have_no_portal_tools(db):
     app = create_multiuser_app(db_path=db, agent_token="tok", tz="UTC")
     c = TestClient(app, follow_redirects=False)
     login = c.get("/login")
-    assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in login.text and "corner-boot" in login.text
+    assert '<html lang="zh-CN" data-theme-mode="random" data-scheme="dark">' in login.text and "corner-boot" in login.text
     c.post("/login", data={"username": "szyyw", "password": PW})
     for path in ("/", "/account", "/admin"):
         r = c.get(path)
         assert r.status_code == 200, path
         assert "data-sso" not in r.text and "data-portal" not in r.text
-        assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in r.text and "corner-boot" in r.text
+        assert '<html lang="zh-CN" data-theme-mode="random" data-scheme="dark">' in r.text and "corner-boot" in r.text
 
 
 def test_accounts_are_created_in_the_portal_not_here(db, monkeypatch):
