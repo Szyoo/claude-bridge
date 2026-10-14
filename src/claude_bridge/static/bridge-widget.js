@@ -3,7 +3,8 @@
 // Exports, roughly in layers a host can pick from:
 //   pure helpers   describeTool, sessionSummary, splitTurn, DEFAULT_PREFS, loadPrefs, savePrefs
 //   renderers      renderTurn, renderSteps, renderContextPanel, renderSessionPanel, renderPrefsPanel, applyPrefs, placePopover
-//   full widget    mountBridgeWidget(el, client, opts) -> { destroy(), openThread(id), refresh() }
+//   composer       parseToken, modelMenuRows, modelLabel, effortState, composerCommands, morphPath, mountVoicePill, startDictation, speechLang
+//   full widget    mountBridgeWidget(el, client, opts) -> { destroy(), openThread(id), refresh(), input }
 // Renderers emit `bridge-*` structural class names; a host either loads bridge-widget.css or skins those classes itself.
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1002,19 +1003,412 @@ export function promptDialog({ title, label = '', value = '', placeholder = '', 
 }
 
 // ============================================================
+// Composer: a framework-free port of two React Bits components — Prompt Bar (auto-growing input, send ⇄ stop glyph
+// morph, `/` command and `@` source menus, model picker, effort slider with sparks at the top level) and Voice Pill
+// (mic button that swells into a capsule with live equalizer bars and a timer; hold / toggle, slide left to cancel).
+//   Source: React Bits — https://reactbits.dev · https://github.com/DavidHDev/react-bits (PromptBar, VoicePill),
+//   licensed MIT + Commons Clause. Changes: React → DOM, `motion` → CSS transitions + requestAnimationFrame,
+//   colours → --bridge-* tokens, bridge data (commands, models, efforts, uploads, Web Speech dictation).
+//   Icons: path data from Hugeicons free icons (@hugeicons/core-free-icons, MIT, © 2025 Hugeicons), inlined as SVG.
+// ============================================================
+
+const HUGEICONS = {
+  plus: '<path d="M12 4V20M20 12H4"/>',
+  chevron: '<path d="M18 9.00005C18 9.00005 13.5811 15 12 15C10.4188 15 6 9 6 9"/>',
+  sparkles: '<path d="M15 2L15.5387 4.39157C15.9957 6.42015 17.5798 8.00431 19.6084 8.46127L22 9L19.6084 9.53873C17.5798 9.99569 15.9957 11.5798 15.5387 13.6084L15 16L14.4613 13.6084C14.0043 11.5798 12.4202 9.99569 10.3916 9.53873L8 9L10.3916 8.46127C12.4201 8.00431 14.0043 6.42015 14.4613 4.39158L15 2Z"/><path d="M7 12L7.38481 13.7083C7.71121 15.1572 8.84275 16.2888 10.2917 16.6152L12 17L10.2917 17.3848C8.84275 17.7112 7.71121 18.8427 7.38481 20.2917L7 22L6.61519 20.2917C6.28879 18.8427 5.15725 17.7112 3.70827 17.3848L2 17L3.70827 16.6152C5.15725 16.2888 6.28879 15.1573 6.61519 13.7083L7 12Z"/>',
+  tick: '<path d="M5 14L8.5 17.5L19 6.5"/>',
+  mic: '<path d="M7 6.5C7 4.01472 9.01472 2 11.5 2C13.9853 2 16 4.01472 16 6.5V11.5C16 13.9853 13.9853 16 11.5 16C9.01472 16 7 13.9853 7 11.5V6.5Z"/><path d="M11.5 19H11.0828C7.57267 19 4.57706 16.4623 4 13M11.5 19H11.9172C15.4273 19 18.4229 16.4623 19 13M11.5 19V22"/>',
+  left: '<path d="M15 6C15 6 9.00001 10.4189 9 12C8.99999 13.5812 15 18 15 18"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.5 9.5C9.5 8.11929 10.6193 7 12 7C13.3807 7 14.5 8.11929 14.5 9.5C14.5 10.3569 14.0689 11.1131 13.4117 11.5636C12.7283 12.0319 12 12.6716 12 13.5"/><path d="M12.125 16.75H12M12.25 16.75C12.25 16.8881 12.1381 17 12 17C11.8619 17 11.75 16.8881 11.75 16.75C11.75 16.6119 11.8619 16.5 12 16.5C12.1381 16.5 12.25 16.6119 12.25 16.75Z"/>',
+  image: '<circle cx="7.5" cy="7.5" r="1.5"/><path d="M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z"/><path d="M5 21C9.37246 15.775 14.2741 8.88406 21.4975 13.5424"/>',
+  file: '<path d="M8 17H16"/><path d="M8 13H12"/><path d="M13 2.5V3C13 5.82843 13 7.24264 13.8787 8.12132C14.7574 9 16.1716 9 19 9H19.5M20 10.6569V14C20 17.7712 20 19.6569 18.8284 20.8284C17.6569 22 15.7712 22 12 22C8.22876 22 6.34315 22 5.17157 20.8284C4 19.6569 4 17.7712 4 14V9.45584C4 6.21082 4 4.58831 4.88607 3.48933C5.06508 3.26731 5.26731 3.06508 5.48933 2.88607C6.58831 2 8.21082 2 11.4558 2C12.1614 2 12.5141 2 12.8372 2.11401C12.9044 2.13772 12.9702 2.165 13.0345 2.19575C13.3436 2.34355 13.593 2.593 14.0919 3.09188L18.8284 7.82843C19.4065 8.40649 19.6955 8.69552 19.8478 9.06306C20 9.4306 20 9.83935 20 10.6569Z"/>',
+};
+// Hugeicons path data as an inline <svg>; unknown names render nothing (hosts may pass their own markup instead).
+export function hugeicon(name, size = 16, strokeWidth = 1.8) {
+  const body = HUGEICONS[name]; if (!body) return '';
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
+// `/word` or `@word` right before the caret. `/` only opens at the very start of the draft (bridge commands are
+// actions, not text — a path like "see /usr" must not pop a menu); `@` after start or whitespace.
+export function parseToken(beforeCaret) {
+  const m = /(^|\s)([@/])([^\s@/]*)$/.exec(beforeCaret || '');
+  if (!m) return null;
+  const start = m.index + m[1].length;
+  if (m[2] === '/' && start !== 0) return null;
+  return { kind: m[2] === '@' ? 'at' : 'slash', query: m[3].toLowerCase(), start };
+}
+
+// Rows of the model menu, from the same list and rules as modelOptionsHtml(): optional group headers
+// ("跟随 CLI 最新" / "固定版本"), and a saved value the helper no longer reports kept, flagged and selected.
+export function modelMenuRows(models, current = '') {
+  current = current || '';
+  const rows = []; let group = null;
+  for (const m of models || []) {
+    const g = m.group || null;
+    if (g !== group) { rows.push({ kind: g ? 'group' : 'sep', label: g || '' }); group = g; }
+    rows.push({ kind: 'model', key: m.id, name: m.label, selected: m.id === current });
+  }
+  if (rows[0]?.kind === 'sep') rows.shift();
+  if (current && !(models || []).some(m => m.id === current)) rows.push({ kind: 'model', key: current, name: current, tag: 'helper 的 CLI 不认', unknown: true, selected: true });
+  return rows;
+}
+export function modelLabel(models, current = '') {
+  const m = (models || []).find(x => x.id === (current || ''));
+  return m ? m.label : (current || '默认');
+}
+
+// The effort slider runs over the non-empty levels (Faster → Smarter); '' (= the CLI's default) is a separate
+// 「默认」 choice. index −1 = default. maxed = the top level, where the bar shows its sparks.
+export function effortState(efforts, current = '') {
+  const steps = (efforts || []).filter(Boolean);
+  const index = steps.indexOf(current || '');
+  return { steps, index, hasDefault: (efforts || []).includes(''), maxed: steps.length > 1 && index === steps.length - 1 };
+}
+
+// Built-in `/` commands = what the bridge actually does for a thread (its HTTP API), nothing the backend lacks.
+// Host commands ({ name, description, run }) come after them.
+export function composerCommands({ hasThread = false, settings = false, extra = [] } = {}) {
+  const need = hasThread ? '' : '还没有对话';
+  const rows = [
+    { key: 'new', name: '/new', description: '开始一个新对话' },
+    { key: 'compact', name: '/compact', description: need || '把历史压缩成摘要，让上下文变小（再确认一次）', disabled: !hasThread },
+    { key: 'context', name: '/context', description: need || '查看当前会话的上下文构成与额度', disabled: !hasThread },
+  ];
+  if (settings) rows.push({ key: 'model', name: '/model', description: '切换模型' }, { key: 'effort', name: '/effort', description: '调整思考深度' });
+  for (const [i, c] of (extra || []).entries()) {
+    if (!c?.name) continue;
+    rows.push({ key: `host:${i}`, name: c.name.startsWith('/') ? c.name : `/${c.name}`, description: c.description || '', host: c });
+  }
+  return rows;
+}
+export function filterCommands(rows, query = '') {
+  const q = (query || '').toLowerCase();
+  return rows.filter(c => c.name.replace(/^\//, '').toLowerCase().startsWith(q));
+}
+export function filterSources(rows, query = '') {
+  const q = (query || '').toLowerCase();
+  return (rows || []).filter(s => String(s.name || '').toLowerCase().includes(q));
+}
+
+// Send ⇄ stop glyph: one 7-point polygon morphing between an up arrow and a rounded square.
+const ARROW_UP = [12, 4.5, 18.5, 11, 14.25, 11, 14.25, 19.5, 9.75, 19.5, 9.75, 11, 5.5, 11];
+const SQUARE = [12, 6, 18, 6, 18, 12, 18, 18, 6, 18, 6, 12, 6, 6];
+export function morphPath(t) {
+  let d = '';
+  for (let i = 0; i < ARROW_UP.length; i += 2) {
+    const x = ARROW_UP[i] + (SQUARE[i] - ARROW_UP[i]) * t, y = ARROW_UP[i + 1] + (SQUARE[i + 1] - ARROW_UP[i + 1]) * t;
+    d += `${i ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  return `${d}Z`;
+}
+// cubic-bezier(x1, y1, x2, y2) as a function of progress (what motion's `ease: [..]` did upstream)
+export function cubicBezier(x1, y1, x2, y2) {
+  const bx = (t) => 3 * x1 * t * (1 - t) ** 2 + 3 * x2 * t * t * (1 - t) + t ** 3;
+  const by = (t) => 3 * y1 * t * (1 - t) ** 2 + 3 * y2 * t * t * (1 - t) + t ** 3;
+  return (x) => {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    let lo = 0, hi = 1, t = x;
+    for (let i = 0; i < 24; i++) { t = (lo + hi) / 2; if (bx(t) < x) lo = t; else hi = t; }
+    return by(t);
+  };
+}
+const EASE_IN_OUT = cubicBezier(0.77, 0, 0.175, 1);
+const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---------- Voice Pill: level meters ----------
+const VOICE_LOOP = 4.8;
+const SYLLABLES = [[0.1, 0.16, 0.9], [0.3, 0.12, 0.7], [0.5, 0.2, 1], [0.95, 0.14, 0.8], [1.15, 0.1, 0.6], [1.3, 0.22, 0.95], [1.9, 0.16, 0.85],
+  [2.12, 0.12, 0.7], [2.3, 0.18, 0.9], [2.55, 0.1, 0.5], [3.05, 0.24, 1], [3.4, 0.12, 0.75], [3.6, 0.16, 0.9]];
+const MIC_BINS = [[1, 4], [4, 11], [11, 33]];
+const MIC_GAIN = 2.2;
+// a speech-like envelope for `reactive: 'simulated'` (no microphone)
+export function simulatedLevel(t) {
+  const u = t % VOICE_LOOP;
+  let a = 0.06;
+  for (const [s, d, p] of SYLLABLES) { const x = (u - s) / d; if (x >= 0 && x <= 1) a = Math.max(a, p * 0.5 * (1 - Math.cos(2 * Math.PI * x))); }
+  return a * (0.7 + 0.3 * Math.abs(Math.sin(2 * Math.PI * 7.1 * u)));
+}
+// loudness 0…~1 from an AnalyserNode's byte spectrum (speech bands only)
+export function micLevel(buf) {
+  let total = 0;
+  for (const [lo, hi] of MIC_BINS) { let s = 0; for (let i = lo; i < hi; i++) s += buf[i] || 0; total += s / ((hi - lo) * 255); }
+  return (total / MIC_BINS.length) * MIC_GAIN;
+}
+export const voiceClock = (ms) => { const s = Math.floor(Math.max(0, ms) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+// Web Speech: the constructor when the browser has one (Chrome / Edge / Safari), else null
+export function speechRecognitionCtor(w = globalThis) { return w?.SpeechRecognition || w?.webkitSpeechRecognition || null; }
+// widget locale → recognition language
+export function speechLang(locale) {
+  const l = String(locale || '').trim();
+  if (/^zh/i.test(l)) return 'zh-CN';
+  if (/^ja/i.test(l)) return 'ja-JP';
+  if (/^en/i.test(l)) return 'en-US';
+  return l || 'zh-CN';
+}
+// draft text while dictating: what was there before + the recognised words (a space only between Latin words)
+export function joinDictation(base, text, lang = 'zh-CN') {
+  text = (text || '').trim(); base = base || '';
+  if (!text) return base;
+  if (!base || /\s$/.test(base)) return base + text;
+  return base + (/^(zh|ja)/i.test(lang) ? '' : ' ') + text;
+}
+export const VOICE_ERRORS = {
+  'not-allowed': '麦克风权限被拒绝：在浏览器的网站设置里允许使用麦克风后再试',
+  'service-not-allowed': '浏览器不允许这个页面使用语音识别',
+  'audio-capture': '没有找到可用的麦克风',
+  'no-speech': '没有听到声音',
+  network: '语音识别服务连不上（浏览器的语音识别需要联网）',
+  'language-not-supported': '浏览器不支持这种语言的语音识别',
+};
+
+async function openMic(s) {
+  const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!Ctx || !navigator.mediaDevices?.getUserMedia) return null;      // insecure context / very old browser: no levels
+  s.audio ??= { ctx: new Ctx() };
+  const a = s.audio;
+  if (a.ctx.state === 'suspended') a.ctx.resume?.();
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (!s.listening) { stream.getTracks().forEach(t => t.stop()); return null; }
+  a.stream = stream;
+  a.src = a.ctx.createMediaStreamSource(stream);
+  a.analyser = a.ctx.createAnalyser();
+  a.analyser.fftSize = 256;
+  a.analyser.smoothingTimeConstant = 0;
+  a.src.connect(a.analyser);
+  a.buf = new Uint8Array(a.analyser.frequencyBinCount);
+  return stream;
+}
+function closeMic(s) {
+  const a = s.audio;
+  if (!a?.stream) return;
+  a.stream.getTracks().forEach(t => t.stop());
+  a.src?.disconnect();
+  a.stream = a.src = a.analyser = a.buf = null;
+}
+
+export const VOICE_DEFAULTS = {
+  size: 28, shape: 'pill', reach: 8, showTime: true, waveform: true, slideToCancel: true, cancelDistance: 64,
+  attack: 40, release: 240, sensitivity: 1, floor: 0.1, openDuration: 200, pressScale: 0.95,
+  mode: 'auto', holdAfter: 300, reactive: 'mic', disabled: false, ariaLabel: '语音输入', cancelLabel: '取消',
+  accentColor: '', iconColor: '', background: '',
+};
+
+// Turns `btn` (an empty <button>) into a Voice Pill. opts = VOICE_DEFAULTS + onStart({source}),
+// onStop({reason, duration}) (reason: release | tap | key | escape | blur | disabled | mic-denied | cancel | unmount,
+// plus the host's own via api.stop(reason)), onError(err). mode 'auto': a press longer than holdAfter is hold-to-talk,
+// a short tap toggles; 'hold' / 'toggle' force one. reactive 'mic' draws the real microphone level (getUserMedia +
+// AnalyserNode), 'simulated' a speech-like envelope. Returns { start(), stop(reason), stream(), setDisabled(on),
+// destroy(), listening }.
+export function mountVoicePill(btn, options = {}) {
+  const c = { ...VOICE_DEFAULTS, ...options };
+  const size = Number(c.size) || 28;
+  const radius = c.shape === 'rounded' ? Math.round(size * 0.29) : size / 2;
+  const hit = Math.max(0, Math.min(10, (44 - size) / 2));
+  const timeSize = Math.max(10, Math.round(size * 0.36));
+  const clockW = c.showTime ? Math.round(timeSize * 2.5) + 4 : 0;
+  const waveW = c.waveform ? Math.round(size * 1.9) : 0;
+  btn.type = 'button';
+  btn.classList.add('bridge-voice');
+  btn.setAttribute('aria-label', c.ariaLabel); btn.title = c.ariaLabel;
+  btn.setAttribute('aria-pressed', 'false');
+  btn.dataset.state = 'idle'; btn.dataset.input = 'pointer';
+  if (c.showTime) btn.dataset.time = '';
+  const vars = { '--vp-size': `${size}px`, '--vp-radius': `${radius}px`, '--vp-reach': `${c.reach}px`, '--vp-extra': `${clockW + waveW}px`,
+    '--vp-clock-w': `${clockW}px`, '--vp-wave-w': `${waveW}px`, '--vp-stop': `${Math.round(size * 0.32)}px`,
+    '--vp-time-size': `${timeSize}px`, '--vp-open': `${c.openDuration}ms`, '--vp-press': String(c.pressScale), '--vp-hit': `${hit}px` };
+  if (c.accentColor) vars['--vp-accent'] = c.accentColor;
+  if (c.iconColor) vars['--vp-icon'] = c.iconColor;
+  if (c.background) vars['--vp-bg'] = c.background;
+  for (const [k, v] of Object.entries(vars)) btn.style.setProperty(k, v);
+  btn.innerHTML = '<span class="bridge-voice-capsule" aria-hidden="true"></span>'
+    + (c.waveform ? '<canvas class="bridge-voice-wave" aria-hidden="true"></canvas>' : '')
+    + (c.slideToCancel ? `<span class="bridge-voice-cancel" aria-hidden="true">${hugeicon('left', 12, 2.2)}<span>${esc(c.cancelLabel)}</span></span>` : '')
+    + (c.showTime ? '<span class="bridge-voice-time" aria-hidden="true">0:00</span>' : '')
+    + `<span class="bridge-voice-glyph"><span class="bridge-voice-mic">${hugeicon('mic', Math.round(size * 0.54), 2)}</span><span class="bridge-voice-stop" aria-hidden="true"></span></span>`;
+  const timeEl = btn.querySelector('.bridge-voice-time'), wave = btn.querySelector('.bridge-voice-wave');
+  const s = { listening: false, pointerId: null, ownPress: false, downX: 0, sliding: false, hist: [], tick: 0, acc: 0, downAt: 0, startedAt: 0,
+    raf: 0, last: 0, env: 0, t0: 0, audio: null, streamP: Promise.resolve(null), disabled: !!c.disabled, color: '' };
+  const WAVE_EVERY = 4, WAVE_MAX = 80;
+
+  function drawWave(level) {
+    const dpr = Math.min(2, globalThis.devicePixelRatio || 1);
+    const rect = wave.getBoundingClientRect();
+    const W = Math.max(1, Math.round(rect.width * dpr)), H = Math.max(1, Math.round(rect.height * dpr));
+    if (wave.width !== W || wave.height !== H) { wave.width = W; wave.height = H; }
+    const ctx = wave.getContext('2d'); if (!ctx) return;
+    s.acc = Math.max(s.acc, level);
+    s.tick = (s.tick + 1) % WAVE_EVERY;
+    if (s.tick === 0) { s.hist.push(s.acc); s.acc = 0; if (s.hist.length > WAVE_MAX) s.hist.shift(); }
+    const bw = 2 * dpr, step = 3 * dpr, shift = (s.tick / WAVE_EVERY) * step;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = s.color;
+    for (let i = 0; i < s.hist.length; i++) {
+      const v = s.hist[s.hist.length - 1 - i];
+      const x = W - (i + 1) * step - shift;
+      if (x + bw < 0) break;
+      const h = Math.max(bw, (c.floor + (1 - c.floor) * v) * H);
+      const t = Math.min(1, Math.max(0, (x + bw / 2) / (W * 0.55)));
+      ctx.globalAlpha = (0.35 + 0.65 * v) * t * t * (3 - 2 * t);
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, (H - h) / 2, bw, h, bw / 2); else ctx.rect(x, (H - h) / 2, bw, h);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  function frame(now) {
+    const dt = Math.min((now - s.last) / 1000, 0.05);
+    s.last = now;
+    let target = 0;
+    if (s.listening) {
+      if (s.audio?.analyser) { s.audio.analyser.getByteFrequencyData(s.audio.buf); target = micLevel(s.audio.buf); }
+      else if (c.reactive !== 'mic') target = simulatedLevel((now - s.t0) / 1000);
+    }
+    target = Math.min(1, target * c.sensitivity);
+    const tau = Math.max(1, target > s.env ? c.attack : c.release) / 1000;
+    s.env += (target - s.env) * (1 - Math.exp(-dt / tau));
+    if (s.listening && timeEl) { const text = voiceClock(now - s.startedAt); if (timeEl.textContent !== text) timeEl.textContent = text; }
+    if (s.listening && wave) drawWave(s.env);
+    s.raf = s.listening ? requestAnimationFrame(frame) : 0;
+  }
+  function begin(kind) {
+    if (s.listening || s.disabled) return;
+    s.listening = true;
+    s.hist = []; s.tick = 0; s.acc = 0; s.env = 0;
+    s.startedAt = s.t0 = s.last = performance.now();
+    if (timeEl) timeEl.textContent = '0:00';
+    btn.dataset.state = 'listening'; btn.dataset.input = kind; btn.setAttribute('aria-pressed', 'true');
+    s.color = getComputedStyle(btn).color;          // the accent, resolved (canvas can't read var())
+    if (!s.raf) s.raf = requestAnimationFrame(frame);
+    s.streamP = c.reactive === 'mic' ? openMic(s).catch((err) => { c.onError?.(err); end('mic-denied'); return null; }) : Promise.resolve(null);
+    c.onStart?.({ source: c.reactive });
+  }
+  function end(reason) {
+    if (!s.listening) return;
+    s.listening = false;
+    closeMic(s);
+    btn.dataset.state = 'idle'; btn.setAttribute('aria-pressed', 'false');
+    btn.dataset.input = reason === 'key' || reason === 'escape' ? 'key' : 'pointer';
+    c.onStop?.({ reason, duration: Math.round(performance.now() - s.startedAt) });
+  }
+  function settleSlide() {
+    s.sliding = false; delete btn.dataset.sliding;
+    btn.style.setProperty('--vp-slide', '0px'); btn.style.setProperty('--vp-cancel', '0');
+  }
+  const setPressed = (on) => { if (on) btn.dataset.pressed = ''; else delete btn.dataset.pressed; };
+  const onMove = (e) => {
+    if (s.pointerId !== e.pointerId || !c.slideToCancel || !s.listening || !s.ownPress) return;
+    const dx = e.clientX - s.downX;
+    if (!s.sliding && dx > -4) return;
+    s.sliding = true; btn.dataset.sliding = '';
+    const pull = Math.min(c.cancelDistance + 24, Math.max(0, -dx));
+    btn.style.setProperty('--vp-slide', `${-pull}px`);
+    const progress = Math.min(1, pull / c.cancelDistance);
+    btn.style.setProperty('--vp-cancel', progress.toFixed(3));
+    if (progress >= 1) { settleSlide(); end('cancel'); }
+  };
+  const onDown = (e) => {
+    if (s.disabled || e.button !== 0 || !e.isPrimary || s.pointerId !== null) return;
+    s.pointerId = e.pointerId; s.downX = e.clientX; s.downAt = performance.now();
+    try { btn.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+    setPressed(true);
+    s.ownPress = !s.listening;
+    if (!s.listening) begin('pointer');
+  };
+  const onUp = (e) => {
+    if (e.pointerId !== s.pointerId) return;
+    s.pointerId = null; setPressed(false);
+    if (s.sliding) settleSlide();
+    try { if (btn.hasPointerCapture(e.pointerId)) btn.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    if (!s.listening) return;
+    const held = performance.now() - s.downAt;
+    const isHold = c.mode === 'hold' || (c.mode === 'auto' && held >= c.holdAfter);
+    if (s.ownPress) { if (isHold) end('release'); }
+    else end(held < c.holdAfter ? 'tap' : 'release');
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { if (s.listening) { e.stopPropagation(); end('escape'); } return; }
+    if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); if (s.listening) end('key'); else begin('key'); }
+  };
+  const onClick = (e) => {   // keyboard / assistive "click" without a pointer
+    if (e.detail === 0 && s.pointerId === null && !e.pointerType) { if (s.listening) end('key'); else begin('key'); }
+  };
+  const onCtx = (e) => e.preventDefault();
+  const onBlur = () => { if (btn.dataset.pressed != null) { setPressed(false); s.pointerId = null; end('blur'); } };
+  const onVis = () => { if (document.hidden) onBlur(); };
+  btn.addEventListener('pointerdown', onDown); btn.addEventListener('pointermove', onMove);
+  btn.addEventListener('pointerup', onUp); btn.addEventListener('pointercancel', onUp); btn.addEventListener('lostpointercapture', onUp);
+  btn.addEventListener('keydown', onKey); btn.addEventListener('click', onClick); btn.addEventListener('contextmenu', onCtx);
+  globalThis.addEventListener?.('blur', onBlur); document.addEventListener('visibilitychange', onVis);
+  btn.disabled = s.disabled;
+  return {
+    start: () => begin('key'),
+    stop: (reason = 'key') => end(reason),
+    stream: () => s.streamP,
+    setDisabled(on) { s.disabled = !!on; btn.disabled = s.disabled; if (on) end('disabled'); },
+    get listening() { return s.listening; },
+    destroy() {
+      end('unmount'); cancelAnimationFrame(s.raf); s.audio?.ctx.close?.();
+      btn.removeEventListener('pointerdown', onDown); btn.removeEventListener('pointermove', onMove);
+      btn.removeEventListener('pointerup', onUp); btn.removeEventListener('pointercancel', onUp); btn.removeEventListener('lostpointercapture', onUp);
+      btn.removeEventListener('keydown', onKey); btn.removeEventListener('click', onClick); btn.removeEventListener('contextmenu', onCtx);
+      globalThis.removeEventListener?.('blur', onBlur); document.removeEventListener('visibilitychange', onVis);
+    },
+  };
+}
+
+// One dictation session into a text field. Web Speech by default (interim results shown live, finals kept), or the
+// host's `transcribe({ lang, stream, signal, onPartial })` → Promise<string> (stream = Promise<MediaStream|null>,
+// signal aborts when the user stops; signal.reason === 'cancel' means discard). Calls write(text) with the full
+// recognised text so far, done({ text, cancelled }) once, error(message) on failures.
+export function startDictation({ lang, transcribe = null, stream = null, write, done, error, Recognition = speechRecognitionCtor() }) {
+  let finals = '', interim = '', finished = false, cancelled = false;
+  const finish = () => { if (finished) return; finished = true; done?.({ text: cancelled ? '' : (finals + interim).trim(), cancelled }); };
+  if (typeof transcribe === 'function') {
+    const ctrl = new AbortController();
+    Promise.resolve().then(() => transcribe({ lang, stream, signal: ctrl.signal, onPartial: (t) => { if (!cancelled) { interim = t || ''; write?.(interim); } } }))
+      .then((t) => { if (!cancelled && t != null) { finals = String(t); interim = ''; } finish(); },
+        (e) => { if (!cancelled) error?.(e?.message || String(e)); finish(); });
+    return { stop(reason) { if (reason === 'cancel') cancelled = true; ctrl.abort(reason); if (cancelled) finish(); } };
+  }
+  const rec = new Recognition();
+  rec.lang = lang; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
+  rec.onresult = (e) => {
+    finals = ''; interim = '';
+    for (let i = 0; i < e.results.length; i++) { const r = e.results[i]; if (r.isFinal) finals += r[0].transcript; else interim += r[0].transcript; }
+    if (!cancelled) write?.(finals + interim);
+  };
+  rec.onerror = (e) => { if (e.error !== 'aborted' && !cancelled) error?.(VOICE_ERRORS[e.error] || `语音识别出错（${e.error}）`, e.error); };
+  rec.onend = finish;
+  try { rec.start(); } catch (e) { error?.(e.message); finish(); }
+  // after stop() the browser still delivers the last results, then `end`; don't hang if it never comes
+  return { stop(reason) { if (finished) return; if (reason === 'cancel') { cancelled = true; try { rec.abort(); } catch { /* ignore */ } finish(); return; }
+    try { rec.stop(); } catch { /* ignore */ } setTimeout(finish, 2500); } };
+}
+
+// ============================================================
 // Reference widget
 // ============================================================
 
 export function mountBridgeWidget(el, client, opts = {}) {
   const o = {
     scope: '', title: 'Claude', markdown: defaultMarkdown, showThreads: true, showSettings: true,
-    contextWindows: CONTEXT_WINDOWS, placeholder: '输入消息', prefsKey: 'bridge_ui', strings: {}, ...opts,
+    contextWindows: CONTEXT_WINDOWS, placeholder: '输入消息', prefsKey: 'bridge_ui', strings: {},
+    maxRows: 12, locale: '', voice: true, sources: null, commands: [], onSource: null, ...opts,
   };
   const S = { threadTitle: '新对话', helperOff: 'helper 离线：消息会排队', polling: '轮询模式',
     waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', empty: '问点什么吧', newThread: '＋ 新对话',
     rename: '重命名', pin: '置顶', unpin: '取消置顶', del: '删除对话', delConfirm: '删除这个对话？消息记录会一起删除。', delArm: '再点一次确认删除', renameLabel: '对话标题', save: '保存', cancel: '取消', stop: '停止', me: '我', assistant: 'Claude',
-    ctx: '自动带背景', ...o.strings };
+    ctx: '自动带背景', send: '发送', voice: '语音输入', listening: '正在听…', attach: '添加图片或来源', image: '图片', imageHint: '从本机选择，也可以粘贴或拖进来',
+    model: '模型', effort: '思考深度', effortDefault: '默认', faster: '更快', smarter: '更聪明', effortHelp: '越深想得越久再回答；「默认」跟随 helper 的 claude 配置',
+    noMatch: '没有匹配', compactArm: '再点一次确认压缩', compactWarn: 'Claude 会把这段对话的历史压缩成摘要：细节会丢失，但上下文会明显变小。', ...o.strings };
+  // voice input: on unless the host says `voice: false`; shown only where it can work (Web Speech, or the host's transcriber)
+  const voiceCfg = o.voice === false ? null : (o.voice && typeof o.voice === 'object' ? o.voice : {});
+  const voiceOn = !!voiceCfg && (typeof voiceCfg.transcribe === 'function' || !!speechRecognitionCtor());
+  const hasSources = () => typeof o.sources === 'function' || (Array.isArray(o.sources) && o.sources.length > 0);
   const prefs = loadPrefs(o.prefsKey);
+  const menuId = `bridge-pb-menu-${++dlgSeq}`;
 
   el.innerHTML = `
     <div class="bridge ${o.showThreads ? '' : 'no-side'}${o.fill ? ' fill' : ''}">
@@ -1029,19 +1423,22 @@ export function mountBridgeWidget(el, client, opts = {}) {
           <div class="bridge-menu" hidden><button type="button" data-act="rename">${esc(S.rename)}</button><button type="button" data-act="pin">${esc(S.pin)}</button><button type="button" class="danger" data-act="del">${esc(S.del)}</button><p class="bridge-menu-warn" role="alert" hidden></p></div>` : ''}
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
-        <form class="bridge-form">
+        <form class="bridge-form bridge-pb">
           <div class="bridge-grip" title="拖动调整输入框高度，双击恢复自动"></div>
+          <div class="bridge-pb-menu" id="${menuId}" hidden></div>
+          <canvas class="bridge-pb-sparks" aria-hidden="true"></canvas>
           <div class="bridge-tray" hidden></div>
-          <textarea class="bridge-input" rows="1" placeholder="${esc(o.placeholder)}"></textarea>
+          <textarea class="bridge-input" rows="1" placeholder="${esc(o.placeholder)}" aria-label="${esc(o.placeholder)}" aria-controls="${menuId}" aria-autocomplete="list"></textarea>
           <div class="bridge-bar">
             <button type="button" class="bridge-icon" data-act="prefs" title="设置" aria-label="设置"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h7M13 4h1M2 8h2M8 8h6M2 12h8"/><circle cx="11" cy="4" r="1.7"/><circle cx="6" cy="8" r="1.7"/><circle cx="12" cy="12" r="1.7"/></svg></button>
-            <button type="button" class="bridge-icon" data-act="attach" title="添加图片（也可以粘贴、拖进来）" aria-label="添加图片" hidden>${IMAGE_ICON}</button>
+            <button type="button" class="bridge-icon bridge-pb-tool" data-pb="plus" title="${esc(S.attach)}" aria-label="${esc(S.attach)}" aria-expanded="false" hidden>${hugeicon('plus', 16, 2)}</button>
             <input type="file" class="bridge-file" accept="image/*" multiple hidden />
+            ${o.showSettings ? `<button type="button" class="bridge-pb-pick" data-pb="model" title="${esc(S.model)}" aria-label="${esc(S.model)}" aria-haspopup="listbox" aria-expanded="false" hidden><span class="lbl"></span>${hugeicon('chevron', 12, 2.4)}</button>`
+              + `<button type="button" class="bridge-pb-pick" data-pb="effort" title="${esc(S.effort)}" aria-label="${esc(S.effort)}" aria-haspopup="dialog" aria-expanded="false" hidden>${hugeicon('sparkles', 13, 2)}<span class="lbl"></span></button>` : ''}
             <span class="grow"></span>
-            ${o.showSettings ? `<select class="bridge-pick" data-set="effort" title="思考深度"></select><select class="bridge-pick" data-set="model" title="模型"></select>` : ''}
             <button type="button" class="bridge-pill" data-act="ctx" hidden title="当前会话上下文占用，点开看构成与额度"><span class="pct"></span><i class="ring"></i></button>
-            <button type="button" class="bridge-btn bridge-stop" hidden title="${esc(S.stop)}" aria-label="${esc(S.stop)}"><svg viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg></button>
-            <button type="submit" class="bridge-btn bridge-send" title="发送" aria-label="发送"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3.5M3.8 7.7 8 3.5l4.2 4.2"/></svg></button>
+            ${voiceOn ? '<button type="button" class="bridge-pb-voice"></button>' : ''}
+            <button type="submit" class="bridge-btn bridge-send" title="${esc(S.send)}" aria-label="${esc(S.send)}" disabled><svg class="bridge-pb-glyph" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="${morphPath(0)}"/></svg></button>
           </div>
         </form>
       </div>
@@ -1056,11 +1453,14 @@ export function mountBridgeWidget(el, client, opts = {}) {
   const scrim = document.createElement('div'); scrim.className = 'bridge-scrim'; scrim.hidden = true; document.body.appendChild(scrim);
 
   const $ = (sel) => el.querySelector(sel);
-  const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), stopBtn = $('.bridge-stop'), pill = $('[data-act="ctx"]');
+  const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), pill = $('[data-act="ctx"]');
+  const form = $('.bridge-form'), pbMenu = $('.bridge-pb-menu'), fileInput = $('.bridge-file'), plusBtn = $('[data-pb="plus"]');
+  let voice = null;      // Voice Pill api (set up with the composer below)
   const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null, job: null, ticker: null };
+  // the ＋ button opens the file picker itself (or the sources menu when the host gave sources), so no `button` here
   const att = mountAttachments({
-    button: $('[data-act="attach"]'), input: $('.bridge-file'), tray: $('.bridge-tray'), textarea: input, dropZone: $('.bridge-form'), client,
-    onChange: ({ busy }) => { sendBtn.disabled = !!state.inflight || busy; }, onError: (msg) => toast(msg, true),
+    input: fileInput, tray: $('.bridge-tray'), textarea: input, dropZone: form, client,
+    onChange: () => syncSend(), onError: (msg) => toast(msg, true),
   });
 
   // ---------- helpers ----------
@@ -1077,9 +1477,8 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   function setPending(on) {
     state.inflight = on ? state.inflight : null;
-    sendBtn.disabled = !!on || att.busy();
-    stopBtn.hidden = !on;
-    input.placeholder = on ? 'Claude 正在回答，稍等…' : placeholder();
+    syncSend();
+    if (!voice?.listening) input.placeholder = on ? 'Claude 正在回答，稍等…' : placeholder();
   }
 
   function usePrefs(key) {
@@ -1087,7 +1486,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     savePrefs(prefs, o.prefsKey);
     if (key === 'sendKey' || !key) input.placeholder = state.inflight ? input.placeholder : placeholder();
     if (key === 'timestamps' || key === 'toolsOpen' || !key) for (const id of state.order) paint(id);
-    if (key === 'inputH' || !key) { if (prefs.inputH) { input.style.height = `${prefs.inputH}px`; input.classList.add('fixed'); } else { input.classList.remove('fixed'); autoGrow(); } }
+    if (key === 'inputH' || !key) { if (prefs.inputH) { input.style.height = `${prefs.inputH}px`; input.style.overflowY = ''; input.classList.add('fixed'); } else { input.classList.remove('fixed'); autoGrow(); } }
   }
 
   // ---------- rendering ----------
@@ -1225,12 +1624,12 @@ export function mountBridgeWidget(el, client, opts = {}) {
     try {
       const s = await client.settings();
       state.settings = s;
-      const model = $('.bridge-bar [data-set="model"]'), effort = $('.bridge-bar [data-set="effort"]');
-      model.innerHTML = modelOptionsHtml(s.models, s.chat.model);
-      effort.innerHTML = s.efforts.map(e => `<option value="${esc(e)}">${e ? esc(e) : '默认'}</option>`).join('');
-      effort.value = s.chat.effort || '';
+      cp.effort = s.chat.effort || '';
+      renderPickers();
+      if (cp.menu === 'model' || cp.menu === 'effort') renderMenu();
       renderAgent(s.agent);
       att.setEnabled(!!s.uploads?.enabled);
+      cp.uploads = !!s.uploads?.enabled; plusBtn.hidden = !(cp.uploads || hasSources());
       if (s.uploads) att.setLimits({ maxBytes: s.uploads.max_bytes, maxFiles: s.uploads.max_files });
     } catch (e) { toast(e.message, true); }
   }
@@ -1261,6 +1660,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   // ---------- actions ----------
   async function send() {
+    if (voice?.listening) { voice.stop('key'); return; }   // Enter while dictating ends the dictation; send after a look
     const text = input.value.trim();
     if (att.busy()) { toast('图片还在上传，稍等'); return; }
     if (!text && !att.ids().length) return;
@@ -1268,16 +1668,397 @@ export function mountBridgeWidget(el, client, opts = {}) {
     try {
       const files = att.ids();
       const r = await client.send(text, state.thread ? { thread: state.thread, files } : { scope: o.scope, files });
-      input.value = ''; autoGrow(); att.clear();
+      input.value = ''; autoGrow(); att.clear(); closeMenu(); cp.dismissed = false;
       if (r.thread !== state.thread) subscribe(r.thread);
-    } catch (e) { toast(e.message, true); sendBtn.disabled = false; }
+    } catch (e) { toast(e.message, true); }
+    syncSend();
   }
-  function autoGrow() { if (prefs.inputH) return; input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px'; }
+  // grows with the text up to maxRows lines (and never past 40% of the viewport), then scrolls
+  function autoGrow() {
+    if (prefs.inputH) return;
+    const cs = getComputedStyle(input);
+    const line = parseFloat(cs.lineHeight) || 20, pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    const cap = Math.min(line * Math.max(1, Number(o.maxRows) || 12) + pad, window.innerHeight * 0.4);
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, cap)}px`;
+    input.style.overflowY = input.scrollHeight > cap + 1 ? 'auto' : 'hidden';
+  }
+  async function newThread() { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); root.classList.remove('side-open'); }
 
-  $('.bridge-form').addEventListener('submit', (e) => { e.preventDefault(); send(); });
-  input.addEventListener('keydown', (e) => { if (isSendKey(e, prefs)) { e.preventDefault(); send(); } });
-  input.addEventListener('input', autoGrow);
-  stopBtn.addEventListener('click', async () => { if (!state.inflight) return; try { await client.cancel(state.inflight); } catch (e) { toast(e.message, true); } });
+  // ============ composer (Prompt Bar) ============
+  // cp.menu: null | 'slash' | 'at' | 'plus' | 'model' | 'effort'. List menus keep focus in the textarea (↑↓ / Enter / Tab
+  // / Esc work there); the effort menu is a slider that takes focus.
+  const cp = { menu: null, rows: [], cursor: 0, token: null, dismissed: false, armed: null, armTimer: 0, uploads: false, effort: '',
+    effortTimer: 0, srcSeq: 0, lastOpen: null, glyphT: 0, glyphRaf: 0, busy: false, sparks: null, energy: 0, strokes: 0 };
+  const caretText = () => input.value.slice(0, input.selectionStart ?? input.value.length);
+  const optionRows = () => cp.rows.filter(r => r.kind !== 'group' && r.kind !== 'sep');
+  const setExpanded = () => {
+    for (const b of form.querySelectorAll('[data-pb]')) {
+      const on = cp.menu === b.dataset.pb;
+      b.setAttribute('aria-expanded', String(on));
+      if (on) b.dataset.on = ''; else delete b.dataset.on;
+    }
+    input.setAttribute('aria-expanded', String(!!cp.menu && cp.menu !== 'effort'));
+  };
+
+  function syncSend() {
+    const busy = !!state.inflight;
+    const can = !!input.value.trim() || att.count() > 0;
+    const armed = busy || can;
+    if (armed) sendBtn.dataset.armed = ''; else delete sendBtn.dataset.armed;
+    sendBtn.disabled = !armed || (!busy && att.busy());
+    const label = busy ? S.stop : S.send;
+    sendBtn.title = label; sendBtn.setAttribute('aria-label', label);
+    if (busy) form.dataset.busy = ''; else delete form.dataset.busy;
+    if (busy !== cp.busy) { cp.busy = busy; morphGlyph(busy ? 1 : 0); }
+  }
+  // arrow ⇄ square with a little squash and tilt halfway (upstream: motion + ease [.77,0,.175,1], 240 ms)
+  function morphGlyph(target) {
+    const svg = sendBtn.querySelector('svg'), path = svg.querySelector('path');
+    cancelAnimationFrame(cp.glyphRaf);
+    const from = cp.glyphT, dir = target > from ? 1 : -1, dur = Number(o.morphDuration) || 240;
+    const squash = o.squash ?? 0.12, tilt = o.tilt ?? 8;
+    const paintAt = (t) => {
+      cp.glyphT = t;
+      path.setAttribute('d', morphPath(t));
+      const goo = reducedMotion() ? 0 : Math.sin(t * Math.PI), sx = 1 - squash * goo;
+      svg.style.transform = goo ? `rotate(${dir * tilt * goo}deg) scale(${sx}, ${1 / sx})` : '';
+    };
+    if (reducedMotion() || from === target) { paintAt(target); return; }
+    const t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / dur);
+      paintAt(from + (target - from) * EASE_IN_OUT(k));
+      cp.glyphRaf = k < 1 ? requestAnimationFrame(step) : 0;
+    };
+    cp.glyphRaf = requestAnimationFrame(step);
+  }
+
+  // ---------- pickers: model / effort (same data as the ⚙ selects) ----------
+  function renderPickers() {
+    const s = state.settings;
+    const mb = $('[data-pb="model"]'), eb = $('[data-pb="effort"]');
+    if (!mb || !eb) return;
+    mb.hidden = !s || !(s.models || []).length;
+    eb.hidden = !s || !(s.efforts || []).length;
+    if (!s) return;
+    const label = modelLabel(s.models, s.chat.model);
+    mb.querySelector('.lbl').textContent = label; mb.title = `${S.model}：${label}`;
+    const es = effortState(s.efforts, cp.effort);
+    eb.querySelector('.lbl').textContent = cp.effort || S.effortDefault; eb.title = `${S.effort}：${cp.effort || S.effortDefault}`;
+    if (es.maxed) { eb.dataset.max = ''; form.dataset.max = ''; } else { delete eb.dataset.max; delete form.dataset.max; }
+    sparks(es.maxed);
+  }
+
+  // ---------- menus ----------
+  function closeMenu() {
+    if (!cp.menu) return;
+    cp.menu = null; cp.rows = []; cp.token = null; cp.lastOpen = null;
+    clearTimeout(cp.armTimer); cp.armed = null;
+    pbMenu.hidden = true; pbMenu.innerHTML = '';
+    input.removeAttribute('aria-activedescendant');
+    setExpanded();
+  }
+  function openMenu(kind, rows = [], token = null, cursor = 0) {
+    const fresh = cp.menu !== kind;
+    cp.menu = kind; cp.rows = rows; cp.token = token;
+    if (fresh) { clearTimeout(cp.armTimer); cp.armed = null; }
+    const n = optionRows().length;
+    cp.cursor = Math.max(0, Math.min(fresh ? cursor : cp.cursor, n - 1));
+    renderMenu();
+    setExpanded();
+  }
+  function commandRows() { return composerCommands({ hasThread: !!state.thread, settings: !!(o.showSettings && state.settings), extra: o.commands || [] }); }
+  async function sourceRows(query) {
+    if (typeof o.sources === 'function') return (await o.sources(query)) || [];
+    return filterSources(o.sources, query);
+  }
+  // what the text before the caret asks for: `/cmd` → commands, `@src` → sources (only when the host gave any)
+  async function syncToken() {
+    if (cp.menu && !['slash', 'at'].includes(cp.menu)) return;
+    const tok = cp.dismissed ? null : parseToken(caretText());
+    if (tok?.kind === 'slash' && o.commands !== false) { openMenu('slash', filterCommands(commandRows(), tok.query), tok); return; }
+    if (tok?.kind === 'at' && hasSources()) {
+      const seq = ++cp.srcSeq;
+      let rows = [];
+      try { rows = await sourceRows(tok.query); } catch (e) { toast(e.message, true); }
+      if (seq === cp.srcSeq && parseToken(caretText())?.kind === 'at' && !cp.dismissed) openMenu('at', rows.map((r, i) => ({ key: r.key ?? `s${i}`, ...r })), tok);
+      return;
+    }
+    if (cp.menu) closeMenu();
+  }
+  function renderMenu() {
+    const kind = cp.menu;
+    if (!kind) return;
+    pbMenu.hidden = false; pbMenu.dataset.kind = kind;
+    if (kind === 'effort') { renderEffort(); return; }
+    pbMenu.setAttribute('role', 'listbox');
+    pbMenu.setAttribute('aria-label', { slash: '命令', at: '来源', plus: '添加', model: S.model }[kind]);
+    let oi = -1;
+    const html = cp.rows.map((r) => {
+      if (r.kind === 'group') return `<div class="bridge-pb-group" role="presentation">${esc(r.label)}</div>`;
+      if (r.kind === 'sep') return '<div class="bridge-pb-sep" role="presentation"></div>';
+      oi++;
+      const armed = kind === 'slash' && cp.armed === r.key;
+      const icon = kind === 'at' || kind === 'plus'
+        ? `<span class="bridge-pb-row-icon">${r.attach ? hugeicon('image', 15) : (r.icon && /^\s*</.test(r.icon) ? r.icon : hugeicon(r.icon || 'file', 15))}</span>` : '';
+      const tail = kind === 'model' ? `${r.tag ? `<span class="bridge-pb-row-tag">${esc(r.tag)}</span>` : ''}<span class="bridge-pb-row-check"${r.selected ? ' data-on' : ''}>${hugeicon('tick', 13, 2.5)}</span>` : '';
+      return `<button type="button" role="option" id="${menuId}-o${oi}" class="bridge-pb-row${armed ? ' armed' : ''}${r.unknown ? ' unknown' : ''}" data-i="${oi}" aria-selected="${oi === cp.cursor}"${r.disabled ? ' aria-disabled="true"' : ''}>`
+        + `${icon}<span class="bridge-pb-row-name">${esc(armed ? S.compactArm : r.name)}</span>`
+        + `${r.description && !armed ? `<span class="bridge-pb-row-desc">${esc(r.description)}</span>` : ''}${tail}</button>`;
+    }).join('');
+    const warn = kind === 'slash' && cp.armed ? `<p class="bridge-pb-warn" role="alert">${esc(S.compactWarn)}</p>` : '';
+    pbMenu.innerHTML = `<span class="bridge-pb-glow" aria-hidden="true"></span>${html}`
+      + (oi < 0 ? `<div class="bridge-pb-empty">${esc(S.noMatch)}${cp.token?.query ? `「${esc(cp.token.query)}」` : ''}</div>` : '') + warn;
+    placeGlow();
+  }
+  function placeGlow() {
+    const glow = pbMenu.querySelector('.bridge-pb-glow'); if (!glow) return;
+    const row = pbMenu.querySelector(`.bridge-pb-row[data-i="${cp.cursor}"]`);
+    for (const b of pbMenu.querySelectorAll('.bridge-pb-row')) b.setAttribute('aria-selected', String(b === row));
+    if (!row) { glow.style.opacity = '0'; input.removeAttribute('aria-activedescendant'); return; }
+    input.setAttribute('aria-activedescendant', row.id);
+    const fresh = cp.lastOpen !== cp.menu; cp.lastOpen = cp.menu;
+    if (fresh) glow.style.transition = 'none';
+    glow.style.top = `${row.offsetTop}px`; glow.style.height = `${row.offsetHeight}px`; glow.style.opacity = '1';
+    if (fresh) { void glow.offsetHeight; glow.style.transition = ''; }
+    const top = row.offsetTop, bottom = top + row.offsetHeight;
+    if (top < pbMenu.scrollTop) pbMenu.scrollTop = top - 4;
+    else if (bottom > pbMenu.scrollTop + pbMenu.clientHeight) pbMenu.scrollTop = bottom - pbMenu.clientHeight + 4;
+  }
+  // replace the `/…` or `@…` being typed with `text`
+  function replaceToken(text) {
+    const caret = input.selectionStart ?? input.value.length;
+    const start = cp.token ? cp.token.start : caret;
+    input.value = input.value.slice(0, start) + text + input.value.slice(caret);
+    const at = start + text.length;
+    input.setSelectionRange(at, at);
+    autoGrow(); syncSend();
+  }
+  async function pick(i) {
+    const r = optionRows()[i]; if (!r || r.disabled) return;
+    const kind = cp.menu;
+    if (kind === 'model') {
+      closeMenu(); input.focus({ preventScroll: true });
+      if (state.settings && r.key !== (state.settings.chat.model || '')) { state.settings.chat.model = r.key; renderPickers(); saveSetting({ model: r.key }); }
+      return;
+    }
+    if (kind === 'at' || kind === 'plus') {
+      if (kind === 'at') replaceToken('');
+      closeMenu(); cp.dismissed = false;
+      if (r.attach) { fileInput.click(); return; }
+      replaceToken(r.insert ?? `@${r.name} `);
+      input.focus({ preventScroll: true });
+      try { await (r.onPick?.(r) ?? o.onSource?.(r)); } catch (e) { toast(e.message, true); }
+      return;
+    }
+    // slash: commands are actions; the typed `/word` is removed when one runs
+    if (r.key === 'compact' && cp.armed !== 'compact') {
+      cp.armed = 'compact'; clearTimeout(cp.armTimer);
+      cp.armTimer = setTimeout(() => { cp.armed = null; if (cp.menu === 'slash') renderMenu(); }, 5000);
+      renderMenu(); return;
+    }
+    replaceToken(''); closeMenu();
+    try {
+      if (r.key === 'new') await newThread();
+      else if (r.key === 'compact') await ctxActions().onCompact();
+      else if (r.key === 'context') openPop('ctx', pill.hidden ? form : pill);
+      else if (r.key === 'model') openModel();
+      else if (r.key === 'effort') openEffort();
+      else if (r.host) { await r.host.run?.({ widget: api, thread: state.thread, input, toast }); autoGrow(); syncSend(); }
+    } catch (e) { toast(e.message, true); }
+    if (r.key !== 'effort' && r.key !== 'context') input.focus({ preventScroll: true });
+  }
+  function openModel() {
+    if (!state.settings) return;
+    const rows = modelMenuRows(state.settings.models, state.settings.chat.model);
+    const sel = rows.filter(r => r.kind === 'model').findIndex(r => r.selected);
+    openMenu('model', rows, null, Math.max(0, sel));
+  }
+  function openEffort() { if (state.settings) { openMenu('effort'); pbMenu.querySelector('.bridge-pb-track')?.focus({ preventScroll: true }); } }
+  function openPlus() {
+    const rows = [];
+    if (cp.uploads) rows.push({ key: '__attach', name: S.image, description: S.imageHint, attach: true });
+    Promise.resolve(hasSources() ? sourceRows('') : []).then((src) => openMenu('plus', [...rows, ...src.map((r, i) => ({ key: r.key ?? `s${i}`, ...r }))]))
+      .catch(e => toast(e.message, true));
+  }
+
+  // effort: a stepped slider (Faster → Smarter) over the non-empty levels, plus 「默认」 = the CLI's own default
+  const EDGE = 11;
+  function renderEffort() {
+    const refocus = !!document.activeElement?.closest?.('.bridge-pb-track');
+    const es = effortState(state.settings?.efforts, cp.effort), n = es.steps.length;
+    const stepAt = (i) => `calc(${EDGE}px + (100% - ${EDGE * 2}px) * ${i / Math.max(1, n - 1)})`;
+    const fill = es.index < 0 ? '0px' : es.index === n - 1 ? '100%' : `calc(${stepAt(es.index)} + 7px)`;
+    pbMenu.setAttribute('role', 'dialog'); pbMenu.setAttribute('aria-label', S.effort);
+    pbMenu.innerHTML = `<div class="bridge-pb-effort-head"><span class="bridge-pb-effort-title">${esc(S.effort)}</span>`
+      + `<span class="bridge-pb-effort-level">${esc(cp.effort || S.effortDefault)}</span>`
+      + (es.hasDefault ? `<button type="button" class="bridge-pb-effort-reset"${es.index < 0 ? ' disabled' : ''}>${esc(S.effortDefault)}</button>` : '')
+      + `<span class="bridge-pb-effort-help" title="${esc(S.effortHelp)}">${hugeicon('help', 14)}</span></div>`
+      + `<div class="bridge-pb-effort-ends"><span>${esc(S.faster)}</span><span>${esc(S.smarter)}</span></div>`
+      + `<div class="bridge-pb-track${es.index < 0 ? ' unset' : ''}" role="slider" tabindex="0" aria-label="${esc(S.effort)}" aria-valuemin="0" aria-valuemax="${Math.max(0, n - 1)}"`
+      + ` aria-valuenow="${Math.max(0, es.index)}" aria-valuetext="${esc(cp.effort || S.effortDefault)}" style="--pb-effort-x:${es.index < 0 ? stepAt(0) : stepAt(es.index)};--pb-effort-fill:${fill}">`
+      + `<span class="bridge-pb-effort-fill"></span>${es.steps.map((_, i) => `<i class="bridge-pb-effort-dot" style="left:${stepAt(i)}"></i>`).join('')}<span class="bridge-pb-effort-thumb"></span></div>`;
+    if (refocus) pbMenu.querySelector('.bridge-pb-track')?.focus({ preventScroll: true });
+  }
+  function setEffort(v) {
+    if (v === cp.effort) return;
+    cp.effort = v;
+    renderPickers(); if (cp.menu === 'effort') renderEffort();
+    clearTimeout(cp.effortTimer);   // dragging across levels saves once, where it stops
+    cp.effortTimer = setTimeout(() => { if (state.settings && (state.settings.chat.effort || '') !== cp.effort) { state.settings.chat.effort = cp.effort; saveSetting({ effort: cp.effort }); } }, 450);
+  }
+  const effortSteps = () => effortState(state.settings?.efforts, cp.effort);
+  function effortFromPointer(e, track) {
+    const { steps } = effortSteps(); if (!steps.length) return;
+    const rect = track.getBoundingClientRect();
+    const k = (e.clientX - rect.left - EDGE) / Math.max(1, rect.width - 2 * EDGE);
+    setEffort(steps[Math.max(0, Math.min(steps.length - 1, Math.round(k * (steps.length - 1))))]);
+  }
+  pbMenu.addEventListener('pointerdown', (e) => {
+    const track = e.target.closest('.bridge-pb-track');
+    if (track && e.button === 0) { try { track.setPointerCapture(e.pointerId); } catch { /* ignore */ } track.focus({ preventScroll: true }); effortFromPointer(e, track); e.preventDefault(); }
+  });
+  pbMenu.addEventListener('pointermove', (e) => { const track = e.target.closest('.bridge-pb-track'); if (track && (e.buttons & 1)) effortFromPointer(e, track); });
+  pbMenu.addEventListener('keydown', (e) => {
+    if (!e.target.closest('.bridge-pb-track')) { if (e.key === 'Escape') { closeMenu(); input.focus(); } return; }
+    const { steps, index } = effortSteps(); const last = steps.length - 1;
+    const go = (i) => { e.preventDefault(); setEffort(steps[Math.max(0, Math.min(last, i))]); };
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') go(index + 1);
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') go(index < 0 ? 0 : index - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(last);
+    else if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); closeMenu(); input.focus({ preventScroll: true }); }
+  });
+  pbMenu.addEventListener('mousedown', (e) => { if (e.target.closest('.bridge-pb-row')) e.preventDefault(); });   // keep the caret in the textarea
+  pbMenu.addEventListener('pointerover', (e) => { const r = e.target.closest('.bridge-pb-row'); if (r && Number(r.dataset.i) !== cp.cursor) { cp.cursor = Number(r.dataset.i); placeGlow(); } });
+  pbMenu.addEventListener('click', (e) => {
+    if (e.target.closest('.bridge-pb-effort-reset')) { setEffort(''); return; }
+    const r = e.target.closest('.bridge-pb-row'); if (r) pick(Number(r.dataset.i));
+  });
+  form.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-pb]'); if (!b) return;
+    const kind = b.dataset.pb;
+    if (cp.menu === kind) { closeMenu(); input.focus({ preventScroll: true }); return; }
+    closeMenu(); closePops();
+    if (kind === 'model') openModel();
+    else if (kind === 'effort') openEffort();
+    else if (kind === 'plus') { if (hasSources()) openPlus(); else if (cp.uploads) fileInput.click(); }
+    if (kind !== 'effort') input.focus({ preventScroll: true });
+  });
+  for (const b of form.querySelectorAll('[data-pb], .bridge-send')) b.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // ---------- sparks at the top effort level (upstream: canvas embers that speed up while typing) ----------
+  function sparks(on) {
+    const canvas = $('.bridge-pb-sparks');
+    if (!on || reducedMotion() || !canvas?.getContext) { if (cp.sparks) { cp.sparks(); cp.sparks = null; } return; }
+    if (cp.sparks) return;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const color = getComputedStyle(canvas).color;
+    let raf = 0, last = performance.now(), w = 0, h = 0, due = 0, speed = 1, pulse = 0;
+    const parts = [];
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect(), dpr = Math.min(2, globalThis.devicePixelRatio || 1);
+      w = rect.width; h = rect.height; canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    const spawn = (burst) => parts.push({ x: Math.random() * w, y: burst ? h * (0.2 + Math.random() * 0.8) : h + 3, r: 0.9 + Math.random() * 1.1,
+      vy: -(7 + Math.random() * 9), sway: (Math.random() - 0.5) * 10, phase: Math.random() * Math.PI * 2, life: burst ? Math.random() * 1.2 : 0, span: 2.4 + Math.random() * 2.4 });
+    const tick = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      cp.energy *= Math.exp(-dt / 0.8); pulse *= Math.exp(-dt / 0.16);
+      if (cp.strokes > 0) { cp.strokes = 0; pulse = 1; }
+      const energy = cp.energy;
+      speed += (1 + energy * 6 - speed) * (1 - Math.exp(-dt / 0.15));
+      due += dt;
+      while (due > 0.14) { due -= 0.14; if (parts.length < 30) spawn(false); }
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 6 + energy * 10 + pulse * 6;
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const p = parts[i]; p.life += dt;
+        if (p.life > p.span) { parts.splice(i, 1); continue; }
+        const k = p.life / p.span, twinkle = 0.7 + 0.3 * Math.sin((now / 160) * (1 + energy) + p.phase);
+        p.y += p.vy * dt * speed;
+        if (p.y < -4) { p.y = h + 3; p.x = Math.random() * w; }
+        const edge = Math.min(1, Math.max(0, p.y / 14), Math.max(0, (h - p.y) / 14));
+        ctx.globalAlpha = Math.min(1, Math.sin(k * Math.PI) * (0.9 + energy * 0.25) * twinkle) * edge;
+        ctx.beginPath();
+        ctx.arc(p.x + Math.sin((now / 900) * (1 + energy * 0.8) + p.phase) * p.sway, p.y, p.r * twinkle * (1 + energy * 0.35), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    resize();
+    for (let i = 0; i < 26; i++) spawn(true);
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null; ro?.observe(canvas);
+    raf = requestAnimationFrame(tick);
+    cp.sparks = () => { cancelAnimationFrame(raf); ro?.disconnect(); ctx.clearRect(0, 0, w, h); };
+  }
+
+  // ---------- voice (Voice Pill + Web Speech, or the host's transcriber) ----------
+  if (voiceOn) {
+    const vc = voiceCfg;
+    const lang = vc.lang || speechLang(o.locale || el.closest('[lang]')?.getAttribute('lang') || globalThis.navigator?.language);
+    const pillOpts = Object.fromEntries(Object.keys(VOICE_DEFAULTS).filter(k => vc[k] !== undefined).map(k => [k, vc[k]]));
+    let dict = null, base = '';
+    const settle = ({ text, cancelled }) => {
+      dict = null;
+      input.value = cancelled ? base : joinDictation(base, text, lang);
+      input.readOnly = false; delete form.dataset.listening;
+      input.placeholder = state.inflight ? 'Claude 正在回答，稍等…' : placeholder();
+      autoGrow(); syncSend();
+      if (voice.listening) voice.stop('ended');
+      if (!cancelled) { input.focus({ preventScroll: true }); const n = input.value.length; input.setSelectionRange(n, n); }
+      vc.onResult?.({ text: cancelled ? '' : text, cancelled });
+    };
+    voice = mountVoicePill($('.bridge-pb-voice'), {
+      ariaLabel: S.voice, ...pillOpts,
+      onStart: (info) => {
+        closeMenu();
+        base = input.value; input.readOnly = true; form.dataset.listening = ''; input.placeholder = S.listening;
+        dict = startDictation({
+          lang, transcribe: vc.transcribe || null, stream: vc.transcribe ? voice.stream() : null,
+          write: (t) => { input.value = joinDictation(base, t, lang); autoGrow(); syncSend(); },
+          done: settle,
+          error: (msg, code) => { toast(msg, true); if (voice.listening) voice.stop(code === 'not-allowed' ? 'mic-denied' : 'error'); },
+        });
+        vc.onStart?.(info);
+      },
+      onStop: (info) => { dict?.stop(info.reason === 'cancel' ? 'cancel' : info.reason); vc.onStop?.(info); },
+      onError: (err) => toast(err?.name === 'NotAllowedError' || err?.name === 'SecurityError' ? VOICE_ERRORS['not-allowed']
+        : err?.name === 'NotFoundError' ? VOICE_ERRORS['audio-capture'] : (err?.message || String(err)), true),
+    });
+  }
+
+  form.addEventListener('submit', (e) => { e.preventDefault(); if (state.inflight && e.submitter === sendBtn) return; send(); });
+  sendBtn.addEventListener('click', async (e) => {
+    if (!state.inflight) return;
+    e.preventDefault();       // busy: the same button is 停止
+    try { await client.cancel(state.inflight); } catch (err) { toast(err.message, true); }
+  });
+  sendBtn.addEventListener('pointerdown', (e) => { if (e.button === 0 && sendBtn.dataset.armed != null) sendBtn.dataset.pressed = ''; });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) sendBtn.addEventListener(t, () => { delete sendBtn.dataset.pressed; });
+  input.addEventListener('keydown', (e) => {
+    const composing = e.isComposing || e.keyCode === 229;
+    const list = cp.menu && cp.menu !== 'effort';
+    const n = list ? optionRows().length : 0;
+    if (list && n && !composing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); cp.cursor = (cp.cursor + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; placeGlow(); return; }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); pick(cp.cursor); return; }
+    }
+    if (e.key === 'Escape' && cp.menu) { e.preventDefault(); if (cp.menu === 'slash' || cp.menu === 'at') cp.dismissed = true; closeMenu(); return; }
+    if (isSendKey(e, prefs)) { e.preventDefault(); send(); }
+  });
+  input.addEventListener('input', () => {
+    autoGrow(); syncSend();
+    cp.energy = Math.min(1.6, cp.energy + 0.22); cp.strokes = Math.min(4, cp.strokes + 1);
+    cp.dismissed = false;
+    if (cp.menu && !['slash', 'at'].includes(cp.menu)) closeMenu();
+    syncToken();
+  });
+  // moving the caret (arrows / click) can enter or leave a `/…` / `@…` token
+  input.addEventListener('keyup', (e) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) syncToken(); });
+  input.addEventListener('click', () => { if (cp.menu && !['slash', 'at'].includes(cp.menu)) closeMenu(); else syncToken(); });
+  const offMenuOutside = onOutsidePointer('.bridge-form', () => closeMenu());
   // drag the grip above the input to fix its height; double-click restores auto-grow
   let h0 = 0;
   attachDrag($('.bridge-grip'), (_, dy) => { prefs.inputH = Math.max(40, Math.min(600, h0 - dy)); input.style.height = `${prefs.inputH}px`; input.classList.add('fixed'); }, () => usePrefs('inputH'));
@@ -1295,7 +2076,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (th) return openThread(th.dataset.id);
     if (!act) return;
     try {
-      if (act === 'new') { const r = await client.createThread({ scope: o.scope }); subscribe(r.thread); loadThreads(); root.classList.remove('side-open'); }
+      if (act === 'new') await newThread();
       else if (act === 'side-close') root.classList.remove('side-open');
       else if (act === 'side') { if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open'); else { prefs.sidebar = !prefs.sidebar; usePrefs('sidebar'); } }
       else if (act === 'menu') { const m = menu; const was = m.hidden; closePops(); disarmConfirm(m.querySelector('[data-act="del"]')); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
@@ -1327,13 +2108,16 @@ export function mountBridgeWidget(el, client, opts = {}) {
   document.addEventListener('keydown', onKey); document.addEventListener('visibilitychange', onVis);
 
   usePrefs();
+  plusBtn.hidden = !hasSources();
+  syncSend();
   loadSettings();
   if (o.showThreads) loadThreads();
   else client.threads(o.scope).then(d => d.current && subscribe(d.current)).catch(e => toast(e.message, true));
 
-  return {
+  const api = {
     destroy() {
       state.sub?.close(); clearInterval(state.ticker);
+      voice?.destroy(); sparks(false); cancelAnimationFrame(cp.glyphRaf); clearTimeout(cp.effortTimer); clearTimeout(cp.armTimer); offMenuOutside();
       offOutside(); document.removeEventListener('keydown', onKey); document.removeEventListener('visibilitychange', onVis);
       el.removeEventListener('click', onClick); el.removeEventListener('change', onSet); // the host may mount again into el
       for (const p of Object.values(pops)) p.remove();
@@ -1344,5 +2128,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     refresh() { loadThreads(); loadSettings(); },
     get thread() { return state.thread; },
     get prefs() { return prefs; },
+    get input() { return input; },
   };
+  return api;
 }

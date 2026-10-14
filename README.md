@@ -121,6 +121,38 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 
 只用传输层时调用 `client.subscribe(threadId, handlers)`。组件样式通过 `--bridge-*` CSS 变量覆盖；`bridge-widget.js` 还导出 `renderTurn`、`splitTurn` 等渲染函数，供宿主自行排版。
 
+### 输入框（Prompt Bar）与语音输入（Voice Pill）
+
+组件的输入框随内容自动长高（`maxRows` 行后滚动；拖动上沿可固定高度），发送按钮在回答进行中变形为停止键。底栏依次是：设置、＋（选图片，或在有来源时打开来源菜单）、模型与思考深度选择器（数据同 ⚙ 里的下拉框：「跟随 CLI 最新 / 固定版本」分组，helper 不认的已存值标注后保留）、上下文胶囊、麦克风、发送 / 停止。图片照旧可粘贴、拖放、选择，长截图自动切片。Enter 发送 / Shift+Enter 换行（或按偏好 ⌘/Ctrl+Enter），输入法组合中不发送。
+
+- 输入框开头敲 `/` 弹出命令：`/new`（新对话）、`/compact`（压缩会话，菜单里再确认一次）、`/context`（上下文构成与额度）、`/model`、`/effort`；↑↓ 选择，Enter / Tab 执行，Esc 关闭。
+- 敲 `@` 弹出来源菜单——组件本身没有可引用的来源，缺省不出现；宿主传入 `sources` 后才启用。
+- 麦克风：点一下开始 / 再点结束，按住超过 300ms 则松开即结束，按住时向左滑取消（恢复原文）；胶囊里显示实时音量条与计时。转写用浏览器的 Web Speech API（`SpeechRecognition` / `webkitSpeechRecognition`），说话时中间结果实时写入输入框，结束后定稿；音量条用 `getUserMedia` + `AnalyserNode`。浏览器不支持语音识别时不显示麦克风；麦克风权限被拒时给出提示。识别语言跟随 `locale`。
+
+| 选项 | 缺省 | 说明 |
+|---|---|---|
+| `maxRows` | `12` | 输入框自动长高的最大行数（同时不超过视口 40%） |
+| `locale` | 挂载点最近的 `lang`，否则浏览器语言 | 决定语音识别语言：`zh*` → `zh-CN`，`ja*` → `ja-JP`，`en*` → `en-US`，其他原样 |
+| `commands` | `[]` | 追加的 `/` 命令：`[{ name: '/report', description, run({ widget, thread, input, toast }) }]`；传 `false` 关闭 `/` 菜单 |
+| `sources` | `null` | `@` 来源：数组 `[{ key, name, description?, icon?, insert?, onPick? }]`，或函数 `(query) => 数组或 Promise`。`icon` 为内置图标名（`file` / `image`）或一段 SVG；选中后把 `insert`（缺省 `@名称 `）插入输入框并调用 `onPick(source)` |
+| `onSource` | `null` | 来源未带 `onPick` 时的统一回调 `(source) => …` |
+| `voice` | `true` | `false` 关闭语音；或对象 `{ lang, transcribe, mode, holdAfter, slideToCancel, cancelDistance, showTime, waveform, reactive, size, shape, reach, attack, release, sensitivity, floor, openDuration, pressScale, accentColor, iconColor, background, ariaLabel, onStart, onStop, onResult }` |
+
+自定义转写：`voice.transcribe({ lang, stream, signal, onPartial })` 返回 `Promise<string>`（最终文本）。`stream` 是 `Promise<MediaStream | null>`（组件为音量条打开的麦克风流），`onPartial(text)` 把中间结果写进输入框，用户结束时 `signal` 中止（`signal.reason === 'cancel'` 表示取消、结果丢弃）。提供 `transcribe` 时即使浏览器没有 Web Speech 也显示麦克风。
+
+```js
+mountBridgeWidget(el, client, {
+  locale: 'ja-JP',
+  sources: [{ key: 'spec', name: '设计稿', description: '本周的设计文档' }],
+  onSource: (s) => console.log('引用', s.key),
+  voice: { mode: 'toggle', transcribe: async ({ stream, signal, onPartial }) => myAsr(await stream, signal, onPartial) },
+});
+```
+
+样式变量新增 `--bridge-spark`（思考深度最高档时的光点，缺省 `--bridge-accent`）、`--bridge-menu`（菜单底色）、`--bridge-send-bg` / `--bridge-send-fg`（发送键）、`--bridge-voice-bg`（语音胶囊）。拆开用时可直接调用导出的 `mountVoicePill(button, opts)` 与 `startDictation(opts)`。
+
+输入框与语音胶囊移植自 [React Bits](https://reactbits.dev) 的 Prompt Bar 与 Voice Pill（MIT + Commons Clause），图标路径来自 [Hugeicons](https://hugeicons.com) free（MIT）。
+
 ## HTTP API
 
 浏览器路由（前缀由宿主决定）：

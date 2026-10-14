@@ -2,7 +2,7 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
-## 未发布
+## v0.9.0 — 2026-10-14
 
 - **消息区状态可视化**（`bridge-widget.js/.css`；效果参照 React Bits 的 Call Chip / Status Mark / Lattice Loader，MIT + Commons Clause，用 CSS 与内联 SVG 重写，不依赖动画库与图标包）：
   - 工具调用行（含工具组）：运行中底色按计时逐渐填满（按工具类型有预期时长，可用 `expected` / 组件选项 `toolExpected` 覆盖），显示实时用时；结束变绿并收起填充，失败抖一下变红；展开后的命令 / 输出、失败 / 无结果、「执行中 · n/m」「执行了 N 条命令」等原有信息与交互不变
@@ -10,7 +10,13 @@
   - 每轮回答顶部和等待态用方格波浪加实时秒表，完成后定格为「已思考 12.3s」（中断则为「已中断，用时 …」）。时长优先取 `usage` 事件的 `duration_ms`，其次服务端事件 / 消息时间戳，再次客户端首帧到完成的差值；刷新页面后已完成的轮次仍显示，数据里没有时长则不显示
   - 计时与 `tickJobs` 合并：只有存在运行中的项且页面可见时才刷新；`prefers-reduced-motion` 下无动画，计时照常
   - 新导出 `messageStrings(lang)`（`zh` / `ja` / `en`）、`fmtDur`、`callProgress`、`turnTiming`、`latticeHtml`、`markHtml`、`TOOL_EXPECTED_MS`；`renderTurn` / `mountBridgeWidget` 新增 `lang`、`expected` / `toolExpected` 选项，`strings` 新增 `thought`、`stopped`
-  - 样式见 `bridge-widget.css` 末尾 `message-status` 段，旧的 `.bridge-run`、`.bridge-wait::after`、`@keyframes bridge-blink` 不再使用
+  - 样式见 `bridge-widget.css` 末尾 `message-status` 段；旧的 `.bridge-run` 圆点与 `.bridge-wait::after` 闪烁圆点规则已删除（`@keyframes bridge-blink` 仍用于流式输出末尾的光标）
+- **输入框换成 Prompt Bar**（移植自 React Bits，MIT + Commons Clause；`motion` 改为 CSS 过渡与 requestAnimationFrame，图标为 Hugeicons free 的内联 SVG）：随内容长高到 `maxRows` 行；发送键在回答进行中变形为停止键（原来的独立停止按钮 `.bridge-stop` 及其样式移除，`.bridge-send` 的旧样式由 `.bridge-pb .bridge-send` 取代）；底栏的模型 / 思考深度两个原生下拉框换成菜单与分档滑块（数据与分组同 `modelOptionsHtml`，「默认」单列一个按钮），最高档时输入框出现光点；窄屏下思考深度只显示图标（不再整个隐藏）
+- **`/` 命令菜单**：`/new`、`/compact`（菜单内二次确认）、`/context`、`/model`、`/effort`，宿主可用 `commands` 追加或传 `false` 关闭
+- **`@` 来源菜单**：宿主传入 `sources`（数组或按查询返回的函数）后启用，缺省不出现；＋ 按钮在有来源时打开「图片 + 来源」菜单，否则直接选图
+- **语音输入（Voice Pill）**：点按切换 / 按住说话 / 左滑取消，胶囊里有实时音量条（`getUserMedia` + `AnalyserNode`）与计时；转写用 Web Speech API，中间结果实时写入、结束后定稿，语言跟随新选项 `locale`；浏览器不支持时不显示，权限被拒时提示；`voice: false` 关闭，`voice.transcribe` 接自定义转写
+- 新导出：`parseToken`、`modelMenuRows`、`modelLabel`、`effortState`、`composerCommands`、`filterCommands`、`filterSources`、`morphPath`、`cubicBezier`、`mountVoicePill`、`startDictation`、`speechLang`、`joinDictation`、`speechRecognitionCtor`、`simulatedLevel`、`micLevel`、`voiceClock`、`hugeicon`、`VOICE_DEFAULTS`、`VOICE_ERRORS`；组件返回值新增 `input`
+- 新样式变量 `--bridge-spark`、`--bridge-menu`、`--bridge-send-bg` / `--bridge-send-fg`、`--bridge-voice-bg`；新结构类 `.bridge-pb*`、`.bridge-voice*`。已有初始化选项、回调、`.bridge-input` / `.bridge-form` / `.bridge-tray` 与全部已有导出不变
 
 ## v0.8.2 — 2026-10-14
 
