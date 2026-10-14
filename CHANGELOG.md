@@ -2,6 +2,15 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## 未发布
+
+- **输入框换成 Prompt Bar**（移植自 React Bits，MIT + Commons Clause；`motion` 改为 CSS 过渡与 requestAnimationFrame，图标为 Hugeicons free 的内联 SVG）：随内容长高到 `maxRows` 行；发送键在回答进行中变形为停止键（原来的独立停止按钮 `.bridge-stop` 移除）；底栏的模型 / 思考深度两个原生下拉框换成菜单与分档滑块（数据与分组同 `modelOptionsHtml`，「默认」单列一个按钮），最高档时输入框出现光点
+- **`/` 命令菜单**：`/new`、`/compact`（菜单内二次确认）、`/context`、`/model`、`/effort`，宿主可用 `commands` 追加或传 `false` 关闭
+- **`@` 来源菜单**：宿主传入 `sources`（数组或按查询返回的函数）后启用，缺省不出现；＋ 按钮在有来源时打开「图片 + 来源」菜单，否则直接选图
+- **语音输入（Voice Pill）**：点按切换 / 按住说话 / 左滑取消，胶囊里有实时音量条（`getUserMedia` + `AnalyserNode`）与计时；转写用 Web Speech API，中间结果实时写入、结束后定稿，语言跟随新选项 `locale`；浏览器不支持时不显示，权限被拒时提示；`voice: false` 关闭，`voice.transcribe` 接自定义转写
+- 新导出：`parseToken`、`modelMenuRows`、`modelLabel`、`effortState`、`composerCommands`、`filterCommands`、`filterSources`、`morphPath`、`cubicBezier`、`mountVoicePill`、`startDictation`、`speechLang`、`joinDictation`、`speechRecognitionCtor`、`simulatedLevel`、`micLevel`、`voiceClock`、`hugeicon`、`VOICE_DEFAULTS`、`VOICE_ERRORS`；组件返回值新增 `input`
+- 新样式变量 `--bridge-spark`、`--bridge-menu`、`--bridge-send-bg` / `--bridge-send-fg`、`--bridge-voice-bg`；新结构类 `.bridge-pb*`、`.bridge-voice*`。已有初始化选项、回调、`.bridge-input` / `.bridge-form` / `.bridge-tray` 与全部已有导出不变
+
 ## v0.8.2 — 2026-10-14
 
 - **站点页面标题换成新字样**：登录页（口令 / 账户两种模式）与 403 页的「claude-bridge」改用设计包 v0.18.0 的 `.app-title`（Geist 600、纯色、字标动效）；页面加载的 @szyyw/design 升到 v0.18.0

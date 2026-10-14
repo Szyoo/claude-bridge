@@ -5,6 +5,8 @@ import { BridgeClient, Subscription, mergeMessageEvents, checkBridgeUpdate } fro
 import {
   splitTurn, stepsHtml, sessionSummary, sanitizePrefs, loadPrefs, isSendKey, fmtTime, DEFAULT_PREFS, planImage, IMAGE_LIMITS, modelOptionsHtml, fmtElapsed, jobBannerHtml,
   armConfirm, disarmConfirm, quotaText,
+  parseToken, modelMenuRows, modelLabel, effortState, composerCommands, filterCommands, filterSources, morphPath, cubicBezier,
+  simulatedLevel, micLevel, voiceClock, speechLang, joinDictation, speechRecognitionCtor, startDictation, hugeicon,
 } from '../src/claude_bridge/static/bridge-widget.js';
 
 const tool = (id, at, cmd = 'ls', name = 'Bash') => ({ type: 'tool_use', data: { id, name, input: name === 'Bash' ? { command: cmd } : { file_path: cmd }, at } });
@@ -328,4 +330,146 @@ test('quotaText shows a conversation\'s share of the weekly window, hidden until
   assert.equal(quotaText(0.03), ' · 周额度 <0.1%');
   assert.equal(quotaText(1.26), ' · 周额度 1.3%');
   assert.equal(quotaText(12.6), ' · 周额度 13%');
+});
+
+test('parseToken: `/` only at the start of the draft, `@` after start or whitespace', () => {
+  assert.deepEqual(parseToken('/comp'), { kind: 'slash', query: 'comp', start: 0 });
+  assert.deepEqual(parseToken('/'), { kind: 'slash', query: '', start: 0 });
+  assert.equal(parseToken('see /usr'), null);
+  assert.equal(parseToken('/compact now'), null);
+  assert.deepEqual(parseToken('看看 @Do'), { kind: 'at', query: 'do', start: 3 });
+  assert.deepEqual(parseToken('@项目'), { kind: 'at', query: '项目', start: 0 });
+  assert.equal(parseToken('mail@example'), null);
+  assert.equal(parseToken(''), null);
+});
+
+test('modelMenuRows mirrors modelOptionsHtml: groups, selection, stale value flagged', () => {
+  const models = [{ id: '', label: '默认' }, { id: 'opus', label: '最新 Opus（5.5）', group: '跟随 CLI 最新' },
+    { id: 'claude-opus-5', label: 'Opus 5', group: '固定版本' }];
+  const rows = modelMenuRows(models, 'opus');
+  assert.deepEqual(rows.map(r => r.kind === 'model' ? `${r.key}${r.selected ? '*' : ''}` : `[${r.label}]`),
+    ['', '[跟随 CLI 最新]', 'opus*', '[固定版本]', 'claude-opus-5']);
+  const stale = modelMenuRows(models, 'claude-opus-9').at(-1);
+  assert.deepEqual([stale.key, stale.unknown, stale.selected, stale.tag], ['claude-opus-9', true, true, 'helper 的 CLI 不认']);
+  // same option set as the <select> builder
+  const ids = [...modelOptionsHtml(models, 'claude-opus-9').matchAll(/value="([^"]*)"/g)].map(m => m[1]);
+  assert.deepEqual(modelMenuRows(models, 'claude-opus-9').filter(r => r.kind === 'model').map(r => r.key), ids);
+  assert.equal(modelLabel(models, ''), '默认');
+  assert.equal(modelLabel(models, 'opus'), '最新 Opus（5.5）');
+  assert.equal(modelLabel(models, 'x'), 'x');
+  // a group followed by ungrouped entries gets a separator, never a leading one
+  assert.deepEqual(modelMenuRows([{ id: 'a', label: 'A', group: 'G' }, { id: 'b', label: 'B' }]).map(r => r.kind), ['group', 'model', 'sep', 'model']);
+});
+
+test('effortState: slider over non-empty levels, default = -1, maxed at the top', () => {
+  const efforts = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+  assert.deepEqual(effortState(efforts, ''), { steps: ['low', 'medium', 'high', 'xhigh', 'max'], index: -1, hasDefault: true, maxed: false });
+  assert.equal(effortState(efforts, 'high').index, 2);
+  assert.equal(effortState(efforts, 'max').maxed, true);
+  assert.equal(effortState(['low'], 'low').maxed, false);
+});
+
+test('composerCommands: only what the bridge backs; thread-bound ones disabled without a thread; host commands appended', () => {
+  const names = (rows) => rows.map(r => r.name);
+  assert.deepEqual(names(composerCommands()), ['/new', '/compact', '/context']);
+  assert.equal(composerCommands().find(r => r.key === 'compact').disabled, true);
+  assert.equal(composerCommands({ hasThread: true }).find(r => r.key === 'compact').disabled, false);
+  const run = () => {};
+  const all = composerCommands({ hasThread: true, settings: true, extra: [{ name: 'report', description: '日报', run }, { description: 'no name' }] });
+  assert.deepEqual(names(all), ['/new', '/compact', '/context', '/model', '/effort', '/report']);
+  assert.equal(all.at(-1).host.run, run);
+  assert.deepEqual(names(filterCommands(all, 'co')), ['/compact', '/context']);
+  assert.deepEqual(names(filterCommands(all, 'CON')), ['/context']);
+  assert.deepEqual(filterSources([{ name: 'Docs' }, { name: '设计稿' }], 'do').map(s => s.name), ['Docs']);
+  assert.deepEqual(filterSources(null, ''), []);
+});
+
+test('send ⇄ stop glyph: arrow at 0, square at 1; easing is monotone with fixed ends', () => {
+  assert.equal(morphPath(0), 'M12.00 4.50L18.50 11.00L14.25 11.00L14.25 19.50L9.75 19.50L9.75 11.00L5.50 11.00Z');
+  assert.equal(morphPath(1), 'M12.00 6.00L18.00 6.00L18.00 12.00L18.00 18.00L6.00 18.00L6.00 12.00L6.00 6.00Z');
+  const e = cubicBezier(0.77, 0, 0.175, 1);
+  assert.equal(e(0), 0); assert.equal(e(1), 1);
+  let prev = 0; for (let x = 0.05; x < 1; x += 0.05) { const y = e(x); assert.ok(y >= prev - 1e-9); prev = y; }
+  assert.ok(e(0.25) < 0.1 && e(0.75) > 0.9);
+});
+
+test('voice meters and clock', () => {
+  assert.equal(voiceClock(0), '0:00'); assert.equal(voiceClock(65_400), '1:05');
+  for (let t = 0; t < 10; t += 0.07) { const v = simulatedLevel(t); assert.ok(v >= 0 && v <= 1); }
+  assert.equal(micLevel(new Uint8Array(128)), 0);
+  assert.ok(Math.abs(micLevel(new Uint8Array(128).fill(255)) - 2.2) < 1e-9);
+});
+
+test('speechLang follows the widget locale; dictation joins without spaces in CJK', () => {
+  assert.equal(speechLang('zh'), 'zh-CN'); assert.equal(speechLang('zh-TW'), 'zh-CN');
+  assert.equal(speechLang('ja'), 'ja-JP'); assert.equal(speechLang('en-GB'), 'en-US');
+  assert.equal(speechLang('fr-FR'), 'fr-FR'); assert.equal(speechLang(''), 'zh-CN');
+  assert.equal(joinDictation('你好', '世界', 'zh-CN'), '你好世界');
+  assert.equal(joinDictation('hello', 'world', 'en-US'), 'hello world');
+  assert.equal(joinDictation('hello ', 'world', 'en-US'), 'hello world');
+  assert.equal(joinDictation('', ' 说点什么 ', 'zh-CN'), '说点什么');
+  assert.equal(joinDictation('原文', '', 'zh-CN'), '原文');
+  assert.equal(speechRecognitionCtor({}), null);
+  const Fake = function () {};
+  assert.equal(speechRecognitionCtor({ webkitSpeechRecognition: Fake }), Fake);
+});
+
+class FakeRecognition {
+  static last = null;
+  constructor() { FakeRecognition.last = this; this.started = false; }
+  start() { this.started = true; }
+  stop() { this.stopped = true; }
+  abort() { this.aborted = true; }
+  emit(list) { this.onresult({ results: list.map(([t, f]) => Object.assign([{ transcript: t }], { isFinal: f })) }); }
+}
+
+test('startDictation (Web Speech): interim text live, finals kept, done once on end; cancel discards', () => {
+  const writes = [], dones = [];
+  const d = startDictation({ lang: 'zh-CN', Recognition: FakeRecognition, write: t => writes.push(t), done: r => dones.push(r), error: () => {} });
+  const rec = FakeRecognition.last;
+  assert.deepEqual([rec.lang, rec.interimResults, rec.continuous, rec.started], ['zh-CN', true, true, true]);
+  rec.emit([['今天', false]]);
+  rec.emit([['今天天气', true], ['不错', false]]);
+  assert.deepEqual(writes, ['今天', '今天天气不错']);
+  d.stop('key');
+  assert.equal(rec.stopped, true);
+  rec.emit([['今天天气', true], ['不错', true]]);
+  rec.onend(); rec.onend();
+  assert.deepEqual(dones, [{ text: '今天天气不错', cancelled: false }]);
+
+  const errs = [], d2done = [];
+  const d2 = startDictation({ lang: 'en-US', Recognition: FakeRecognition, write: () => {}, done: r => d2done.push(r), error: (m, c) => errs.push(c) });
+  FakeRecognition.last.onerror({ error: 'not-allowed' });
+  FakeRecognition.last.onerror({ error: 'aborted' });
+  assert.deepEqual(errs, ['not-allowed']);
+  d2.stop('cancel');
+  assert.equal(FakeRecognition.last.aborted, true);
+  assert.deepEqual(d2done, [{ text: '', cancelled: true }]);
+});
+
+test('startDictation with a host transcriber: partials, final text, abort signal, cancel', async () => {
+  const writes = [];
+  let seen;
+  const done = await new Promise((resolve) => {
+    const d = startDictation({ lang: 'ja-JP', stream: Promise.resolve(null), write: t => writes.push(t), done: resolve, error: () => {},
+      transcribe: ({ lang, signal, onPartial, stream }) => new Promise((res) => {
+        seen = { lang, stream: stream instanceof Promise };
+        onPartial('こんに');
+        signal.addEventListener('abort', () => res('こんにちは'));
+      }) });
+    setTimeout(() => d.stop('key'), 5);
+  });
+  assert.deepEqual(seen, { lang: 'ja-JP', stream: true });
+  assert.deepEqual(writes, ['こんに']);
+  assert.deepEqual(done, { text: 'こんにちは', cancelled: false });
+  const cancelled = await new Promise((resolve) => {
+    const d = startDictation({ lang: 'en-US', write: () => {}, done: resolve, transcribe: () => new Promise(() => {}) });
+    setTimeout(() => d.stop('cancel'), 5);
+  });
+  assert.deepEqual(cancelled, { text: '', cancelled: true });
+});
+
+test('hugeicon renders inline SVG with the requested size; unknown names render nothing', () => {
+  assert.match(hugeicon('mic', 15, 2), /^<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"/);
+  assert.equal(hugeicon('nope'), '');
 });
