@@ -296,7 +296,8 @@ def test_pages_render_appearance_cookies(db, monkeypatch):
     assert 'data-theme="particles" data-scheme="light">' in c.get("/account").text
     c.cookies.set("cb_theme", "random")
     assert 'data-theme-mode="random" data-scheme="light">' in c.get("/account").text
-    c.cookies.delete("cb_theme"); c.cookies.delete("cb_theme_set")
+    c.cookies.delete("cb_theme")
+    c.cookies.delete("cb_theme_set")
     c.cookies.set("cb_scheme", "auto")
     c.cookies.set("cb_palette", '"><script>')  # not an id: ignored, never echoed
     r = c.get("/account").text
