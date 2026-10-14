@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 
 NOT_PROVISIONED = "此账号尚未在 claude-bridge 开通，请联系管理员"
 SSO_NO_PASSWORD = "门户登录模式下密码由门户管理"
+SSO_ACCOUNTS = "账户由门户统一管理：请在门户「管理 › 用户」新建账户或重置密码，对方第一次登录后会自动出现在这里"
 _TRUE = ("1", "true", "yes", "on")
 
 
@@ -417,6 +418,8 @@ def create_multiuser_app(
 
     @app.post("/api/admin/users", status_code=201)
     def admin_create(body: UserIn, admin: dict[str, Any] = Depends(api_admin)):
+        if sso:  # a local-only account could never sign in: the gate only lets portal accounts through
+            raise HTTPException(status_code=403, detail=SSO_ACCOUNTS)
         password = body.password or generate_password()
         user = _svc(accounts.create, body.username, password, role=body.role, display_name=body.display_name,
                     limit_5h_pct=body.limit_5h_pct, limit_7d_pct=body.limit_7d_pct, note=body.note)
@@ -429,6 +432,8 @@ def create_multiuser_app(
 
     @app.post("/api/admin/users/{uid}/password")
     def admin_reset(uid: int, body: ResetIn | None = None, admin: dict[str, Any] = Depends(api_admin)):
+        if sso:
+            raise HTTPException(status_code=403, detail=SSO_ACCOUNTS)
         given = body.password if body else ""
         password = given or generate_password()
         _svc(accounts.set_password, uid, password)

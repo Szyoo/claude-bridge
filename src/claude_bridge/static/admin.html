@@ -157,7 +157,11 @@
           <div class="ops"><a class="btn-ghost btn-small" href="/admin/users/${u.id}">查看</a><button type="button" class="btn-ghost btn-small" data-edit="${u.id}">编辑</button></div>
         </div>`;
       });
-      $('#users').innerHTML = `<div class="bp-user head"><div>用户</div><div>5 小时</div><div>本周</div><div>最近</div><div></div></div>${rows.join('')}`
+      const nu = $('#new-user');
+      nu.textContent = data.sso ? '在门户新建用户 ↗' : '新建用户';
+      nu.title = data.sso ? '在门户「管理 › 用户」新建；对方第一次登录后会出现在这里' : '';
+      $('#users').innerHTML = (data.sso ? '<p class="muted small bp-lead">账户由门户统一管理：新建账户、改密码都在门户「管理 › 用户」里做，对方第一次登录后自动出现在这个列表。这里只设置每个人在 claude 里的份额、备注和停用。</p>' : '')
+        + `<div class="bp-user head"><div>用户</div><div>5 小时</div><div>本周</div><div>最近</div><div></div></div>${rows.join('')}`
         + (noCap && data.items.some(u => u.role !== 'admin' && (u.limit_5h_pct != null || u.limit_7d_pct != null))
           ? '<div class="callout warn bp-gap">⚠ 换算比例还没标定出来，按人份额上限暂不生效（只有保护线生效）。</div>' : '');
       for (const b of document.querySelectorAll('#users button[data-edit]')) b.addEventListener('click', () => openUser(data.items.find(u => u.id === Number(b.dataset.edit))));
@@ -181,7 +185,8 @@
       }
       dlg.open();
     }
-    $('#new-user').addEventListener('click', () => openUser(null));
+    // portal SSO: accounts live in the portal (one account for every site); a row appears here on first sign-in
+    $('#new-user').addEventListener('click', () => data.sso ? window.open(`${data.sso.portal}/`, '_blank', 'noopener') : openUser(null));
 
     function showSecret(user, password) {
       $('#secret-for', secretEl).textContent = `${user} 的${editing ? '新' : '初始'}密码：`;

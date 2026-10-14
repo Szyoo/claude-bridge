@@ -307,3 +307,14 @@ def test_sso_off_pages_have_no_portal_tools(db):
         assert r.status_code == 200, path
         assert "data-sso" not in r.text and "data-portal" not in r.text
         assert '<html lang="zh-CN" data-theme="nebula" data-scheme="dark">' in r.text and "corner-boot" in r.text
+
+
+def test_accounts_are_created_in_the_portal_not_here(db, monkeypatch):
+    app = make(db, monkeypatch)
+    admin = gated(app, "szyyw", role="admin")
+    r = admin.post("/api/admin/users", json={"username": "newbie", "password": "pw-123456"})
+    assert r.status_code == 403 and "门户" in r.json()["detail"]
+    assert "newbie" not in rows(db)  # a local-only row could never sign in through the gate
+    r = admin.post("/api/admin/users/2/password", json={})
+    assert r.status_code == 403 and "门户" in r.json()["detail"]
+    assert admin.get("/api/admin/users").json()["sso"]["portal"] == PORTAL  # the page sends "new user" there
