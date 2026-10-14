@@ -99,6 +99,13 @@
 
 /* full-width bars under the top-right corner tools: make room for them (measured by corner.js, like .corner-clear) */
 .bp-chat .bridge-top, .bp-home-top { padding-right: max(12px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px))); }
+/* the corner tools float at top: 10px; make these bars tall enough to hold them (10px above + the rail + 10px below),
+   so the buttons sit centred in the bar instead of straddling its bottom border. --corner-rail-h is measured by corner.js;
+   capped so a vertical rail on narrow screens doesn't blow the bar up. */
+.bp-chat .bridge-top, .bp-home-top {
+  min-height: calc(min(var(--corner-rail-h, 34px), 40px) + 20px + env(safe-area-inset-top, 0px));
+  padding-top: calc(6px + env(safe-area-inset-top, 0px));
+}
 
 /* ---------- chat page on the site's background theme: glass layers over .bg-layer ----------
    Scoped to body.bp-chat, so the embedded widget (bridge-widget.css alone) keeps its flat look. */
