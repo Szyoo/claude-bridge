@@ -51,7 +51,7 @@ def mount_site_icons(app: FastAPI) -> None:
 APPEARANCE_COOKIE_PREFIX = "cb_"
 # The one place the design package version lives (scripts/update-design.sh rewrites this line). Every design file of a
 # page must come from the same version (the modules import each other relatively). Never /latest/.
-DESIGN_VERSION = "v0.18.0"
+DESIGN_VERSION = "v0.19.0"
 DESIGN_CDN = "https://design.szyyw.xyz"
 
 
