@@ -128,17 +128,58 @@ const CATEGORY_ZH = {
 const CHART_FALLBACK = ['#3b6df2', '#e0703a', '#2e9b5d', '#d4a72c', '#8b8b8b', '#6f6f6f'];
 const categoryColor = (i) => { const n = (i % CHART_FALLBACK.length) + 1; return `var(--bridge-chart-${n}, var(--chart-${n}, ${CHART_FALLBACK[n - 1]}))`; };
 
+// Server UTC text 'YYYY-MM-DD HH:MM:SS' → epoch ms (null when absent / unparsable).
+const parseUtc = (utc) => {
+  if (!utc) return null;
+  const t = Date.parse(String(utc).replace(' ', 'T') + (/Z$|[+-]\d\d:?\d\d$/.test(utc) ? '' : 'Z'));
+  return Number.isNaN(t) ? null : t;
+};
+
 // Elapsed m:ss since a server UTC timestamp ('YYYY-MM-DD HH:MM:SS').
 export function fmtElapsed(utc, now = Date.now()) {
   if (!utc) return '0:00';
-  const t = Date.parse(String(utc).replace(' ', 'T') + (/Z$|[+-]\d\d:?\d\d$/.test(utc) ? '' : 'Z'));
-  if (Number.isNaN(t)) return '';
+  const t = parseUtc(utc);
+  if (t == null) return '';
   const sec = Math.max(0, Math.round((now - t) / 1000));
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
-// Refreshes every elapsed counter under `root` (call once a second while a session job is active).
-export function tickJobs(root = document) {
-  for (const el of root.querySelectorAll('[data-job-since]')) el.textContent = fmtElapsed(el.dataset.jobSince);
+
+// Duration for the message status chips: 12.3s / 1m 05s. `coarse` (derived from second-resolution server timestamps)
+// drops the tenths and shows '<1s' for sub-second spans instead of pretending to know.
+export function fmtDur(ms, coarse = false) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (coarse) {
+    const s = Math.round(ms / 1000);
+    if (s < 1) return '<1s';
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  }
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+// Fill fraction of a running call chip: linear to `hold` at the expected duration, then creeps towards 98% (it never
+// completes by itself — only the result event does).
+export function callProgress(ms, expected, hold = 0.9) {
+  if (!(expected > 0)) return 0;
+  const x = Math.max(0, ms) / expected;
+  return x < 1 ? hold * x : hold + (0.98 - hold) * (1 - Math.exp(1 - x));
+}
+
+// Refreshes every live counter under `root` (the widget calls it ~4×/s while something is running): session job timers,
+// running tool chips (timer + fill + progress arc) and the turn's think timer.
+export function tickJobs(root = document, now = Date.now()) {
+  for (const el of root.querySelectorAll('[data-job-since]')) el.textContent = fmtElapsed(el.dataset.jobSince, now);
+  for (const el of root.querySelectorAll('[data-t0]')) {
+    const ms = Math.max(0, now - Number(el.dataset.t0));
+    const t = el.querySelector('[data-timer]');
+    if (t) t.textContent = fmtDur(ms);
+    if (el.dataset.exp) {
+      const p = callProgress(ms, Number(el.dataset.exp));
+      const fill = el.querySelector('.bridge-fill'); if (fill) fill.style.transform = `scaleX(${p.toFixed(3)})`;
+      const ring = el.querySelector('.bridge-mark .ring'); if (ring) ring.style.strokeDasharray = `${p.toFixed(3)} 1`;
+    }
+  }
 }
 const jobActive = (j) => !!j && (j.status === 'queued' || j.status === 'running');
 
@@ -300,8 +341,8 @@ export function splitTurn(content, events) {
         }
         break;
       }
-      case 'tool_use': { const it = { kind: 'tool', id: d.id || '', name: d.name || '?', input: d.input || {}, result: null, at: d.at ?? 0 }; items.push(it); if (d.id) byTool.set(d.id, it); break; }
-      case 'tool_result': { const it = byTool.get(d.tool_use_id); if (it) it.result = d; break; }
+      case 'tool_use': { const it = { kind: 'tool', id: d.id || '', name: d.name || '?', input: d.input || {}, result: null, at: d.at ?? 0, t0: parseUtc(ev.created_at), t1: null }; items.push(it); if (d.id) byTool.set(d.id, it); break; }
+      case 'tool_result': { const it = byTool.get(d.tool_use_id); if (it) { it.result = d; it.t1 = parseUtc(ev.created_at); } break; }
       case 'thinking': {
         const index = closedThinking.findIndex(it => it.at === (d.at ?? 0) || it.unknownAt);
         const it = index >= 0 ? closedThinking.splice(index, 1)[0]
@@ -353,36 +394,92 @@ export function splitTurn(content, events) {
   return segs;
 }
 
-// ---------- step rows (collapsed grey lines) ----------
+// ---------- message status: call chip / status mark / lattice loader ----------
+// The tool rows, status icons and think header below are CSS / inline-SVG re-implementations of three React Bits
+// components (Call Chip, Status Mark, Lattice Loader — https://reactbits.dev, MIT + Commons Clause; the author is aware
+// of the licence terms). Motion → CSS animations, icons → hand-drawn inline SVG (no icon package).
+// Timing comes from the events' server timestamps (`created_at`, second resolution), so reloading a page keeps the values.
+
+const L10N = {
+  zh: { thinking: 'Claude 正在思考…', waitingHelper: '等待 helper 接单…', thought: '已思考', stopped: '已中断，用时',
+    markPending: '未开始', markRunning: '进行中', markDone: '已完成', markFailed: '失败', markNoResult: '无结果' },
+  ja: { thinking: 'Claude が考えています…', waitingHelper: 'helper の応答待ち…', thought: '思考時間', stopped: '中断まで',
+    markPending: '未開始', markRunning: '実行中', markDone: '完了', markFailed: '失敗', markNoResult: '結果なし' },
+  en: { thinking: 'Claude is thinking…', waitingHelper: 'Waiting for the helper…', thought: 'Thought for', stopped: 'Stopped after',
+    markPending: 'Pending', markRunning: 'In progress', markDone: 'Done', markFailed: 'Failed', markNoResult: 'No result' },
+};
+// Strings of the message area for 'zh' (default) / 'ja' / 'en'; hosts spread this into `strings` (renderTurn) or pass `lang`.
+export const messageStrings = (lang) => L10N[String(lang || 'zh').slice(0, 2).toLowerCase()] || L10N.zh;
+
+// Expected run time per tool (ms) — only paces the fill of the call chip; override with opts.expected = { Bash: 20000 } or (item) => ms.
+export const TOOL_EXPECTED_MS = { Bash: 6000, Read: 1200, Glob: 1500, Grep: 2000, Edit: 1500, MultiEdit: 2000, Write: 1500,
+  NotebookEdit: 1500, TodoWrite: 800, WebFetch: 6000, WebSearch: 8000, Task: 60000, Agent: 60000 };
+const DEFAULT_EXPECTED_MS = 4000;
+function expectedMs(it, o) {
+  const e = typeof o.expected === 'function' ? o.expected(it) : o.expected?.[it.name];
+  return Number.isFinite(e) && e > 0 ? e : (TOOL_EXPECTED_MS[it.name] ?? DEFAULT_EXPECTED_MS);
+}
+
+const MARK_CHECK = 'M7.5 12.25 10.5 15.25 16.75 8.75', MARK_CROSS = 'M8.5 8.5 15.5 15.5M15.5 8.5 8.5 15.5';
+// Status Mark: hollow ring (pending) → progress arc (running; determinate with `progress` 0–1, else a spinning arc) → check / cross.
+// status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'. The spin phase follows the wall clock so re-renders don't restart it.
+export function markHtml(status, { progress, now = Date.now(), label = '' } = {}) {
+  const det = status === 'running' && Number.isFinite(progress);
+  const ring = status !== 'running' ? '' : det ? ` style="stroke-dasharray:${progress.toFixed(3)} 1"` : ` style="animation-delay:-${now % 1100}ms"`;
+  return `<svg class="bridge-mark" data-st="${status}" viewBox="0 0 24 24" role="img" aria-label="${esc(label)}"><g transform="rotate(-90 12 12)">`
+    + `<circle class="trk" cx="12" cy="12" r="9"/><circle class="ring" cx="12" cy="12" r="9" pathLength="1"${ring}/></g>`
+    + `<path class="chk" d="${MARK_CHECK}" pathLength="1"/><path class="crs" d="${MARK_CROSS}" pathLength="1"/></svg>`;
+}
 
 const firstLine = (t, n = 72) => { const s = (t || '').trim().split('\n')[0]; return s.length > n ? s.slice(0, n) + '…' : s; };
+const markLabel = (st, S) => ({ pending: S.markPending, running: S.markRunning, done: S.markDone, failed: S.markFailed, cancelled: S.markNoResult }[st]);
 
 function toolRow(it, o) {
   const running = !it.result && o.streaming;
   const err = !!it.result?.is_error;
-  const state = running ? '<i class="bridge-run"></i>' : err ? '<span class="bridge-step-state err">失败</span>' : it.result ? '' : '<span class="bridge-step-state">无结果</span>';
+  const st = running ? 'running' : err ? 'failed' : it.result ? 'done' : 'cancelled';
+  const timed = running && it.t0 != null;
+  const ms = timed ? Math.max(0, o.now - it.t0) : 0, exp = expectedMs(it, o), p = timed ? callProgress(ms, exp) : 0;
+  const dur = it.result && it.t0 != null && it.t1 != null ? fmtDur(it.t1 - it.t0, true) : '';
+  const time = timed ? `<span class="bridge-time" data-timer>${fmtDur(ms)}</span>` : dur ? `<span class="bridge-time">${dur}</span>` : '';
+  const state = err ? '<span class="bridge-step-state err">失败</span>' : !running && !it.result ? '<span class="bridge-step-state">无结果</span>' : '';
   const out = it.result ? (it.result.content || '(无输出)') + (it.result.truncated ? '\n…（输出已截断）' : '') : running ? '运行中…' : '';
   const cmd = it.name === 'Bash' ? `$ ${it.input.command || ''}` : JSON.stringify(it.input, null, 1);
-  return `<details class="bridge-step tool${running ? ' running' : ''}${err ? ' error' : ''}" data-k="${esc(it.id)}"${o.open ? ' open' : ''}>`
-    + `<summary><i class="bridge-caret"></i><span class="bridge-step-name">${esc(it.name)}</span><span class="bridge-step-desc">${esc(describeTool(it))}</span>${state}</summary>`
+  return `<details class="bridge-step tool${running ? ' running' : ''}${err ? ' error' : ''}" data-k="${esc(it.id)}" data-st="${st}"${o.open ? ' open' : ''}>`
+    + `<summary${timed ? ` data-t0="${it.t0}" data-exp="${exp}"` : ''}><span class="bridge-fill"${timed ? ` style="transform:scaleX(${p.toFixed(3)})"` : ''}></span>`
+    + `<i class="bridge-caret"></i>${markHtml(st, { progress: timed ? p : undefined, now: o.now, label: markLabel(st, o.S) })}`
+    + `<span class="bridge-step-name">${esc(it.name)}</span><span class="bridge-step-desc">${esc(describeTool(it))}</span>${time}${state}</summary>`
     + `<div class="bridge-term"><pre class="cmd">${esc(cmd)}</pre>${out ? `<pre class="out">${esc(out)}</pre>` : ''}</div></details>`;
 }
 
 function toolGroup(run, o, key) {
-  const done = run.filter(t => t.result).length, n = run.length;
+  const n = run.length, finished = run.filter(t => t.result);
+  const done = finished.length;
   const running = o.streaming && done < n;
   const err = run.some(t => t.result?.is_error);
   const allBash = run.every(t => t.name === 'Bash');
   const label = running ? `执行中 · ${done}/${n}` : allBash ? `执行了 ${n} 条命令` : `${n} 次工具调用`;
-  const state = running ? '<i class="bridge-run"></i>' : err ? '<span class="bridge-step-state err">有失败</span>' : '';
-  return `<details class="bridge-step group${running ? ' running' : ''}${err ? ' error' : ''}" data-k="${esc(key)}"${o.open ? ' open' : ''}>`
-    + `<summary><i class="bridge-caret"></i><span class="bridge-step-name">${label}</span>${state}</summary>`
+  const st = running ? 'running' : err ? 'failed' : done === n ? 'done' : 'cancelled';
+  const t0s = run.map(t => t.t0).filter(v => v != null), t0 = t0s.length ? Math.min(...t0s) : null;
+  // progress = finished calls + the running ones' partial fill, over all calls
+  let frac = done;
+  for (const t of run) if (!t.result && o.streaming && t.t0 != null) frac += callProgress(Math.max(0, o.now - t.t0), expectedMs(t, o));
+  const p = Math.min(0.98, Math.max(0.04, frac / n));
+  const t1s = run.map(t => t.t1).filter(v => v != null);
+  const dur = !running && t0 != null && t1s.length === n ? fmtDur(Math.max(...t1s) - t0, true) : '';
+  const time = running && t0 != null ? `<span class="bridge-time" data-timer>${fmtDur(Math.max(0, o.now - t0))}</span>` : dur ? `<span class="bridge-time">${dur}</span>` : '';
+  const state = err ? '<span class="bridge-step-state err">有失败</span>' : '';
+  return `<details class="bridge-step group${running ? ' running' : ''}${err ? ' error' : ''}" data-k="${esc(key)}" data-st="${st}"${o.open ? ' open' : ''}>`
+    + `<summary${running && t0 != null ? ` data-t0="${t0}"` : ''}><span class="bridge-fill"${running ? ` style="transform:scaleX(${p.toFixed(3)})"` : ''}></span>`
+    + `<i class="bridge-caret"></i>${markHtml(st, { progress: running ? p : undefined, now: o.now, label: markLabel(st, o.S) })}`
+    + `<span class="bridge-step-name">${label}</span>${time}${state}</summary>`
     + `<div class="bridge-step-list">${run.map(t => toolRow(t, o)).join('')}</div></details>`;
 }
 
-// items → HTML. opts: { streaming, open (expand by default), key (stable prefix for data-k) }
+// items → HTML. opts: { streaming, open (expand by default), key (stable prefix for data-k), expected, strings, now }
 export function stepsHtml(items, opts = {}) {
-  const o = { streaming: false, open: false, key: 's', ...opts };
+  const o = { streaming: false, open: false, key: 's', now: Date.now(), ...opts };
+  o.S = { ...messageStrings(o.lang), ...o.strings };
   const out = []; let i = 0;
   while (i < items.length) {
     const it = items[i];
@@ -397,7 +494,8 @@ export function stepsHtml(items, opts = {}) {
       const signatureOnly = it.signed && !it.text && !running;
       const label = it.redacted ? '思考内容未公开' : signatureOnly ? '未返回思考文本' : running ? '正在思考' : '思考过程';
       const text = it.redacted ? '模型未公开这段思考内容。' : signatureOnly ? '上游只提供了思考块签名，没有提供可显示的思考文本。' : it.text;
-      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i><span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text))}</span>${running ? '<i class="bridge-run" aria-label="思考中"></i>' : ''}</summary>`
+      const st = running ? 'running' : 'done';
+      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}" data-st="${st}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i>${markHtml(st, { now: o.now, label: markLabel(st, o.S) })}<span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text))}</span></summary>`
         + `<div class="bridge-step-body">${esc(text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`);
     } else if (it.kind === 'trace') {
       out.push(`<details class="bridge-step trace" data-k="${o.key}-r${i}"><summary><i class="bridge-caret"></i><span class="bridge-step-name">执行轨迹</span></summary><div class="bridge-term"><pre class="out">${esc(it.text)}</pre></div></details>`);
@@ -409,6 +507,50 @@ export function stepsHtml(items, opts = {}) {
   return out.join('');
 }
 
+// ---- Lattice Loader (turn header / waiting state) ----
+const LAT = { cells: [0, 1, 2, 7, null, 3, 6, 5, 4], step: 108, cycle: 864, done: [2, 3, 5, 7], stopped: [0, 2, 4, 6, 8] };
+
+// Think time of one assistant turn → { state: 'live' | 'done' | 'stopped' | 'none', start, dur, coarse, pending }.
+// Sources, in order: the `usage` event's duration_ms (the CLI's own wall time) → server timestamps (the first event, or the
+// message's created_at, to the message's updated_at) → the client's own first-frame / done times (m._t0 / m._t1, stamped by renderTurn).
+export function turnTiming(m, now = Date.now()) {
+  const evs = m.events || [];
+  const pending = m.status === 'pending';
+  const live = pending || m.status === 'streaming';
+  let start = pending ? null : parseUtc((evs.find(e => e.type === 'init') || evs[0])?.created_at);
+  start ??= parseUtc(m.created_at);
+  let coarse = true;
+  if (start == null && m._t0 != null) { start = m._t0; coarse = false; }
+  if (live) return { state: 'live', start: start ?? now, dur: null, coarse, pending };
+  let dur = null;
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const d = evs[i].type === 'usage' ? evs[i].data?.duration_ms : null;
+    if (Number.isFinite(d) && d > 0) { dur = d; coarse = false; break; }
+  }
+  if (dur == null && start != null) {
+    const end = m._t1 ?? parseUtc(m.updated_at);
+    if (end != null && end >= start) dur = end - start;
+  }
+  const state = m.status === 'error' || m.status === 'cancelled' ? 'stopped' : 'done';
+  return dur == null ? { state: 'none', start, dur, coarse, pending: false } : { state, start, dur, coarse, pending: false };
+}
+
+// Lattice Loader: 3×3 wave + stopwatch while the turn runs; frozen to "已思考 12.3s" (a tick / cross of cells) afterwards.
+// The wave phase follows the wall clock so re-renders (every streamed chunk) don't restart it.
+export function latticeHtml(t, S, now = Date.now()) {
+  if (t.state === 'none') return '';
+  const live = t.state === 'live';
+  const label = live ? (t.pending ? S.waitingHelper : S.thinking) : t.state === 'stopped' ? S.stopped : S.thought;
+  let cells;
+  if (live) cells = LAT.cells.map((u) => u == null ? '<i data-hole></i>'
+    : `<i style="animation-delay:-${(((now - u * LAT.step) % LAT.cycle) + LAT.cycle) % LAT.cycle}ms"></i>`).join('');
+  else { const on = LAT[t.state]; cells = LAT.cells.map((_, i) => `<i${on.includes(i) ? ' data-on' : ''}></i>`).join(''); }
+  const timer = live ? `<span class="bridge-lat-timer" data-timer>${fmtDur(Math.max(0, now - t.start))}</span>`
+    : `<span class="bridge-lat-timer">${fmtDur(t.dur, t.coarse)}</span>`;
+  return `<span class="bridge-think" data-k="think" data-st="${live ? 'running' : t.state === 'stopped' ? 'failed' : 'done'}"${live ? ` data-t0="${t.start}"` : ''}>`
+    + `<span class="bridge-lat" aria-hidden="true">${cells}</span><span class="bridge-lat-label">${esc(label)}</span>${timer}</span>`;
+}
+
 export function renderSteps(el, items, opts = {}) { el.innerHTML = stepsHtml(items, opts); }
 
 function messageModel(m) {
@@ -418,15 +560,21 @@ function messageModel(m) {
 }
 
 // Renders one message into `el` (a .bridge-turn). Re-rendering keeps the user's expand/collapse choices.
-// opts: { markdown, head (speaker line), timestamps, open (tools expanded by default), fileUrl(id) (image thumbnails), strings }
+// opts: { markdown, head (speaker line), timestamps, open (tools expanded by default), fileUrl(id) (image thumbnails), strings, lang ('zh'|'ja'|'en'), expected (tool run-time hints), now }
 export function renderTurn(el, m, opts = {}) {
-  const o = { markdown: defaultMarkdown, head: true, timestamps: true, open: false, strings: {}, ...opts };
-  const S = { me: '我', assistant: 'Claude', waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', ...o.strings };
+  const o = { markdown: defaultMarkdown, head: true, timestamps: true, open: false, strings: {}, now: Date.now(), ...opts };
+  const S = { me: '我', assistant: 'Claude', ...messageStrings(o.lang), ...o.strings };
   el.className = `bridge-turn ${m.role} ${m.status || 'done'}`;
   el.dataset.id = m.id;
   if (m.role === 'system') { el.textContent = m.content || ''; return; }
   const opened = new Set(), closed = new Set();
   for (const d of el.querySelectorAll('details[data-k]')) (d.open ? opened : closed).add(d.dataset.k);
+  // rows that just left 'running' replay their finish animation once (kept for a moment across the re-renders streaming causes)
+  const settling = el._settling ||= new Map();
+  for (const n of el.querySelectorAll('[data-k][data-st]')) {
+    if (n.dataset.st !== 'running') continue;
+    const k = n.dataset.k; if (!settling.has(k)) settling.set(k, null);
+  }
   const time = o.timestamps ? fmtTime(m.created_at) : '';
   let head = '';
   if (o.head) {
@@ -445,14 +593,27 @@ export function renderTurn(el, m, opts = {}) {
   }
   else {
     const streaming = m.status === 'pending' || m.status === 'streaming';
+    // client-side fallback clock for turns whose events carry no timestamps (first frame seen → done seen)
+    if (streaming && m._t0 == null) m._t0 = o.now;
+    else if (!streaming && m._t0 != null && m._t1 == null) m._t1 = o.now;
     const segs = splitTurn(m.content || '', m.events || []);
     body = segs.map((s, i) => s.kind === 'text'
       ? `<div class="bridge-md">${o.markdown(s.text)}</div>`
-      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, open: o.open, key: `s${i}` })}</div>`).join('');
-    if (streaming && !segs.length) body = `<div class="bridge-wait">${esc(m.status === 'pending' ? S.waitingHelper : S.thinking)}</div>`;
+      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, open: o.open, key: `s${i}`, expected: o.expected, strings: S, now: o.now })}</div>`).join('');
+    const think = latticeHtml(turnTiming(m, o.now), S, o.now);
+    if (streaming && !segs.length) body = `<div class="bridge-wait">${think}</div>`;
+    else if (think) body = `<div class="bridge-think-row">${think}</div>` + body;
   }
   el.innerHTML = head + `<div class="bridge-turn-body">${body}</div>`;
   for (const d of el.querySelectorAll('details[data-k]')) { const k = d.dataset.k; if (opened.has(k)) d.open = true; else if (closed.has(k)) d.open = false; }
+  for (const n of el.querySelectorAll('[data-k][data-st]')) {
+    const k = n.dataset.k;
+    if (n.dataset.st === 'running') { settling.set(k, null); continue; }
+    if (!settling.has(k)) continue;
+    const t0 = settling.get(k) ?? (settling.set(k, o.now), o.now), age = o.now - t0;
+    if (age > 800) { settling.delete(k); continue; }
+    n.classList.add('just'); n.style.setProperty('--jd', `-${age}ms`);
+  }
 }
 
 // ============================================================
@@ -935,8 +1096,10 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const m = state.msgs.get(id); if (!m) return;
     const b = list.querySelector(`.bridge-turn[data-id="${id}"]`); if (!b) return;
     const follow = nearBottom();
-    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, fileUrl: (id) => client.fileUrl(id), strings: { me: S.me, assistant: S.assistant, waitingHelper: S.waitingHelper, thinking: S.thinking } });
+    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, fileUrl: (id) => client.fileUrl(id), lang: o.lang, expected: o.toolExpected,
+      strings: { me: S.me, assistant: S.assistant, ...(o.strings.waitingHelper && { waitingHelper: o.strings.waitingHelper }), ...(o.strings.thinking && { thinking: o.strings.thinking }), ...(o.strings.thought && { thought: o.strings.thought }), ...(o.strings.stopped && { stopped: o.strings.stopped }) } });
     if (follow) scrollBottom();
+    syncTicker();
   }
   function schedulePaint(id) {
     state.dirty.add(id);
@@ -960,8 +1123,13 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (compacting) pill.querySelector('.pct').innerHTML = job.status === 'running' ? `压缩中 <span data-job-since="${esc(job.started_at || '')}">${fmtElapsed(job.started_at)}</span>` : '压缩排队中';
     else if (s.pct != null) { pill.querySelector('.pct').textContent = `${s.pct}%`; pill.style.setProperty('--p', s.pct); pill.classList.toggle('hot', s.pct >= 80); }
     if (!pops.ctx.hidden) renderSessionPanel(ctxBody(), s, ctxActions());
-    if (job && !state.ticker) state.ticker = setInterval(() => { tickJobs(el); tickJobs(pops.ctx); }, 1000);
-    if (!job && state.ticker) { clearInterval(state.ticker); state.ticker = null; }
+    syncTicker();
+  }
+  // One ticker for the compact-job timer and every running chip / think timer; runs only while something is live and the page is visible.
+  function syncTicker() {
+    const need = jobActive(state.job) || !!el.querySelector('[data-t0]');
+    if (need && !state.ticker) state.ticker = setInterval(() => { if (document.hidden || !el.isConnected) return; tickJobs(el); tickJobs(pops.ctx); }, 250);
+    if (!need && state.ticker) { clearInterval(state.ticker); state.ticker = null; }
   }
   function ctxActions() {
     const run = (fn, msg) => async () => {

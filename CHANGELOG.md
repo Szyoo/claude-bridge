@@ -2,6 +2,16 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## 未发布
+
+- **消息区状态可视化**（`bridge-widget.js/.css`；效果参照 React Bits 的 Call Chip / Status Mark / Lattice Loader，MIT + Commons Clause，用 CSS 与内联 SVG 重写，不依赖动画库与图标包）：
+  - 工具调用行（含工具组）：运行中底色按计时逐渐填满（按工具类型有预期时长，可用 `expected` / 组件选项 `toolExpected` 覆盖），显示实时用时；结束变绿并收起填充，失败抖一下变红；展开后的命令 / 输出、失败 / 无结果、「执行中 · n/m」「执行了 N 条命令」等原有信息与交互不变
+  - 步骤、工具组、思考块前的状态图标取代闪烁圆点：空心圈 → 进度弧 → 勾 / 叉
+  - 每轮回答顶部和等待态用方格波浪加实时秒表，完成后定格为「已思考 12.3s」（中断则为「已中断，用时 …」）。时长优先取 `usage` 事件的 `duration_ms`，其次服务端事件 / 消息时间戳，再次客户端首帧到完成的差值；刷新页面后已完成的轮次仍显示，数据里没有时长则不显示
+  - 计时与 `tickJobs` 合并：只有存在运行中的项且页面可见时才刷新；`prefers-reduced-motion` 下无动画，计时照常
+  - 新导出 `messageStrings(lang)`（`zh` / `ja` / `en`）、`fmtDur`、`callProgress`、`turnTiming`、`latticeHtml`、`markHtml`、`TOOL_EXPECTED_MS`；`renderTurn` / `mountBridgeWidget` 新增 `lang`、`expected` / `toolExpected` 选项，`strings` 新增 `thought`、`stopped`
+  - 样式见 `bridge-widget.css` 末尾 `message-status` 段，旧的 `.bridge-run`、`.bridge-wait::after`、`@keyframes bridge-blink` 不再使用
+
 ## v0.8.2 — 2026-10-14
 
 - **站点页面标题换成新字样**：登录页（口令 / 账户两种模式）与 403 页的「claude-bridge」改用设计包 v0.18.0 的 `.app-title`（Geist 600、纯色、字标动效）；页面加载的 @szyyw/design 升到 v0.18.0

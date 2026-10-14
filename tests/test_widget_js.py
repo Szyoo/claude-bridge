@@ -24,3 +24,9 @@ def test_widget_pure_functions():
 def test_modules_parse(name):
     r = subprocess.run([NODE, "--check", str(STATIC / name)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.skipif(not NODE, reason="node not installed")
+def test_message_status_functions():
+    r = subprocess.run([NODE, "--test", str(HERE / "message_status.test.mjs")], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr

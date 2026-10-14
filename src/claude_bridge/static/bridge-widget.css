@@ -312,3 +312,83 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
   .bridge-pop-head { padding-top: 12px; }
   .bridge-pop-grip { display: block; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--bridge-muted); opacity: .45; }
 }
+
+/* ===== message-status =====
+   Tool call rows (Call Chip), status icons (Status Mark) and the think header / waiting state (Lattice Loader), re-implemented
+   in CSS from the React Bits components of the same names (https://reactbits.dev, MIT + Commons Clause).
+   Replaces: .bridge-run (JS no longer emits it), .bridge-wait::after (blinking dot), @keyframes bridge-blink. */
+.bridge-root, .bridge {
+  --bridge-wash: color-mix(in srgb, var(--bridge-accent) 11%, transparent);
+  --bridge-wash-ok: color-mix(in srgb, var(--bridge-ok) 16%, transparent);
+  --bridge-wash-err: color-mix(in srgb, var(--bridge-err) 13%, transparent);
+  --bridge-ease-out: cubic-bezier(.23, 1, .32, 1);
+}
+.bridge-wait::after { content: none; }
+
+/* -- call chip: the summary row of a tool / tool group -- */
+.bridge-step.tool > summary, .bridge-step.group > summary { position: relative; overflow: hidden; }
+.bridge-step.tool > summary > :not(.bridge-fill), .bridge-step.group > summary > :not(.bridge-fill) { position: relative; }
+.bridge-fill { position: absolute; inset: 0; background: var(--bridge-wash); transform: scaleX(0); transform-origin: left center; pointer-events: none; opacity: 0; }
+.bridge-step.running > summary .bridge-fill { opacity: 1; transition: transform .26s linear; }
+.bridge-step.tool.error > summary .bridge-fill { opacity: 1; transform: scaleX(1); background: var(--bridge-wash-err); }
+.bridge-step.group.error:not(.running) > summary .bridge-fill { opacity: 1; transform: scaleX(1); background: color-mix(in srgb, var(--bridge-err) 7%, transparent); }
+.bridge-time { flex: none; margin-left: auto; padding-left: .6em; font-family: var(--bridge-mono); font-size: .857em; font-variant-numeric: tabular-nums; opacity: .7; }
+.bridge-step-desc + .bridge-time { margin-left: 0; }
+.bridge-step[data-st="done"] > summary .bridge-time { color: var(--bridge-ok); opacity: .85; }
+.bridge-step.error > summary .bridge-time { color: var(--bridge-err); opacity: .9; }
+.bridge-step-state { margin-left: .2em; }
+.bridge-step.group > summary .bridge-step-name { margin-right: auto; }
+
+/* -- status mark -- */
+.bridge-mark { flex: none; width: 1.05em; height: 1.05em; overflow: visible; color: var(--bridge-muted); transition: color .2s; }
+.bridge-mark .trk, .bridge-mark .ring, .bridge-mark .chk, .bridge-mark .crs { fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.bridge-mark .trk { stroke-opacity: 0; fill: currentColor; fill-opacity: 0; }
+.bridge-mark .ring { stroke-dasharray: 1 1; }
+.bridge-mark .chk, .bridge-mark .crs { stroke-dasharray: 1 2; stroke-dashoffset: 1.05; opacity: 0; }
+.bridge-mark[data-st="pending"] .ring { stroke-dasharray: .02 .085; opacity: .6; }
+.bridge-mark[data-st="running"] { color: var(--bridge-accent); }
+.bridge-mark[data-st="running"] .trk { stroke-opacity: .2; }
+.bridge-mark[data-st="running"] .ring { stroke-dasharray: .68 1; transform-box: fill-box; transform-origin: center; animation: bridge-mark-spin 1.1s linear infinite; }
+.bridge-step[data-st="running"] > summary .bridge-mark[data-st="running"] .ring[style*="stroke-dasharray"] { animation: none; transition: stroke-dasharray .26s linear; }
+.bridge-mark[data-st="done"] { color: var(--bridge-ok); }
+.bridge-mark[data-st="done"] .trk, .bridge-mark[data-st="failed"] .trk, .bridge-mark[data-st="cancelled"] .trk { fill-opacity: .08; }
+.bridge-mark[data-st="done"] .chk { stroke-dashoffset: 0; opacity: 1; }
+.bridge-mark[data-st="failed"] { color: var(--bridge-err); }
+.bridge-mark[data-st="cancelled"] .ring { opacity: .5; }
+.bridge-mark[data-st="failed"] .crs, .bridge-mark[data-st="cancelled"] .crs { stroke-dashoffset: 0; opacity: 1; }
+@keyframes bridge-mark-spin { to { transform: rotate(360deg); } }
+
+/* -- finish animations: replayed once by renderTurn (class .just, --jd resumes them across re-renders) -- */
+@keyframes bridge-draw { from { stroke-dashoffset: 1.05; opacity: 1; } to { stroke-dashoffset: 0; opacity: 1; } }
+@keyframes bridge-fill-done { 0% { opacity: 1; transform: scaleX(.9); background: var(--bridge-wash-ok); clip-path: inset(0); } 40% { opacity: 1; transform: scaleX(1); background: var(--bridge-wash-ok); clip-path: inset(0); } 100% { opacity: 1; transform: scaleX(1); background: var(--bridge-wash-ok); clip-path: inset(100% 0 0 0); } }
+@keyframes bridge-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-4px); } 40% { transform: translateX(4px); } 60% { transform: translateX(-2.6px); } 80% { transform: translateX(1.3px); } }
+.bridge-step.just[data-st="done"] > summary .bridge-fill { animation: bridge-fill-done .6s var(--bridge-ease-out) var(--jd, 0ms) both; }
+.bridge-step.just[data-st="done"] > summary .bridge-mark .chk { animation: bridge-draw .24s var(--bridge-ease-out) var(--jd, 0ms) both; }
+.bridge-step.just[data-st="failed"] > summary .bridge-mark .crs { animation: bridge-draw .24s var(--bridge-ease-out) var(--jd, 0ms) both; }
+.bridge-step.just.error > summary { animation: bridge-shake .45s cubic-bezier(.77, 0, .175, 1) var(--jd, 0ms) both; }
+
+/* -- lattice loader: think header / waiting state -- */
+.bridge-think-row { margin: 0 0 calc(var(--chat-item-gap) * .5); }
+.bridge-think { display: inline-flex; align-items: center; gap: .6em; color: var(--bridge-muted); font-size: .928em; line-height: 1; vertical-align: middle; }
+.bridge-wait .bridge-think { font-size: 1em; }
+.bridge-lat { flex: none; display: grid; grid-template-columns: repeat(3, 4px); gap: 2px; --lat-on: var(--bridge-accent); }
+.bridge-lat i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .16; }
+.bridge-think[data-st="running"] .bridge-lat i:not([data-hole]) { background: var(--lat-on); animation: bridge-lat 864ms cubic-bezier(.77, 0, .175, 1) infinite; }
+.bridge-think[data-st="running"] .bridge-lat i[data-hole] { opacity: .08; }
+.bridge-think[data-st="done"] .bridge-lat i[data-on] { background: var(--bridge-ok); opacity: 1; }
+.bridge-think[data-st="failed"] .bridge-lat i[data-on] { background: var(--bridge-err); opacity: 1; }
+.bridge-think:not([data-st="running"]) .bridge-lat { animation: bridge-lat-in .2s var(--bridge-ease-out) both; }
+.bridge-lat-label { font-weight: 500; }
+.bridge-lat-timer { font-family: var(--bridge-mono); font-size: .93em; font-variant-numeric: tabular-nums; opacity: .7; }
+.bridge-think[data-st="running"] .bridge-lat-label { color: var(--bridge-fg); }
+@keyframes bridge-lat { 0%, 100% { opacity: .16; } 18%, 42% { opacity: 1; } 62% { opacity: .16; } }
+@keyframes bridge-lat-in { from { opacity: 0; transform: scale(.88); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* no motion; timers still tick (JS) */
+  .bridge-step.running > summary .bridge-fill, .bridge-step[data-st="running"] > summary .bridge-mark[data-st="running"] .ring[style*="stroke-dasharray"] { transition: none; }
+  .bridge-mark[data-st="running"] .ring { animation: none; opacity: .75; }
+  .bridge-think[data-st="running"] .bridge-lat i:not([data-hole]) { animation: none; opacity: .6; }
+  .bridge-step.just > summary, .bridge-step.just > summary .bridge-fill, .bridge-step.just > summary .bridge-mark .chk,
+  .bridge-step.just > summary .bridge-mark .crs, .bridge-think:not([data-st="running"]) .bridge-lat { animation: none !important; }
+}
