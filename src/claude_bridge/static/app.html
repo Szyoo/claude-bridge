@@ -24,8 +24,9 @@
   <div id="app"></div>
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
-    import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
+    import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';
     import { api, esc, fmtPct, fmtSeen, toast, confirmTyped } from '/static/bridge/bridge-pages.js';
+    import { enhanceSwitches } from '@szyyw/design/switch.js';
 
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
     const app = document.getElementById('app');
@@ -39,8 +40,44 @@
     let project = store.get('bridge_project', '') || null;
     let widget = null, projects = [], agentOnline = true, poll = null, openWhenReady = null;
 
-    const toggle = () => `<span class="seg bp-mode" role="tablist">${[['', 'Chat'], ['code', 'Code']].map(([k, l]) =>
-      `<button type="button" role="tab" data-mode="${k}" aria-selected="${k === mode}"${k === mode ? ' class="active"' : ''}>${l}</button>`).join('')}</span>`;
+    // Chat ⟨switch⟩ Code (@szyyw/design Squish Switch); both words are clickable too
+    const toggle = () => `<span class="bp-mode" role="group" aria-label="模式">`
+      + `<button type="button" class="l${mode === '' ? ' on' : ''}" data-mode="" aria-pressed="${mode === ''}">Chat</button>`
+      + `<input type="checkbox" class="switch" data-mode-switch data-width="34" data-height="18" aria-label="Code 模式"${mode === 'code' ? ' checked' : ''} />`
+      + `<button type="button" class="l${mode === 'code' ? ' on' : ''}" data-mode="code" aria-pressed="${mode === 'code'}">Code</button></span>`;
+    // who is signed in + your own use of the 5h / weekly windows: top right in every view (the sidebar foot on phones)
+    const ME = '<span class="bp-me bp-me-top"></span>';
+    let unSwitch = null;
+    const wireSwitch = () => { unSwitch?.(); unSwitch = enhanceSwitches(app); };
+
+    // Swaps views with a View Transition: the sidebar box and the top bar stay, their contents slide in the
+    // direction of travel (Chat → Code → a project is "forward"). No animation for reduced motion / old browsers.
+    const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+    async function transition(update, dir = '') {
+      if (!document.startViewTransition || reduced()) return update();
+      const html = document.documentElement;
+      html.dataset.vt = dir;
+      const t = document.startViewTransition(update);
+      try { await t.finished; } catch {} finally { delete html.dataset.vt; }
+    }
+    // let the new sidebar list arrive before the "after" snapshot, so it slides in instead of popping in later
+    const listReady = (ms = 450) => new Promise((resolve) => {
+      const list = app.querySelector('.bridge-threads');
+      if (!list || list.childElementCount) return resolve();
+      const mo = new MutationObserver(() => { if (list.childElementCount) { mo.disconnect(); resolve(); } });
+      mo.observe(list, { childList: true });
+      setTimeout(() => { mo.disconnect(); resolve(); }, ms);
+    });
+
+    async function setMode(next) {
+      if (next === mode) return;
+      const sw = app.querySelector('[data-mode-switch]');
+      if (sw && sw.checked !== (next === 'code')) sw.checked = next === 'code';
+      for (const b of app.querySelectorAll('.bp-mode [data-mode]')) { const on = b.dataset.mode === next; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+      mode = next; store.set('bridge_mode', mode);
+      if (!reduced()) await new Promise(r => setTimeout(r, 300));  // let the switch slide first
+      if (mode === next) transition(() => show(), next === 'code' ? 'fwd' : 'back');
+    }
 
     function unmount() { widget?.destroy(); widget = null; clearTimeout(poll); poll = null; }
 
@@ -55,10 +92,12 @@
           empty: `在 ${proj.name} 里开始：描述你想让 Claude 做的事` },
       } : {};
       widget = mountBridgeWidget(app, client, {
-        scope, title: 'claude-bridge', fill: true, topStart: toggle() + extra, sideFoot: '<div class="bp-me"></div>',
+        scope, title: 'claude-bridge', fill: true, topStart: toggle() + extra, topEnd: ME, sideFoot: '<div class="bp-me bp-me-side"></div>',
         placeholder: scope ? '让 Claude 读代码、改文件、跑命令' : '输入消息', ...code,
       });
+      wireSwitch();
       renderMe();
+      return listReady();
     }
 
     async function show() {
@@ -103,10 +142,22 @@
           ${p.status === 'deleting' ? '' : `<button type="button" class="btn-ghost btn-small danger" data-del="${esc(p.name)}" title="删除项目">删除</button>`}
         </div>`;
       }).join('');
-      app.innerHTML = `<div class="bp-home bridge-root">
-        <header class="bp-home-top">${toggle()}<span class="grow"></span><span class="bp-me"></span></header>
-        <main class="bp-wrap narrow">
-          <h1 class="page-title">选择项目</h1>
+      // same frame as the chat: sidebar (the projects, like the thread list) + top bar + the picker in the main area
+      const side = projects.map(p => {
+        const [st] = STATUS[p.status] || ['', ''];
+        const ready = p.status === 'ready';
+        const meta = [st, p.info?.branch, p.threads ? `${p.threads} 段对话` : '', p.last_used ? fmtSeen(p.last_used) : ''].filter(Boolean).join(' · ');
+        return `<button type="button" class="bridge-thread"${ready ? ` data-open="${esc(p.name)}"` : ' disabled'}>`
+          + `<span class="t">${esc(p.name)}</span><span class="p">${esc(p.source ? p.source.replace(/^https?:\/\//, '') : '空项目')}</span>`
+          + `<span class="m">${esc(meta)}</span></button>`;
+      }).join('');
+      app.innerHTML = `<div class="bridge fill bp-homeview">
+        <aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="home-new">＋ 新建项目</button>
+          <div class="bridge-threads">${side}</div><div class="bridge-side-foot"><div class="bp-me bp-me-side"></div></div></aside>
+        <div class="bridge-side-scrim" data-act="side-close"></div>
+        <div class="bridge-main">
+          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">☰</button>${toggle()}<span class="bridge-title">选择项目</span>${ME}</div>
+          <div class="bp-home"><main class="bp-wrap narrow">
           <p class="page-sub">每个项目是你专属空间里的一个目录（通常是 git 仓库）。Claude 在项目里读写文件、跑命令，每个项目有自己的对话记录。</p>
           ${agentOnline ? '' : '<div class="callout warn">helper 现在离线：新建 / 克隆会排队，等它上线后执行。</div>'}
           <div class="bp-projects">${rows || '<p class="muted small">还没有项目，先克隆一个仓库或新建一个空项目。</p>'}</div>
@@ -124,16 +175,28 @@
               <div class="actions"><button class="btn">创建</button></div>
             </form>
           </div>
-        </main></div>`;
+        </main></div></div></div>`;
+      applyPrefs(app.firstElementChild, loadPrefs());  // the chat's sidebar on / off and width
+      wireSwitch();
       renderMe();
       if (busy || openWhenReady) poll = setTimeout(showHomeIfStill, 2000);
     }
     const showHomeIfStill = () => { if (mode === 'code' && !project) showHome(); };
 
     app.addEventListener('click', async (e) => {
-      const m = e.target.closest('[data-mode]');
-      if (m && m.dataset.mode !== mode) { mode = m.dataset.mode; store.set('bridge_mode', mode); return show(); }
-      if (e.target.closest('[data-home]')) { project = null; store.set('bridge_project', null); return show(); }
+      const m = e.target.closest('.bp-mode [data-mode]');
+      if (m) return setMode(m.dataset.mode);
+      if (e.target.closest('[data-home]')) { project = null; store.set('bridge_project', null); return transition(() => show(), 'back'); }
+      // the project picker's own sidebar (the chat widget handles these itself)
+      const act = e.target.closest('.bp-homeview [data-act]')?.dataset.act;
+      if (act === 'side') {
+        const root = app.firstElementChild;
+        if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open');
+        else { const pr = loadPrefs(); pr.sidebar = !pr.sidebar; savePrefs(pr); applyPrefs(root, pr); }
+        return;
+      }
+      if (act === 'side-close') return app.firstElementChild.classList.remove('side-open');
+      if (act === 'home-new') { app.firstElementChild.classList.remove('side-open'); return app.querySelector('#pj-url')?.focus(); }
       const del = e.target.closest('[data-del]');
       if (del) {
         const name = del.dataset.del;
@@ -142,8 +205,9 @@
         return showHome();
       }
       const open = e.target.closest('[data-open]');
-      if (open) { project = open.dataset.open; store.set('bridge_project', project); return show(); }
+      if (open) { project = open.dataset.open; store.set('bridge_project', project); return transition(() => show(), 'fwd'); }
     });
+    app.addEventListener('change', (e) => { if (e.target.matches('[data-mode-switch]')) setMode(e.target.checked ? 'code' : ''); });
     app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches?.('[data-open]')) e.target.click(); });
     app.addEventListener('submit', async (e) => {
       const f = e.target.closest('[data-form]');
@@ -161,8 +225,8 @@
 
     // who is signed in + how much of their share is left
     async function renderMe() {
-      const box = document.querySelector('.bp-me');
-      if (!box) return;
+      const boxes = app.querySelectorAll('.bp-me');
+      if (!boxes.length) return;
       let d;
       try { d = await api('GET', '/api/me'); } catch { return; }
       const u = d.user, us = d.usage;
@@ -171,11 +235,12 @@
         .filter(([k]) => us[k].used_pct != null)
         .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}${us[k].limit_pct != null ? `/${fmtPct(us[k].limit_pct)}` : ''}`);
       const sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
-      box.innerHTML = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
+      const html = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
         + `<span class="n">${esc((d.sso && d.sso.portal_user) || u.display_name || u.username)}</span><span class="u${us.blocked ? ' full' : ''}">${esc(sub)}</span></a>`
         + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin">管理</a>' : '')
         // portal SSO: sign-out lives in the corner account menu (it signs out of the portal); no local button
         + (d.sso ? '' : '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>');
+      for (const b of boxes) b.innerHTML = html;
     }
     show();
     setInterval(renderMe, 120000);

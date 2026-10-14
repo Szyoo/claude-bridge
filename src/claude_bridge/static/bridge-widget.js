@@ -1421,6 +1421,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
           <span class="bridge-agent"><i class="bridge-dot"></i><span class="txt"></span></span>
           ${o.showThreads ? `<button type="button" class="bridge-icon" data-act="menu" title="更多">⋯</button>
           <div class="bridge-menu" hidden><button type="button" data-act="rename">${esc(S.rename)}</button><button type="button" data-act="pin">${esc(S.pin)}</button><button type="button" class="danger" data-act="del">${esc(S.del)}</button><p class="bridge-menu-warn" role="alert" hidden></p></div>` : ''}
+          ${o.topEnd || ''}
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
         <form class="bridge-form bridge-pb">

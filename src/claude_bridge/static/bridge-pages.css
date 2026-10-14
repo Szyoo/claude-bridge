@@ -64,9 +64,39 @@
 .bp-me form { margin: 0; }
 .bp-me .grow { flex: 1; }
 
-/* Chat / Code switch (.seg) in the chat top bar: as tall as the bar's controls */
-.bp-mode { flex: none; padding: 2px; }
-.bp-mode > button { padding: 2px 10px; font-size: .857em; }
+/* Chat ⟨switch⟩ Code in the top bar: @szyyw/design Squish Switch between two clickable words */
+.bp-mode { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 0 4px; }
+.bp-mode .l { border: 0; background: none; padding: 2px 0; font: inherit; font-size: .857em; color: var(--bridge-muted); cursor: pointer; transition: color .2s var(--ease, ease); }
+.bp-mode .l.on { color: var(--bridge-fg); font-weight: 600; }
+.bp-mode .l:hover { color: var(--bridge-fg); }
+.bp-mode .l:focus-visible { outline: 2px solid var(--bridge-accent); outline-offset: 2px; border-radius: 4px; }
+
+/* signed-in user + own usage: top right on desktop (like the project picker always had), sidebar foot on phones */
+.bp-me-top { flex: none; }
+.bp-me-top a.me { padding: 2px 8px; }
+.bridge-side-foot:has(.bp-me-side) { display: none; }
+@media (max-width: 720px) {
+  .bp-me-top { display: none; }
+  .bridge-side-foot:has(.bp-me-side) { display: block; }
+}
+
+/* switching Chat / Code / a project: a View Transition. The sidebar box and the top bar stay put; the list,
+   the side head and the main area slide toward the direction of travel and fade (app.html sets data-vt). */
+.bp-chat .bridge-threads { view-transition-name: bp-list; }
+.bp-chat .bridge-side-head { view-transition-name: bp-side-head; }
+.bp-chat .bridge-new { view-transition-name: bp-new; }
+.bp-chat .bp-mode { view-transition-name: bp-mode; }
+.bp-chat .bridge-list, .bp-chat .bp-home { view-transition-name: bp-body; }
+::view-transition-group(*) { animation-duration: .28s; animation-timing-function: cubic-bezier(.2, .7, .2, 1); }
+html[data-vt="fwd"]::view-transition-old(bp-list), html[data-vt="fwd"]::view-transition-old(bp-body) { animation: bp-vt-out-l .2s ease-in both; }
+html[data-vt="fwd"]::view-transition-new(bp-list), html[data-vt="fwd"]::view-transition-new(bp-body) { animation: bp-vt-in-r .28s cubic-bezier(.2, .7, .2, 1) both; }
+html[data-vt="back"]::view-transition-old(bp-list), html[data-vt="back"]::view-transition-old(bp-body) { animation: bp-vt-out-r .2s ease-in both; }
+html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-transition-new(bp-body) { animation: bp-vt-in-l .28s cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes bp-vt-out-l { to { opacity: 0; transform: translateX(-18px); } }
+@keyframes bp-vt-in-r { from { opacity: 0; transform: translateX(18px); } }
+@keyframes bp-vt-out-r { to { opacity: 0; transform: translateX(18px); } }
+@keyframes bp-vt-in-l { from { opacity: 0; transform: translateX(-18px); } }
+@media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
 
 /* Code mode: project button in the chat top bar */
 .bp-proj { display: inline-flex; align-items: center; gap: 5px; max-width: 40vw; border: 1px solid var(--bridge-border); background: var(--bridge-panel); color: var(--bridge-fg); font: inherit; font-size: .857em; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer; flex: none; }
@@ -74,12 +104,11 @@
 .bp-proj i { font-style: normal; color: var(--bridge-muted); font-size: .8em; }
 .bp-proj:hover { background: var(--bridge-hover); }
 
-/* Code mode: project picker page */
-.bp-home { min-height: 100%; height: 100%; overflow: auto; background: var(--bridge-bg); color: var(--bridge-fg); }
-.bp-home-top { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--bridge-border); background: var(--bridge-panel); min-height: 42px; }
-.bp-home-top .grow { flex: 1; }
-.bp-home-top .bp-me a.me { padding: 2px 8px; }
-.bp-home .page-title { margin-top: 12px; }
+/* Code mode: project picker page, in the chat's frame (sidebar = projects) */
+.bp-homeview .bridge-main { grid-template-rows: auto 1fr; }
+.bp-home { min-height: 0; overflow: auto; color: var(--bridge-fg); }
+.bp-home > .bp-wrap { padding-top: 20px; }
+.bridge-thread:disabled { cursor: default; opacity: .6; }
 .bp-projects { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 16px; }
 .bp-project { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
 .bp-project.ready { cursor: pointer; }
@@ -98,11 +127,11 @@
 .bp-side-proj .d { font-size: 11.5px; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* full-width bars under the top-right corner tools: make room for them (measured by corner.js, like .corner-clear) */
-.bp-chat .bridge-top, .bp-home-top { padding-right: max(12px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px))); }
+.bp-chat .bridge-top { padding-right: max(12px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px))); }
 /* the corner tools float at top: 10px; make these bars tall enough to hold them (10px above + the rail + 10px below),
    so the buttons sit centred in the bar instead of straddling its bottom border. --corner-rail-h is measured by corner.js;
    capped so a vertical rail on narrow screens doesn't blow the bar up. */
-.bp-chat .bridge-top, .bp-home-top {
+.bp-chat .bridge-top {
   min-height: calc(min(var(--corner-rail-h, 34px), 40px) + 20px + env(safe-area-inset-top, 0px));
   padding-top: calc(6px + env(safe-area-inset-top, 0px));
 }
@@ -112,8 +141,7 @@
 body.bp-chat .bridge { background: transparent; }
 body.bp-chat .bridge-side,
 body.bp-chat .bridge-top,
-body.bp-chat .bridge-form,
-body.bp-chat .bp-home-top {
+body.bp-chat .bridge-form {
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
