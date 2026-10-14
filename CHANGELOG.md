@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.9.1 — 2026-10-14
+
+- **聊天页接入站点背景主题**：`app.html` / `index.html` 补上 `.bg-layer`，外观面板恢复「主题」一栏，6 个背景主题可切换、参数可调。
+- 聊天页样式统一到站点风格（`bridge-pages.css`，全部限定在 `body.bp-chat` 下）：页面底透明；侧栏、顶栏、输入框改用设计包毛玻璃 token（`--glass-bg` / `--glass-border` + backdrop-filter）；消息区透明，每一轮消息和空状态提示各自垫一层半透明底，保证各主题、明暗、配色下文字可读；手机端侧栏抽屉保持不透明。
+- 嵌入组件 `bridge-widget.css` 未改动，缺省外观不变。
+
 ## v0.9.0 — 2026-10-14
 
 - **消息区状态可视化**（`bridge-widget.js/.css`；效果参照 React Bits 的 Call Chip / Status Mark / Lattice Loader，MIT + Commons Clause，用 CSS 与内联 SVG 重写，不依赖动画库与图标包）：

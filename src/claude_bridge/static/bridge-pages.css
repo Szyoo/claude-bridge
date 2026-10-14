@@ -99,3 +99,31 @@
 
 /* full-width bars under the top-right corner tools: make room for them (measured by corner.js, like .corner-clear) */
 .bp-chat .bridge-top, .bp-home-top { padding-right: max(12px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px))); }
+
+/* ---------- chat page on the site's background theme: glass layers over .bg-layer ----------
+   Scoped to body.bp-chat, so the embedded widget (bridge-widget.css alone) keeps its flat look. */
+body.bp-chat .bridge { background: transparent; }
+body.bp-chat .bridge-side,
+body.bp-chat .bridge-top,
+body.bp-chat .bridge-form,
+body.bp-chat .bp-home-top {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+body.bp-chat .bridge-side, body.bp-chat .bridge-top, body.bp-chat .bridge-form { border-color: var(--glass-border); }
+/* the transcript is transparent so the theme shows; each turn (and the empty hint) is its own translucent card, so body text
+   keeps its contrast on every theme / scheme / palette */
+body.bp-chat .bridge-turn, body.bp-chat .bridge-empty {
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+  border-radius: 12px;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+body.bp-chat .bridge-turn { padding: 10px 14px; }
+body.bp-chat .bridge-empty { width: fit-content; margin: 40px auto 0; padding: 6px 14px; }
+body.bp-chat .bridge-form { background: color-mix(in srgb, var(--bg) 66%, var(--glass-bg)); }
+body.bp-chat .bp-home { background: transparent; }
+body.bp-chat #app { position: relative; z-index: 1; }
+/* the phone drawer overlaps the transcript: keep it opaque enough to read */
+@media (max-width: 720px) { body.bp-chat .bridge.side-open .bridge-side { background: var(--sheet-bg); } }
