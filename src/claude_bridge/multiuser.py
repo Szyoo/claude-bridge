@@ -52,6 +52,13 @@ def sso_from_env() -> bool:
     return _flag("SZYYW_SSO", "CLAUDE_BRIDGE_SSO")
 
 
+def scopes_from_env() -> tuple[str, ...]:
+    """`CLAUDE_BRIDGE_SCOPES`: comma-separated extra scopes a multi-user server accepts besides "" and
+    project scopes — one per external client that has its own worker profile (e.g. a browser extension)."""
+    raw = os.environ.get("CLAUDE_BRIDGE_SCOPES", "")
+    return tuple(s.strip() for s in raw.split(",") if s.strip())
+
+
 class NotProvisioned(Exception):
     """A gate identity with no bridge_users row (and autocreate off), or a disabled one."""
 
@@ -145,9 +152,11 @@ def create_multiuser_app(
     sso_autocreate: bool | None = None,
     portal_origin: str | None = None,
     client_tools_enabled: bool = False,
+    scopes: tuple[str, ...] | None = None,
 ) -> FastAPI:
     """`sso` / `sso_autocreate` / `portal_origin` default to `SZYYW_SSO` (or `CLAUDE_BRIDGE_SSO`) /
-    `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN` (default https://szyyw.xyz)."""
+    `SZYYW_SSO_AUTOCREATE` / `PORTAL_ORIGIN` (default https://szyyw.xyz). `scopes` (default
+    `CLAUDE_BRIDGE_SCOPES`) are extra named scopes accepted besides "" and project scopes."""
     if sso is None:
         sso = sso_from_env()
     if sso_autocreate is None:
@@ -158,8 +167,10 @@ def create_multiuser_app(
     store = BridgeStore(db_path)
     accounts = Accounts(store, secret=secret, session_days=session_days, tz=tz)
     ipgeo = IpGeo(store)  # admin pages: where an IP is (app.state.ipgeo so tests can swap the fetcher)
+    extra_scopes = frozenset(scopes_from_env() if scopes is None else scopes)
+
     def scope_ok(scope: str, owner: str) -> bool:
-        if scope == "":
+        if scope == "" or scope in extra_scopes:
             return True
         return scope.startswith(PROJECT_SCOPE_PREFIX) and bridge.service.project_ready(owner, scope[len(PROJECT_SCOPE_PREFIX):])
 

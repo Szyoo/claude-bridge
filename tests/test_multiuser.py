@@ -559,3 +559,25 @@ def test_site_icons_public_without_login(app):
     for path in ("/favicon.svg", "/favicon.ico", "/apple-touch-icon.png"):
         assert c.get(path).status_code == 200
     assert 'href="/favicon.svg"' in c.get("/login").text
+
+
+# ---------------- extra scopes ----------------
+
+
+def test_extra_scopes_accept_named_scope_reject_others(tmp_path, monkeypatch):
+    db = tmp_path / "s.db"
+    store = BridgeStore(db)
+    Accounts(store).create("me", PW, role="admin")
+    store.close()
+    monkeypatch.setenv("CLAUDE_BRIDGE_SCOPES", "ext, other-app")
+    app = create_multiuser_app(db_path=db, agent_token="tok")
+    me = login(app, "me")
+    assert me.post("/api/send", json={"text": "hi", "scope": "ext"}).status_code == 201
+    assert me.post("/api/send", json={"text": "hi", "scope": "other-app"}).status_code == 201
+    r = me.post("/api/send", json={"text": "hi", "scope": "unknown"})
+    assert r.status_code == 400 and "scope" in r.json()["detail"]
+    # an explicit argument wins over the environment
+    app2 = create_multiuser_app(db_path=db, agent_token="tok", scopes=("only",))
+    me2 = login(app2, "me")
+    assert me2.post("/api/send", json={"text": "hi", "scope": "only"}).status_code == 201
+    assert me2.post("/api/send", json={"text": "hi", "scope": "ext"}).status_code == 400

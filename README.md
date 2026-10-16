@@ -49,6 +49,7 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 | `CLAUDE_BRIDGE_DB` / `_FILES` | SQLite 文件 / 上传图片目录 |
 | `CLAUDE_BRIDGE_PASSWORD` / `_SECRET` / `_COOKIE_SECURE` | 单口令登录 / cookie 签名密钥 / cookie 的 Secure 属性（缺省：非本机监听时开启） |
 | `CLAUDE_BRIDGE_MULTI_USER` / `_TZ` | `1` = 多用户模式 / 配额提示里重置时间的时区 |
+| `CLAUDE_BRIDGE_SCOPES` | 多用户模式下额外接受的 scope，逗号分隔（默认只接受空 scope 与项目 scope）。给有自己 worker profile 的外部客户端用，例如浏览器扩展 |
 | `CLAUDE_BRIDGE_AGENT_TOKEN` | 服务端与 worker 的共享令牌 |
 | `CLAUDE_BRIDGE_URL` / `_CWD` / `_WORKER_NAME` | worker 连接的服务端 / `claude` 的工作目录 / worker 名称 |
 | `CLAUDE_BRIDGE_CLAUDE_BIN` / `_MODEL` / `_MAX_TURNS` / `_CHAT_TIMEOUT` | `claude` 可执行文件 / 缺省模型 / 最大轮数 / 单次超时秒数 |
