@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from claude_bridge.accounts import Accounts, generate_password, public_user, verify_password
 from claude_bridge.auth import COOKIE_NAME, LoginLimiter
+from claude_bridge.callers import Callers, create_caller_router
 from claude_bridge.errors import BridgeError
 from claude_bridge.ipgeo import IpGeo
 from claude_bridge.principal import Principal
@@ -237,6 +238,14 @@ def create_multiuser_app(
 
     bridge = create_bridge(store=store, config=cfg, browser_auth=browser_auth, agent_token=agent_token)
     accounts.service = bridge.service
+
+    def caller_principal(row: dict[str, Any]) -> Principal | None:
+        """A caller's tasks run as its bound account: that user's quota and usage ledger."""
+        owner = str(row.get("owner") or "")
+        user = accounts.get(int(owner)) if owner.isdigit() else None
+        return accounts.principal(user) if user and not user["disabled"] else None
+
+    bridge.caller_router = create_caller_router(bridge.service, Callers(store), caller_principal)
 
     app = FastAPI(title="claude-bridge", docs_url=None, redoc_url=None)
     app.state.bridge = bridge

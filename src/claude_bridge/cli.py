@@ -117,6 +117,23 @@ def build_parser() -> argparse.ArgumentParser:
     uu = us.add_parser("unmap", help="portal SSO: remove USERNAME's portal mapping")
     uu.add_argument("username")
 
+    c = sub.add_parser("callers", help="tokens for server-side programs that submit one-off tasks (/api/caller/*)")
+    c.add_argument("--db", default=env("DB", "claude-bridge.db"))
+    cs = c.add_subparsers(dest="callers_cmd", required=True)
+    ca = cs.add_parser("add", help="create a caller; its token is printed once")
+    ca.add_argument("name")
+    ca.add_argument("--user", default="", help="multi-user: the account whose quota and usage the tasks count against")
+    ca.add_argument("--scope", action="append", required=True, help="a scope the caller may use (repeatable)")
+    ca.add_argument("--max-inflight", type=int, default=2)
+    ca.add_argument("--note", default="")
+    ca.add_argument("--token-only", action="store_true", help="print just the token (for piping into a secrets file)")
+    cs.add_parser("list", help="list callers (never the tokens)")
+    cr = cs.add_parser("rotate", help="issue a new token; the old one stops working at once")
+    cr.add_argument("name")
+    cr.add_argument("--token-only", action="store_true")
+    for name, text in (("disable", "stop accepting the caller's token"), ("enable", "accept it again")):
+        cs.add_parser(name, help=text).add_argument("name")
+
     st = sub.add_parser("status", help="check the server and the local claude login")
     st.add_argument("--url", default=env("URL"))
     st.add_argument("--token", default=env("AGENT_TOKEN"))
@@ -276,6 +293,51 @@ def cmd_users(args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_callers(args: argparse.Namespace) -> int:
+    from claude_bridge.accounts import Accounts
+    from claude_bridge.callers import Callers
+    from claude_bridge.errors import BridgeError
+    from claude_bridge.store import BridgeStore
+
+    store = BridgeStore(args.db)
+    callers = Callers(store)
+    try:
+        if args.callers_cmd == "list":
+            for r in callers.list():
+                flags = " [停用]" if r["disabled"] else ""
+                print(f"{r['id']:>4}  {r['name']:<20} owner={r['owner'] or '—':<6} scopes={','.join(r['scopes'])} "
+                      f"并发≤{r['max_inflight']}  最近 {r['last_used_at'] or '—'}{flags}")
+            return 0
+        if args.callers_cmd == "add":
+            owner = ""
+            if args.user:
+                user = Accounts(store, secret=env("SECRET")).by_name(args.user)
+                if not user:
+                    print(f"没有用户 {args.user}", file=sys.stderr)
+                    return 1
+                owner = str(user["id"])
+            row, token = callers.add(args.name, owner=owner, scopes=args.scope, max_inflight=args.max_inflight,
+                                     note=args.note)
+            if args.token_only:
+                print(token)
+            else:
+                print(f"已创建调用方 {row['name']}（owner={owner or '—'}，scopes={','.join(row['scopes'])}）")
+                print(f"令牌（只显示这一次）：{token}")
+            return 0
+        if args.callers_cmd == "rotate":
+            token = callers.rotate(args.name)
+            print(token if args.token_only else f"新令牌（只显示这一次，旧令牌已失效）：{token}")
+            return 0
+        callers.set_disabled(args.name, args.callers_cmd == "disable")
+        print(f"已{'停用' if args.callers_cmd == 'disable' else '启用'} {args.name}")
+        return 0
+    except BridgeError as e:
+        print(e.detail, file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     rc = 0
     if args.url and args.token:
@@ -304,7 +366,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = _pop_env_file(list(sys.argv[1:] if argv is None else argv))
     args = build_parser().parse_args(argv)
-    return {"serve": cmd_serve, "worker": cmd_worker, "users": cmd_users, "status": cmd_status}[args.cmd](args)
+    return {"serve": cmd_serve, "worker": cmd_worker, "users": cmd_users, "callers": cmd_callers,
+            "status": cmd_status}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,7 @@ class Bridge:
     browser_router: APIRouter
     agent_router: APIRouter
     client_tool_router: APIRouter | None = None
+    caller_router: APIRouter | None = None  # callers.create_caller_router(...): one-off tasks from server-side programs
 
     def mount(
         self,
@@ -71,9 +72,12 @@ class Bridge:
         browser_prefix: str = "/api/bridge",
         agent_prefix: str = "/api/agent",
         static_prefix: str | None = "/static/bridge",
+        caller_prefix: str = "/api/caller",
     ) -> None:
         app.include_router(self.browser_router, prefix=browser_prefix)
         app.include_router(self.agent_router, prefix=agent_prefix)
+        if self.caller_router is not None:
+            app.include_router(self.caller_router, prefix=caller_prefix)
         if self.client_tool_router is not None:
             app.include_router(self.client_tool_router,prefix=agent_prefix+'/client-tools')
         if static_prefix:

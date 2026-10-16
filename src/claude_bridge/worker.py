@@ -666,9 +666,10 @@ class Worker:
 
     def build_chat_command(
         self, prompt: str, session_id: str | None, settings: dict[str, Any], system_prompt: str,
-        *, input_json: bool = False, cfg: WorkerConfig | None = None,
+        *, input_json: bool = False, cfg: WorkerConfig | None = None, ephemeral: bool = False,
     ) -> tuple[list[str], bool]:
-        """`input_json`: the user turn is written to stdin as one stream-json message (used when it carries images)."""
+        """`input_json`: the user turn is written to stdin as one stream-json message (used when it carries images).
+        `ephemeral`: a one-off caller task — the CLI keeps no session on disk (nothing to resume or inspect later)."""
         cfg = cfg or self.config
         model = (settings.get("model") or cfg.model or "").strip()
         effort = (settings.get("effort") or "").strip().lower()
@@ -706,7 +707,9 @@ class Worker:
             cmd += ["--effort", effort]
         if cfg.permission_mode:
             cmd += ["--permission-mode", cfg.permission_mode]
-        if session_id:
+        if ephemeral:
+            cmd += ["--no-session-persistence"]
+        elif session_id:
             cmd += ["--resume", session_id]
         return cmd, via_stdin
 
@@ -871,7 +874,8 @@ class ChatRunner:
                 '. Other tools still execute on this worker. Use the tool namespace to choose the appropriate environment.')
         images = self._load_images(p.get("files") or [])
         cmd, via_stdin = self.worker.build_chat_command(
-            prompt, session_id, settings, system_prompt, input_json=bool(images), cfg=self.cfg
+            prompt, session_id, settings, system_prompt, input_json=bool(images), cfg=self.cfg,
+            ephemeral=bool(p.get("ephemeral")),
         )
         if p.get('client_tools'):
             cmd += ['--mcp-config',self.mcp_config]
@@ -1045,7 +1049,8 @@ class ChatRunner:
         self.emitter.add_event("usage", st.usage_data())
         self.emitter.final_flush()
         # refresh the session's context breakdown (local, free) so the UI shows the post-turn composition
-        report = self.worker.context_report(st.session_id, settings, cfg=self.cfg) if st.session_id else None
+        ephemeral = bool((self.job.get("payload") or {}).get("ephemeral"))
+        report = self.worker.context_report(st.session_id, settings, cfg=self.cfg) if st.session_id and not ephemeral else None
         summary["context"] = report
         self.worker._safe_finish(
             jid, ok=True, result=json.dumps(summary, ensure_ascii=False), session_id=st.session_id, context=report

@@ -12,6 +12,8 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from claude_bridge.auth import COOKIE_NAME, PasswordAuth
+from claude_bridge.callers import Callers, create_caller_router
+from claude_bridge.principal import ANONYMOUS
 from claude_bridge.server import create_bridge, static_dir
 from claude_bridge.service import BridgeConfig
 from claude_bridge.store import BridgeStore
@@ -124,6 +126,8 @@ def create_standalone_app(
     if client_tools_enabled:
         cfg.client_tools_enabled = True
     bridge = create_bridge(store=store, config=cfg, browser_auth=auth.dependency(), agent_token=agent_token)
+    # one shared namespace here: caller tasks run in it whatever owner the caller row names
+    bridge.caller_router = create_caller_router(bridge.service, Callers(store), lambda row: ANONYMOUS)
 
     app = FastAPI(title="claude-bridge", docs_url=None, redoc_url=None)
     app.state.bridge = bridge

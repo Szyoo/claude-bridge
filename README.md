@@ -20,6 +20,7 @@
 - 多用户模式：账户、按用户隔离的对话与设置、按订阅额度比例的配额
 - Chat / Code 两种模式：Code 按项目工作（克隆仓库或新建空项目），worker 按模式使用不同的工具与权限
 - 可选：完整内容流与调用方工具，见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)
+- 服务端程序的一次性任务：调用方令牌 + `/api/caller/*`（见下文「调用方（服务端程序）」）
 
 ## 安装
 
@@ -85,6 +86,27 @@ claude-bridge serve --multi-user --db bridge.db
 用户名 + 密码登录；每个人的对话、上传和设置互相隔离。管理员在 `/admin` 管理账户与配额，用户在 `/account` 修改资料和密码、查看用量。配额按每轮实际的 token 数（按模型与输入 / 输出 / 缓存加权）换算为 5 小时 / 每周额度的百分比，换算比例由账户使用率与 worker 本机用量自动标定（需 `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE=1`）。用户在 `/account` 能看到自己用了多少，以及账户总用量里其他用户、bridge 之外各占多少；对话列表显示每个对话占本周额度的比例。另可设置整体用量阈值。`users` 还有 `list` / `passwd` / `enable` / `map` / `unmap` 子命令。
 
 **门户 SSO**（`SZYYW_SSO=1`，或 `CLAUDE_BRIDGE_SSO=1`）：浏览器身份只取前置门卫注入的 `X-User` / `X-Role` / `X-Portal-Sub`，本地密码登录与会话 cookie 不再生效；只能部署在会剥掉客户端同名头的门卫之后，且不发布端口。`X-Portal-Sub` 对应本地账户行（`users map <用户名> <portal_sub>` 手动绑定；未绑定时按同名用户名认领一次），`X-Role` 逐请求决定管理权限。`SZYYW_SSO_AUTOCREATE=1` 时自动为新门户用户建账户；`PORTAL_ORIGIN` 指定登录 / 登出跳转的门户（缺省 `https://szyyw.xyz`）。`/api/agent/*`（Bearer）与 `/api/health` 不受影响。
+
+## 调用方（服务端程序）
+
+给不经浏览器的后端程序用：每个调用方一枚独立的 Bearer 令牌（与 worker 的 `CLAUDE_BRIDGE_AGENT_TOKEN` 无关，打不开 `/api/agent/*` 与浏览器接口），绑定一个账户和允许的 scope。任务以该账户身份运行（配额检查、用量都记在它名下），但每个任务都是独立的一次性对话：不续接会话、worker 端不保留 CLI 会话（`--no-session-persistence`），不出现在该账户的聊天列表里，结束 1 小时后删除（用量记录保留）。
+
+```bash
+# 服务端（多用户模式；令牌只显示一次，库里只存 SHA-256）
+claude-bridge callers --db bridge.db add myapp --user <用户名> --scope task [--max-inflight 2] [--token-only]
+claude-bridge callers --db bridge.db list | rotate <名称> | disable <名称> | enable <名称>
+```
+
+scope 需要服务端接受（多用户模式下加进 `CLAUDE_BRIDGE_SCOPES`），worker 的 `CLAUDE_BRIDGE_PROFILES` 里给它一个 profile（例如 `"task": {"cwd": "~/work/task/{owner}", "tools": [], "strict_mcp": true}`：没有任何工具）。
+
+| 路由（`/api/caller` 前缀） | 说明 |
+|---|---|
+| `POST /tasks` | `{text, scope, options?, timeout?=120, require_online?=true}`；`options` 同「逐轮选项」（`model` / `instructions` / `max_turns` / `max_output_tokens` / `thinking` / `effort`）。返回 `{task_id, status:"queued"}` |
+| `GET /tasks/{id}?wait=0..25` | 长轮询，返回 `{status, text, error, error_kind, usage, model, elapsed_ms}`；`status` ∈ `queued / running / done / failed / cancelled`，`text` 只在 `done` 时给出 |
+| `POST /tasks/{id}/cancel` | 取消 |
+| `GET /models` · `GET /status` | worker 上报的模型列表 / worker 在线与队列 |
+
+失败时 `error_kind` ∈ `offline`（worker 不在线，提交时直接 503）、`timeout`（超过 `timeout` 秒，自动取消；排队时间也算）、`quota`（账户配额或订阅额度不足）、`busy`（同时进行的任务超过上限，429）、`cancelled`、`claude`、`worker`；提交被拒时另有 `scope` / `owner`（403）、`invalid`（400）。
 
 ## 嵌入 FastAPI 应用
 
@@ -173,6 +195,8 @@ mountBridgeWidget(el, client, {
 | `GET/PUT /settings` · `GET /status` | 设置 / 状态 |
 
 worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`GET /jobs/{id}`、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish`、`POST /chat`（持令牌的后端直接发起对话）、`GET /status`、`GET /files/{id}`、`POST /limits`（额度上报）、`POST /local-usage`（本机用量的每分钟合计）、`GET/POST /models`（模型列表）。
+
+调用方路由（`/api/caller/*`）使用调用方令牌，见上文「调用方（服务端程序）」。
 
 独立运行时另有 `/login`、`/logout`、`/api/health`；多用户模式另有 `/api/me`、`/account`、`/admin` 与 `/api/admin/*`。
 

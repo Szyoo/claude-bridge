@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.11.0 — 2026-10-16
+
+- **调用方（服务端程序）**：新增调用方令牌与 `/api/caller/*`（提交一次性任务、长轮询取结果、取消、模型列表、状态）。令牌与 worker 令牌分开，绑定账户与允许的 scope，库里只存摘要；`claude-bridge callers add|list|rotate|disable|enable` 管理。任务以绑定账户身份运行（配额与用量记在它名下），每个任务一个独立对话、不续接会话，结束 1 小时后清理（用量记录保留）。失败原因归一为 `error_kind`（`offline` / `timeout` / `quota` / `busy` / `cancelled` / `claude` / `worker`）。
+- worker：一次性任务加 `--no-session-persistence`，不在本机保留 CLI 会话，也不再跑 `/context`。需要同时更新 worker。
+- 多用户模式支持 `CLAUDE_BRIDGE_SCOPES`：额外放行有自己 worker profile 的命名 scope。
+
 ## v0.10.1 — 2026-10-14
 
 - 站点页面服务端渲染跟随 @szyyw/design v0.21.0：缺省主题为「随机」（`cb_theme=random`，或从未显式选择——无 `cb_theme_set` 标记——且存的是 `nebula` / 空值）时只输出 `data-theme-mode="random"`，由前端抽定当天主题；显式选择的主题照常输出 `data-theme`。配色只剩缺省一种，不再输出 `data-palette`。
