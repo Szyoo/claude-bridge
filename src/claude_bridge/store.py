@@ -19,6 +19,8 @@ from typing import Any
 
 MESSAGE_STATUSES = ("pending", "streaming", "done", "error", "cancelled")
 INFLIGHT = ("pending", "streaming")
+# threads of one-off (`ephemeral`) browser sends: hidden from thread lists, deleted when idle (see service.purge_ephemeral)
+EPHEMERAL_KEY_PREFIX = "ephemeral:"
 JOB_STATUSES = ("queued", "running", "done", "failed", "cancelled")
 
 SCHEMA = """
@@ -353,6 +355,7 @@ class BridgeStore:
 
     def threads(self, scope: str | None = None, owner: str = "") -> list[dict[str, Any]]:
         where, params = ("WHERE t.owner=? AND t.scope=?", (owner, scope)) if scope is not None else ("WHERE t.owner=?", (owner,))
+        where += f" AND t.key NOT LIKE '{EPHEMERAL_KEY_PREFIX}%'"
         rows = self._q(
             f"""
             SELECT t.*,
@@ -398,6 +401,17 @@ class BridgeStore:
             return
         params.append(thread_id)
         self._x(f"UPDATE bridge_threads SET {', '.join(sets)} WHERE id=?", tuple(params))
+
+    def idle_threads_with_key_prefix(self, prefix: str, idle_seconds: int) -> list[str]:
+        """Threads whose key starts with `prefix`, with no message pending or streaming, untouched for `idle_seconds`
+        (last thread or message update)."""
+        cutoff = datetime.fromtimestamp(datetime.now(UTC).timestamp() - idle_seconds, UTC).strftime("%Y-%m-%d %H:%M:%S")
+        rows = self._q(
+            "SELECT t.id FROM bridge_threads t WHERE t.key LIKE ? AND t.updated_at < ? "
+            "AND NOT EXISTS (SELECT 1 FROM bridge_messages m WHERE m.thread=t.id AND (m.status IN (?,?) OR m.updated_at >= ?))",
+            (prefix.replace("%", "") + "%", cutoff, *INFLIGHT, cutoff),
+        )
+        return [r["id"] for r in rows]
 
     def touch_thread(self, thread_id: str) -> None:
         self._x("UPDATE bridge_threads SET updated_at=? WHERE id=?", (_now(), thread_id))

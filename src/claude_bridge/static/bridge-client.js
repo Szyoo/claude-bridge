@@ -78,12 +78,14 @@ export class BridgeClient {
 
   // ---- chat ----
   // `files` = ids returned by upload(); text may be empty when images are attached
-  send(text, { thread = null, scope = '', key = '', newThread = false, files = [], options = null,
+  // ephemeral: one-off turn in a fresh hidden thread (no resume, no CLI session kept on the worker), deleted by the
+  // server after an idle hour; call deleteThread(thread, scope) as soon as you have the answer to remove it at once
+  send(text, { thread = null, scope = '', key = '', newThread = false, ephemeral = false, files = [], options = null,
                clientTools = [], clientEnvironment = {} } = {}) {
     const extra = options ? { options } : {};
     if (clientTools.length) { extra.client_tools = clientTools; extra.client_environment = clientEnvironment; }
     if (thread) return this.request('POST', `/threads/${encodeURIComponent(thread)}/messages`, { text, files, ...extra });
-    return this.request('POST', '/send', { text, scope, key, new_thread: newThread, files, ...extra });
+    return this.request('POST', '/send', { text, scope, key, new_thread: newThread, files, ...extra, ...(ephemeral ? { ephemeral: true } : {}) });
   }
   // ---- images ----
   // the body is the image itself; the server identifies the format from its bytes → { id, name, mime, size }

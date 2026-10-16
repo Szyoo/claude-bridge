@@ -142,7 +142,9 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 </script>
 ```
 
-只用传输层时调用 `client.subscribe(threadId, handlers)`。组件样式通过 `--bridge-*` CSS 变量覆盖；`bridge-widget.js` 还导出 `renderTurn`、`splitTurn` 等渲染函数，供宿主自行排版。
+只用传输层时调用 `client.subscribe(threadId, handlers)`。
+
+一次性调用（阅后即焚）：`client.send(text, { scope, ephemeral: true })` 每次新建一个隐藏对话，不续接会话，worker 端不保留 CLI 会话（`--no-session-persistence`），不出现在对话列表里，也不会变成当前对话。拿到结果后调用 `client.deleteThread(thread, scope)` 立即删除；没删的在最后一次活动 1 小时后（`BridgeConfig.ephemeral_seconds`）由服务端自动清掉。适合翻译、抽取、识图这类每次独立的任务。组件样式通过 `--bridge-*` CSS 变量覆盖；`bridge-widget.js` 还导出 `renderTurn`、`splitTurn` 等渲染函数，供宿主自行排版。
 
 ### 输入框（Prompt Bar）与语音输入（Voice Pill）
 
@@ -184,7 +186,7 @@ mountBridgeWidget(el, client, {
 |---|---|
 | `GET/POST /threads` · `GET/PATCH/DELETE /threads/{id}` | 对话管理 |
 | `GET /threads/{id}/messages` · `GET /threads/{id}/stream` | 消息 / SSE 推送 |
-| `POST /send` · `POST /threads/{id}/messages` | 发送消息 |
+| `POST /send` · `POST /threads/{id}/messages` | 发送消息（`/send` 带 `ephemeral: true` 为一次性调用，见上文） |
 | `POST /messages/{id}/cancel` | 取消回答 |
 | `GET /threads/find?scope=&key=` · `POST /threads/{id}/select` | 按 scope + key 找对话 / 设为当前对话 |
 | `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 上下文构成 / 压缩会话 |

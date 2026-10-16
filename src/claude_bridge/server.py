@@ -204,6 +204,7 @@ def create_bridge(
         return _svc(
             service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread, files=body.files,
             principal=p, options=body.options,client_tools=body.client_tools,client_environment=body.client_environment,
+            ephemeral=body.ephemeral,
         )
 
     # image upload: the request body is the image itself (no multipart dependency); ?name= is an optional label

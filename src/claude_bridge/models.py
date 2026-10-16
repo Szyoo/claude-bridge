@@ -44,6 +44,9 @@ class SendIn(BaseModel):
     scope: str = ""
     key: str = ""
     new_thread: bool = False
+    # one-off turn: a fresh hidden thread, no --resume, no CLI session kept on the worker, deleted after
+    # `ephemeral_seconds` (the client may also DELETE it as soon as it has the answer); `key` is ignored
+    ephemeral: bool = False
     files: list[str] = Field(default_factory=list, max_length=50)
     options: TurnOptions | None = None
     client_tools: list[ClientTool] = Field(default_factory=list, max_length=50)

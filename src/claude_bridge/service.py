@@ -24,7 +24,7 @@ from claude_bridge.errors import BadRequest, ChatBusy, NotFound
 from claude_bridge.models import AgentChatIn, ClientTool, JobEventsIn, JobFinishIn, TurnOptions
 from claude_bridge.pricing import has_tokens, token_cost, usage_cost
 from claude_bridge.principal import ANONYMOUS, Principal
-from claude_bridge.store import INFLIGHT, BridgeStore, auto_title, public_file, utc_text
+from claude_bridge.store import EPHEMERAL_KEY_PREFIX, INFLIGHT, BridgeStore, auto_title, public_file, utc_text
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ class BridgeConfig:
     max_file_bytes: int = 7 * 1024 * 1024
     max_files_per_message: int = 10
     orphan_seconds: int = 86400  # uploads never sent are removed after this long
+    ephemeral_seconds: int = 3600  # one-off (`ephemeral`) threads are deleted this long after their last activity
     # called before a chat / compact is queued; raise QuotaExceeded (or any BridgeError) to refuse it
     check_quota: Callable[[Principal], None] | None = None
     # an admin-set "100% of window ≈ $X" (window name → USD or None); without one the calibrated estimate is used
@@ -197,6 +198,15 @@ class BridgeService:
         th = self.store.get_thread(thread_id) or th
         self._pub(thread_id, "thread", {"id": thread_id, "title": th["title"], "pinned": th["pinned"]})
 
+    def purge_ephemeral(self) -> int:
+        """Delete one-off threads idle for `ephemeral_seconds` (nothing pending or streaming in them)."""
+        n = 0
+        for tid in self.store.idle_threads_with_key_prefix(EPHEMERAL_KEY_PREFIX, self.config.ephemeral_seconds):
+            self.store.delete_thread(tid)
+            self._unlink(self.store.delete_thread_files(tid))
+            n += 1
+        return n
+
     def delete_thread(self, thread_id: str, scope: str | None = None, owner: str = "") -> dict[str, Any]:
         th = self.own_thread(thread_id, owner)
         sc = th["scope"] if scope is None else scope
@@ -264,8 +274,11 @@ class BridgeService:
         options: TurnOptions | None = None,
         client_tools: list[ClientTool] | None = None,
         client_environment: dict[str, str] | None = None,
+        ephemeral: bool = False,
     ) -> dict[str, Any]:
         owner = principal.owner
+        if ephemeral and thread_id:
+            raise BadRequest("一次性消息不能发到已有对话")
         if client_tools:
             from claude_bridge.client_tools import validate_tools
             if not self.config.client_tools_enabled:
@@ -294,8 +307,15 @@ class BridgeService:
             self.own_thread(thread_id, owner)
         if self.config.check_quota:
             self.config.check_quota(principal)
+        self.purge_ephemeral()
         if thread_id:
             tid = thread_id
+        elif ephemeral:
+            # hidden from the thread list (key prefix), never becomes the scope's current thread
+            self._check_scope(scope, owner)
+            tid = uuid.uuid4().hex[:12]
+            self.store.create_thread(tid, scope=scope, key=f"{EPHEMERAL_KEY_PREFIX}{secrets.token_hex(6)}", owner=owner)
+            extra_payload = {**(extra_payload or {}), "ephemeral": True}
         elif key:
             self._check_scope(scope, owner)
             tid = self.store.find_thread(scope, key, owner) or self.new_thread(scope, key, select=False, owner=owner)

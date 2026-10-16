@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.11.1 — 2026-10-16
+
+- **浏览器一次性调用（阅后即焚）**：`POST /send` 新增 `ephemeral: true`（`bridge-client.js` 的 `send(text, { ephemeral: true })`）。每次新建一个隐藏对话：忽略 `key`、不续接会话、worker 端不保留 CLI 会话（沿用 v0.11.0 的 `--no-session-persistence`），不出现在对话列表、不成为当前对话。客户端拿到结果后可 `deleteThread` 立即删除；没删的在最后一次活动 `BridgeConfig.ephemeral_seconds`（缺省 1 小时）后由服务端在下一次发送时清掉。不能用于发到已有对话。
+- 旧版服务端会忽略这个字段（按普通发送处理），客户端可以先升级。
+
 ## v0.11.0 — 2026-10-16
 
 - **调用方（服务端程序）**：新增调用方令牌与 `/api/caller/*`（提交一次性任务、长轮询取结果、取消、模型列表、状态）。令牌与 worker 令牌分开，绑定账户与允许的 scope，库里只存摘要；`claude-bridge callers add|list|rotate|disable|enable` 管理。任务以绑定账户身份运行（配额与用量记在它名下），每个任务一个独立对话、不续接会话，结束 1 小时后清理（用量记录保留）。失败原因归一为 `error_kind`（`offline` / `timeout` / `quota` / `busy` / `cancelled` / `claude` / `worker`）。

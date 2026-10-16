@@ -120,6 +120,20 @@ test('caller tool options are sent without changing the normal chat request', as
   assert.deepEqual(requests[2].body, { content: 'result', is_error: false });
 });
 
+test('ephemeral send: only /send carries the flag, normal sends unchanged', async () => {
+  const requests = [];
+  const client = new BridgeClient({ fetch: async (url, opts) => {
+    requests.push({ url, body: JSON.parse(opts.body) }); return { ok: true, status: 200, json: async () => ({}) };
+  } });
+  await client.send('once', { scope: 'bukken', ephemeral: true });
+  assert.ok(requests[0].url.endsWith('/send'));
+  assert.equal(requests[0].body.ephemeral, true);
+  await client.send('normal', { scope: 'bukken' });
+  assert.equal('ephemeral' in requests[1].body, false);
+  await client.send('to thread', { thread: 't1', ephemeral: true });
+  assert.equal('ephemeral' in requests[2].body, false);
+});
+
 test('no events → one text segment; empty content → nothing', () => {
   assert.deepEqual(splitTurn('hi', []), [{ kind: 'text', text: 'hi' }]);
   assert.deepEqual(splitTurn('', []), []);
