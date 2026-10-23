@@ -332,13 +332,48 @@ def test_cancel_via_poller_during_silence(tmp_path):
     assert client.finished[0]["cancelled"] is True
 
 
-def test_timeout_kills_silent_claude(tmp_path):
-    worker, client = make_worker(tmp_path, [init_ev(), {"__sleep__": 30}], chat_timeout=0.5)
+def test_total_timeout_stops_even_a_busy_claude(tmp_path):
+    busy = [init_ev(), msg_start(), cb_start(0, {"type": "text", "text": ""})]
+    for i in range(30):
+        busy += [{"__sleep__": 0.1}, cb_delta(0, {"type": "text_delta", "text": str(i)})]
+    worker, client = make_worker(tmp_path, busy, chat_timeout=0.5, idle_timeout=60)
     t0 = time.time()
     worker.run_chat(chat_job())
     assert time.time() - t0 < 5
     fin = client.finished[0]
-    assert fin["ok"] is False and fin.get("cancelled", False) is False and fin["error_kind"] == "timeout" and "未完成" in fin["error"]
+    assert fin["ok"] is False and fin.get("cancelled", False) is False and fin["error_kind"] == "timeout"
+    assert "上限" in fin["error"] and "继续" in fin["error"] and fin["session_id"]
+
+
+def test_idle_timeout_stops_a_silent_claude(tmp_path):
+    worker, client = make_worker(tmp_path, [init_ev(), {"__sleep__": 30}], idle_timeout=0.5, chat_timeout=60)
+    t0 = time.time()
+    worker.run_chat(chat_job())
+    assert time.time() - t0 < 5
+    fin = client.finished[0]
+    assert fin["ok"] is False and fin["error_kind"] == "timeout" and "没有任何进展" in fin["error"]
+
+
+def test_a_working_claude_outlives_the_idle_timeout(tmp_path):
+    # 1.5 s in total, but never 0.5 s without output: not idle, so it runs to the end
+    lines = [init_ev(), msg_start(), cb_start(0, {"type": "text", "text": ""})]
+    for i in range(5):
+        lines += [{"__sleep__": 0.3}, cb_delta(0, {"type": "text_delta", "text": str(i)})]
+    lines += [cb_stop(0), result_ev()]
+    worker, client = make_worker(tmp_path, lines, idle_timeout=0.5, chat_timeout=60)
+    worker.run_chat(chat_job())
+    assert client.finished[0]["ok"] is True
+
+
+def test_fmt_span():
+    from claude_bridge.worker import fmt_span
+    assert [fmt_span(s).strip() for s in (600, 1200, 5400, 7200, 10)] == ["10 分钟", "20 分钟", "1 小时 30 分钟", "2 小时", "1 分钟"]
+
+
+def test_profile_can_set_its_own_timeouts():
+    from claude_bridge.worker import WorkerProfile
+    p = WorkerProfile.from_dict({"cwd": "/tmp/x", "idle_timeout": 3600, "chat_timeout": 14400})
+    assert p.idle_timeout == 3600 and p.chat_timeout == 14400
 
 
 def test_request_stop_mid_chat(tmp_path):

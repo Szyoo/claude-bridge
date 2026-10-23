@@ -53,7 +53,8 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 | `CLAUDE_BRIDGE_SCOPES` | 多用户模式下额外接受的 scope，逗号分隔（默认只接受空 scope 与项目 scope）。给有自己 worker profile 的外部客户端用，例如浏览器扩展 |
 | `CLAUDE_BRIDGE_AGENT_TOKEN` | 服务端与 worker 的共享令牌 |
 | `CLAUDE_BRIDGE_URL` / `_CWD` / `_WORKER_NAME` | worker 连接的服务端 / `claude` 的工作目录 / worker 名称 |
-| `CLAUDE_BRIDGE_CLAUDE_BIN` / `_MODEL` / `_MAX_TURNS` / `_CHAT_TIMEOUT` | `claude` 可执行文件 / 缺省模型 / 最大轮数 / 单次超时秒数 |
+| `CLAUDE_BRIDGE_CLAUDE_BIN` / `_MODEL` / `_MAX_TURNS` | `claude` 可执行文件 / 缺省模型 / 最大轮数 |
+| `CLAUDE_BRIDGE_IDLE_TIMEOUT` / `_CHAT_TIMEOUT` | 一轮对话连续多少秒没有任何输出（文字、思考、工具调用或结果）就停止（缺省 1200）/ 一轮最长运行秒数（缺省 7200）；`0` = 不限。profile 里可用 `idle_timeout` / `chat_timeout` 按模式覆盖 |
 | `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_PERMISSION_MODE` / `_SYSTEM_PROMPT` / `_SYSTEM_PROMPT_FILE` | 对应的 `claude` 参数 |
 | `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
 | `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE` | `1` = worker 上报本机所有 Claude Code 会话的用量（读 `~/.claude/projects` 的 transcript，只发送每分钟的 token 合计与 API 标价等价，不含内容），用于自动标定额度 |

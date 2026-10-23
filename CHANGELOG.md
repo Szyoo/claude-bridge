@@ -2,6 +2,14 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.12.0 — 2026-10-23
+
+- **长任务不再在 15 分钟被硬切**：此前每轮对话从开始计时，900 秒一到就强制停止，哪怕 Claude 仍在持续搜索、调用工具。现在改为两道限制：
+  - 空闲上限 `idle_timeout`（缺省 20 分钟，`--idle-timeout` / `CLAUDE_BRIDGE_IDLE_TIMEOUT`）：连续这么久没有任何输出（文字、思考、工具调用或结果）才判定卡住并停止
+  - 总时长上限 `chat_timeout`（缺省从 15 分钟放宽到 2 小时，`--timeout` / `CLAUDE_BRIDGE_CHAT_TIMEOUT`）：防止失控循环持续消耗额度
+  - 两者都可在 profile 里按模式覆盖（`idle_timeout` / `chat_timeout`），`0` = 不限
+- 停止提示区分原因（「已 20 分钟没有任何进展」/「运行超过 2 小时上限」），并提示发「继续」可接着做（会话保留）
+
 ## v0.11.1 — 2026-10-16
 
 - **浏览器一次性调用（阅后即焚）**：`POST /send` 新增 `ephemeral: true`（`bridge-client.js` 的 `send(text, { ephemeral: true })`）。每次新建一个隐藏对话：忽略 `key`、不续接会话、worker 端不保留 CLI 会话（沿用 v0.11.0 的 `--no-session-persistence`），不出现在对话列表、不成为当前对话。客户端拿到结果后可 `deleteThread` 立即删除；没删的在最后一次活动 `BridgeConfig.ephemeral_seconds`（缺省 1 小时）后由服务端在下一次发送时清掉。不能用于发到已有对话。

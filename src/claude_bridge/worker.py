@@ -66,6 +66,8 @@ class WorkerProfile:
     strict_mcp: bool | None = None            # --strict-mcp-config with no servers: ignore the machine's MCP config
     emit_content_blocks: bool | None = None
     allow_client_tools: bool | None = None
+    idle_timeout: float | None = None         # seconds; see WorkerConfig
+    chat_timeout: float | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> WorkerProfile:
@@ -87,6 +89,13 @@ def _owner_dir(owner: Any) -> str:
     return f"u{o}" if o else "shared"
 
 
+def fmt_span(seconds: float) -> str:
+    """600 → "10 分钟", 7200 → "2 小时", 5400 → "1 小时 30 分钟"."""
+    m = max(1, round(seconds / 60))
+    h, m = divmod(m, 60)
+    return " ".join(x for x in (f"{h} 小时" if h else "", f"{m} 分钟" if m else "") if x) + " "
+
+
 @dataclass
 class WorkerConfig:
     claude_bin: str = "claude"
@@ -97,7 +106,10 @@ class WorkerConfig:
     system_prompt: str = ""
     permission_mode: str | None = None
     extra_env: dict[str, str] = field(default_factory=dict)
-    chat_timeout: float = 900.0
+    # a turn is stopped when claude has been silent this long (no text, thinking, tool call or tool result; 0 = off)…
+    idle_timeout: float = 1200.0
+    # …or, whatever it is doing, when it has run this long in total (a runaway loop would spend the quota)
+    chat_timeout: float = 7200.0
     include_partial: bool = True
     emit_content_blocks: bool = False
     allow_client_tools: bool = False
@@ -602,7 +614,7 @@ class Worker:
                    for k, f in (("stdout", proc.stdout), ("stderr", proc.stderr))]
         for t in readers:
             t.start()
-        deadline = time.monotonic() + cfg.chat_timeout
+        deadline = time.monotonic() + (cfg.chat_timeout or 7200.0)
 
         def stop(reason: str) -> None:
             try:
@@ -618,7 +630,7 @@ class Worker:
                 break
             except subprocess.TimeoutExpired:
                 if time.monotonic() >= deadline:
-                    stop(f"压缩超时（{cfg.chat_timeout:.0f} 秒）")
+                    stop(f"压缩超时（{fmt_span(cfg.chat_timeout or 7200.0).strip()}）")
                 if job_id is not None:
                     try:
                         if (self.client.post_events(job_id) or {}).get("cancel"):
@@ -831,6 +843,7 @@ class ChatRunner:
         self.cfg = worker.config_for(job.get("payload"))
         self.proc: subprocess.Popen[str] | None = None
         self.kill_reason: str | None = None
+        self.last_activity = time.time()  # last stdout line from claude (idle_timeout)
         self._kill_lock = threading.Lock()
         self._done = threading.Event()
         self.stderr_tail: deque[str] = deque(maxlen=200)
@@ -903,7 +916,7 @@ class ChatRunner:
             {"phase": "started", "text": f"$ claude -p … ({len(prompt)} chars{f', +{len(images)} 张图' if images else ''}, {label}{', with context' if prompt is not text else ''})"},
         )
 
-        start = time.time()
+        start = self.last_activity = time.time()
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(self.cfg.cwd) if self.cfg.cwd else None,
@@ -932,6 +945,7 @@ class ChatRunner:
         try:
             assert proc.stdout is not None
             for ev in iter_stream(proc.stdout):
+                self.last_activity = time.time()
                 for emission in self.state.feed(ev):
                     self.emitter.add(emission)
                     if emission[0] == "event" and emission[1]["type"] == "tool_use":
@@ -968,8 +982,10 @@ class ChatRunner:
                 self.emitter.flush()
             if self.worker.stopping:
                 self.kill("shutdown")
-            if now - start > self.cfg.chat_timeout:
+            if self.cfg.chat_timeout and now - start > self.cfg.chat_timeout:
                 self.kill("timeout")
+            elif self.cfg.idle_timeout and now - self.last_activity > self.cfg.idle_timeout:
+                self.kill("idle")
             if now - last_poll >= self.cfg.cancel_poll_interval and self.kill_reason is None:
                 last_poll = now
                 try:
@@ -1022,11 +1038,11 @@ class ChatRunner:
                 jid, ok=False, cancelled=True, session_id=st.session_id, result=json.dumps(summary, ensure_ascii=False)
             )
             return
-        if self.kill_reason == "timeout":
-            self.worker._safe_finish(
-                jid, ok=False, error=f"Claude 超过 {int(self.cfg.chat_timeout // 60)} 分钟未完成", error_kind="timeout",
-                session_id=st.session_id,
-            )
+        if self.kill_reason in ("timeout", "idle"):
+            error = (f"Claude 已 {fmt_span(self.cfg.idle_timeout)}没有任何进展，已停止" if self.kill_reason == "idle"
+                     else f"Claude 运行超过 {fmt_span(self.cfg.chat_timeout)}上限，已停止")
+            self.worker._safe_finish(jid, ok=False, error=error + "（发「继续」可以接着做）", error_kind="timeout",
+                                     session_id=st.session_id)
             return
         if self.kill_reason == "shutdown":
             self.worker._safe_finish(jid, ok=False, error="helper 重启 / 停止", error_kind="worker", session_id=st.session_id)

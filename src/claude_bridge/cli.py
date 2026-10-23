@@ -82,7 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--system-prompt", default=env("SYSTEM_PROMPT"))
     w.add_argument("--system-prompt-file", default=env("SYSTEM_PROMPT_FILE"))
     w.add_argument("--permission-mode", default=env("PERMISSION_MODE") or None)
-    w.add_argument("--timeout", type=float, default=float(env("CHAT_TIMEOUT", "900")))
+    w.add_argument("--timeout", type=float, default=float(env("CHAT_TIMEOUT", "7200")),
+                   help="stop a turn after this many seconds in total (default 2 h; 0 = no limit)")
+    w.add_argument("--idle-timeout", type=float, default=float(env("IDLE_TIMEOUT", "1200")),
+                   help="stop a turn when claude has produced nothing for this many seconds (default 20 min; 0 = off)")
     w.add_argument("--no-partial", action="store_true", help="do not pass --include-partial-messages")
     w.add_argument("--content-blocks", action="store_true", default=env('CONTENT_BLOCKS') == '1',
                    help="preserve complete native content events, including thinking signatures")
@@ -156,6 +159,7 @@ def worker_from_args(args: argparse.Namespace) -> Worker:
         system_prompt=system_prompt,
         permission_mode=args.permission_mode,
         chat_timeout=args.timeout,
+        idle_timeout=args.idle_timeout,
         include_partial=not args.no_partial,
         emit_content_blocks=args.content_blocks,
         allow_client_tools=args.client_tools,
