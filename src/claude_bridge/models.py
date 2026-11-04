@@ -18,6 +18,8 @@ class TurnOptions(BaseModel):
     max_output_tokens: int | None = Field(None, ge=1, le=128000)
     thinking: bool | None = None
     instructions: str | None = Field(None, max_length=16000)
+    # replaces the CLI's own system prompt (the Messages-compatible endpoint passes the request's `system`)
+    system: str | None = Field(None, max_length=400_000)
 
 
 class ClientTool(BaseModel):
@@ -31,7 +33,7 @@ class ClientToolCallIn(BaseModel):
     call_id: str = Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_-]+$')
     name: str = Field(min_length=1, max_length=64)
     input: dict[str, Any] = Field(default_factory=dict)
-    timeout: int = Field(300, ge=1, le=900)
+    timeout: int = Field(300, ge=1, le=3600)
 
 
 class ClientToolResultIn(BaseModel):

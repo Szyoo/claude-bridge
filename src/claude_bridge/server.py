@@ -64,6 +64,8 @@ class Bridge:
     agent_router: APIRouter
     client_tool_router: APIRouter | None = None
     caller_router: APIRouter | None = None  # callers.create_caller_router(...): one-off tasks from server-side programs
+    api_router: APIRouter | None = None  # api_mode.create_api_router(...): the Messages-compatible /v1 endpoint
+    tools: ClientToolService | None = None
 
     def mount(
         self,
@@ -73,11 +75,14 @@ class Bridge:
         agent_prefix: str = "/api/agent",
         static_prefix: str | None = "/static/bridge",
         caller_prefix: str = "/api/caller",
+        api_prefix: str = "/v1",
     ) -> None:
         app.include_router(self.browser_router, prefix=browser_prefix)
         app.include_router(self.agent_router, prefix=agent_prefix)
         if self.caller_router is not None:
             app.include_router(self.caller_router, prefix=caller_prefix)
+        if self.api_router is not None:
+            app.include_router(self.api_router, prefix=api_prefix)
         if self.client_tool_router is not None:
             app.include_router(self.client_tool_router,prefix=agent_prefix+'/client-tools')
         if static_prefix:
@@ -320,6 +325,8 @@ def create_bridge(
         if job["status"] == "running":
             store.touch_job(job_id)
             service.note_agent_alive()
+            # the turn is waiting on a caller-side tool (maybe a long build): the worker must not count it as idle
+            job["client_tool_pending"] = store.client_tool_pending(job_id)
         return {"job": job}
 
     @agent.post("/jobs/{job_id}/events")
@@ -365,5 +372,5 @@ def create_bridge(
 
     return Bridge(
         store=store, config=config, broker=broker, service=service, browser_router=browser, agent_router=agent,
-        client_tool_router=tool_worker,
+        client_tool_router=tool_worker, tools=client_tools,
     )

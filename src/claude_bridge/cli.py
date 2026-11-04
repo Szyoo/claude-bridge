@@ -95,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--worker-name", default=env("WORKER_NAME"))
     w.add_argument("--profiles", default=env("PROFILES"),
                    help='JSON {scope: overrides} — e.g. "" (chat) without tools, "code" with full permissions; cwd may use {owner}')
+    w.add_argument("--concurrency", type=int, default=int(env("CONCURRENCY", "1")),
+                   help="jobs run at the same time (default 1); the Messages-compatible endpoint wants a few")
     w.add_argument("--scan-local-usage", action="store_true", default=env("SCAN_LOCAL_USAGE") == "1",
                    help="report this machine's whole Claude Code use (token totals per minute from ~/.claude/projects) "
                         "so the server can calibrate what 1%% of the 5h / weekly window is")
@@ -165,6 +167,7 @@ def worker_from_args(args: argparse.Namespace) -> Worker:
         allow_client_tools=args.client_tools,
         client_tool_timeout=args.client_tool_timeout,
         local_usage_scan=args.scan_local_usage,
+        max_concurrent=max(1, args.concurrency),
     )
     if args.worker_name:
         cfg.worker_name = args.worker_name

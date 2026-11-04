@@ -67,6 +67,8 @@ class WorkerProfile:
     emit_content_blocks: bool | None = None
     allow_client_tools: bool | None = None
     idle_timeout: float | None = None         # seconds; see WorkerConfig
+    client_tool_timeout: int | None = None    # how long a caller-side tool may run (seconds, up to 3600)
+    max_turns: int | None = None
     chat_timeout: float | None = None
 
     @classmethod
@@ -87,6 +89,9 @@ def load_profiles(path: str | Path) -> dict[str, WorkerProfile]:
 def _owner_dir(owner: Any) -> str:
     o = re.sub(r"[^A-Za-z0-9_-]", "", str(owner or ""))
     return f"u{o}" if o else "shared"
+
+
+MAX_CLIENT_TOOL_TIMEOUT = 3600  # a caller's long build or test run; the turn's idle timer is paused meanwhile
 
 
 def fmt_span(seconds: float) -> str:
@@ -133,6 +138,8 @@ class WorkerConfig:
     local_usage_scan: bool = False
     local_usage_interval: float = 120
     local_usage_root: str | Path | None = None
+    # jobs run at the same time (1 = one after another). The server never runs two turns of one thread at once.
+    max_concurrent: int = 1
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
@@ -185,7 +192,9 @@ class Worker:
         self.hooks = hooks or Hooks()
         self.handlers = dict(handlers or {})
         self.stopping = False
-        self._current: ChatRunner | None = None
+        self._running: dict[int, ChatRunner] = {}  # job id → its runner, so a stop can kill every claude
+        self._running_lock = threading.Lock()
+        self._slots: threading.Semaphore | None = None
         self._probe_lock = threading.Lock()
         self._probe_thread: threading.Thread | None = None
         self._next_probe = 0.0          # monotonic time of the next model probe
@@ -222,7 +231,10 @@ class Worker:
                     self.hooks.tick()
                 except Exception:
                     log.exception("hooks.tick failed")
-                self.run_once()
+                if self.config.max_concurrent > 1:
+                    self.run_concurrent_once()
+                else:
+                    self.run_once()
                 backoff = 2.0
             except BridgeClientError as e:
                 log.warning("bridge unreachable, retry in %.0fs: %s", backoff, e)
@@ -240,15 +252,50 @@ class Worker:
 
     def request_stop(self) -> None:
         self.stopping = True
-        cur = self._current
-        if cur is not None:
+        with self._running_lock:
+            runners = list(self._running.values())
+        for cur in runners:
             cur.kill("shutdown")
+
+    def running_jobs(self) -> int:
+        with self._running_lock:
+            return len(self._running)
 
     def run_once(self, wait: int | None = None) -> bool:
         job = self.client.next_job(self.config.worker_name, self.kinds, self.config.poll_wait if wait is None else wait)
         if not job:
             return False
         log.info("claimed job #%s %s", job["id"], job["kind"])
+        self.execute(job)
+        return True
+
+    def run_concurrent_once(self) -> bool:
+        """With max_concurrent > 1: claim a job only while a slot is free, and run it on its own thread."""
+        if self._slots is None:
+            self._slots = threading.Semaphore(max(1, self.config.max_concurrent))
+        while not self._slots.acquire(timeout=0.5):
+            if self.stopping:
+                return False
+        try:
+            job = self.client.next_job(self.config.worker_name, self.kinds, self.config.poll_wait)
+        except BaseException:
+            self._slots.release()
+            raise
+        if not job:
+            self._slots.release()
+            return False
+        log.info("claimed job #%s %s (%d running)", job["id"], job["kind"], self.running_jobs() + 1)
+
+        def run() -> None:
+            try:
+                self.execute(job)
+            finally:
+                assert self._slots is not None
+                self._slots.release()
+        threading.Thread(target=run, name=f"job-{job['id']}", daemon=True).start()
+        return True
+
+    def execute(self, job: dict[str, Any]) -> None:
         try:
             kind = job["kind"]
             if kind == "chat":
@@ -270,7 +317,6 @@ class Worker:
             except Exception:
                 log.exception("hooks.on_job_error failed")
             self._safe_finish(job["id"], ok=False, error=f"{type(e).__name__}: {e}", error_kind="worker")
-        return True
 
     def _safe_finish(self, job_id: int, **kw: Any) -> None:
         delay = 0.5
@@ -289,7 +335,8 @@ class Worker:
 
     def run_chat(self, job: dict[str, Any]) -> None:
         runner = ChatRunner(self, job)
-        self._current = runner
+        with self._running_lock:
+            self._running[job["id"]] = runner
         try:
             if (job.get('payload') or {}).get('client_tools'):
                 if not runner.cfg.allow_client_tools:
@@ -303,7 +350,7 @@ class Worker:
                         'args':['-I','-m','claude_bridge.client_tool_mcp'],'alwaysLoad':True,'env':{
                             'CB_CLIENT_URL':self.client.base_url,'CB_CLIENT_PREFIX':self.client.prefix+'/client-tools',
                             'CB_CLIENT_JOB':str(job['id']),'CB_CLIENT_TOKEN':session['token'],
-                            'CB_CLIENT_TIMEOUT':str(max(1,min(runner.cfg.client_tool_timeout,900))),
+                            'CB_CLIENT_TIMEOUT':str(max(1,min(runner.cfg.client_tool_timeout,MAX_CLIENT_TOOL_TIMEOUT))),
                             **{key:os.environ.get(key,'') for key in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY')}}}}}
                     path.write_text(json.dumps(mcp),encoding='utf-8')
                     path.chmod(0o600)
@@ -312,7 +359,8 @@ class Worker:
             else:
                 runner.run()
         finally:
-            self._current = None
+            with self._running_lock:
+                self._running.pop(job["id"], None)
 
     # ---------------- per-scope profiles ----------------
 
@@ -679,6 +727,7 @@ class Worker:
     def build_chat_command(
         self, prompt: str, session_id: str | None, settings: dict[str, Any], system_prompt: str,
         *, input_json: bool = False, cfg: WorkerConfig | None = None, ephemeral: bool = False,
+        system_file: str | None = None,
     ) -> tuple[list[str], bool]:
         """`input_json`: the user turn is written to stdin as one stream-json message (used when it carries images).
         `ephemeral`: a one-off caller task — the CLI keeps no session on disk (nothing to resume or inspect later)."""
@@ -711,6 +760,8 @@ class Worker:
             cmd += ["--add-dir", *[os.path.expanduser(d) for d in cfg.add_dirs]]
         if cfg.strict_mcp:
             cmd += ["--strict-mcp-config"]
+        if system_file:  # replaces the CLI's own system prompt (the Messages-compatible endpoint)
+            cmd += ["--system-prompt-file", system_file]
         if system_prompt:
             cmd += ["--append-system-prompt", system_prompt]
         if model:
@@ -845,6 +896,7 @@ class ChatRunner:
         self.kill_reason: str | None = None
         self.last_activity = time.time()  # last stdout line from claude (idle_timeout)
         self.started_at = self.last_activity
+        self._cleanup: list[str] = []  # temp files removed when the run ends
         self._kill_lock = threading.Lock()
         self._done = threading.Event()
         self.stderr_tail: deque[str] = deque(maxlen=200)
@@ -879,17 +931,24 @@ class ChatRunner:
                 ctx = ""
             if ctx:
                 prompt = ctx + text
-        system_prompt = self.worker.hooks.system_prompt(p) or self.cfg.system_prompt
+        replace_system = settings.get('system')  # the caller's own system prompt, replacing the CLI's
+        system_prompt = '' if replace_system else (self.worker.hooks.system_prompt(p) or self.cfg.system_prompt)
         if settings.get('instructions'):
             system_prompt = '\n\n'.join(part for part in (system_prompt,settings['instructions']) if part)
-        if p.get('client_tools'):
+        if p.get('client_tools') and not replace_system:
             system_prompt += ('\nTools on the bridge_client MCP server execute in the requesting application. '
                 'Its execution environment is '+json.dumps(p.get('client_environment',{}),ensure_ascii=False)+
                 '. Other tools still execute on this worker. Use the tool namespace to choose the appropriate environment.')
         images = self._load_images(p.get("files") or [])
+        system_file = None
+        if replace_system:
+            fd, system_file = tempfile.mkstemp(prefix='claude-bridge-system-', suffix='.md')
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(replace_system)
+            self._cleanup.append(system_file)
         cmd, via_stdin = self.worker.build_chat_command(
             prompt, session_id, settings, system_prompt, input_json=bool(images), cfg=self.cfg,
-            ephemeral=bool(p.get("ephemeral")),
+            ephemeral=bool(p.get("ephemeral")), system_file=system_file,
         )
         if p.get('client_tools'):
             cmd += ['--mcp-config',self.mcp_config]
@@ -960,6 +1019,8 @@ class ChatRunner:
             self._done.set()
             if proc.poll() is None:
                 self._terminate(proc)
+            for path in self._cleanup:
+                Path(path).unlink(missing_ok=True)
         for t in threads:
             t.join(timeout=5)
         self.emitter.final_flush()
@@ -1013,6 +1074,8 @@ class ChatRunner:
                     continue
                 if job is None or job.get("cancel_requested") or job.get("status") != "running":
                     self.kill("cancel")
+                elif job.get("client_tool_pending"):
+                    self.last_activity = now  # waiting on the caller's tool (a build, a test run): not idle
 
     # ---------------- kill ----------------
 
@@ -1086,7 +1149,9 @@ class ChatRunner:
         self.emitter.final_flush()
         # refresh the session's context breakdown (local, free) so the UI shows the post-turn composition
         ephemeral = bool((self.job.get("payload") or {}).get("ephemeral"))
-        report = self.worker.context_report(st.session_id, settings, cfg=self.cfg) if st.session_id and not ephemeral else None
+        # the page's context panel; a Messages-API turn (the caller's own system prompt) has no page to show it on
+        report = (self.worker.context_report(st.session_id, settings, cfg=self.cfg)
+                  if st.session_id and not ephemeral and not settings.get("system") else None)
         summary["context"] = report
         self.worker._safe_finish(
             jid, ok=True, result=json.dumps(summary, ensure_ascii=False), session_id=st.session_id, context=report

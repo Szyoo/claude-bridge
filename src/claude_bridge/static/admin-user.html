@@ -31,6 +31,9 @@
     .au-view-head .t { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .au-msgs { max-height: calc(100vh - 290px); overflow: auto; padding: 14px 18px; }
     .au-back { display: none; }
+    .au-key { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+    .au-key:first-child { border-top: 0; }
+    .au-key > div { min-width: 0; overflow-wrap: anywhere; }
     .au-access td.ua { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
     .au-access td { vertical-align: top; }
     @media (max-width: 720px) {
@@ -57,6 +60,7 @@
       <div class="tabs compact au-tabs" role="tablist">
         <button type="button" class="tab" role="tab" data-tab="chat" aria-selected="true">对话</button>
         <button type="button" class="tab" role="tab" data-tab="access" aria-selected="false">访问记录</button>
+        <button type="button" class="tab" role="tab" data-tab="keys" aria-selected="false" id="tab-keys-btn" hidden>API 密钥</button>
       </div>
 
       <section id="tab-chat" class="au-chat">
@@ -71,12 +75,18 @@
         <p class="muted small bp-lead">同一 IP、同一设备连续访问合并为一行（30 分钟内没有请求才算新的一次）；保留 180 天。门户登录模式下登录发生在门户，这里记的是访问。</p>
         <div class="table-wrap"><table class="tbl au-access"><thead><tr><th>时间</th><th>IP</th><th>设备</th><th class="ua">User-Agent</th></tr></thead><tbody id="access"></tbody></table></div>
       </section>
+
+      <section id="tab-keys" class="glass panel" hidden>
+        <p class="muted small bp-lead">这个用户自助创建的 API 密钥；可以代为吊销，吊销后立刻失效。</p>
+        <div id="keys"></div>
+        <div class="callout warn bp-gap" id="keys-warn" hidden></div>
+      </section>
     </main>
   </div>
 
   <script type="module">
     import { renderTurn } from '/static/bridge/bridge-widget.js';
-    import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo, armConfirm } from '/static/bridge/bridge-pages.js';
     const $ = (s) => document.querySelector(s);
     const uid = Number(location.pathname.split('/').pop());
     const KIND = { visit: '访问', login: '登录', login_failed: '登录失败' };
@@ -88,7 +98,9 @@
       for (const x of document.querySelectorAll('[data-tab]')) x.setAttribute('aria-selected', String(x === b));
       $('#tab-chat').hidden = b.dataset.tab !== 'chat';
       $('#tab-access').hidden = b.dataset.tab !== 'access';
+      $('#tab-keys').hidden = b.dataset.tab !== 'keys';
       if (b.dataset.tab === 'access') loadAccess();
+      if (b.dataset.tab === 'keys') loadKeys();
     });
 
     async function loadThreads() {
@@ -143,6 +155,27 @@
         }).join('') || '<tr><td colspan="4" class="muted">还没有记录。</td></tr>';
       } catch (e) { toast(e.message, true); }
     }
+
+    // API keys: the tab only shows when the server exposes them (404 otherwise)
+    async function loadKeys() {
+      let d;
+      try { d = await api('GET', `/api/admin/users/${uid}/api-keys`); } catch { return; }
+      $('#keys').innerHTML = d.items.length ? d.items.map(k => `<div class="au-key" data-name="${esc(k.name)}">`
+        + `<div><span>${esc(k.note || '（无备注）')}</span> <span class="tiny muted mono">${esc(k.name)}</span>`
+        + `<div class="tiny muted">创建：${esc(local(k.created_at) || '—')} · 最近使用：${k.last_used_at ? esc(fmtSeen(k.last_used_at)) : '从未使用'} · ${k.disabled ? '已吊销' : '有效'}</div></div>`
+        + (k.disabled ? '' : '<button type="button" class="btn-ghost btn-small" data-revoke>吊销</button>') + '</div>').join('')
+        : '<p class="muted small">还没有密钥。</p>';
+    }
+    $('#keys').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-revoke]');
+      if (!btn) return;
+      if (!armConfirm(btn, { warnEl: $('#keys-warn'), warning: '吊销后这个密钥立刻失效，无法恢复。' })) return;
+      try {
+        await api('DELETE', `/api/admin/users/${uid}/api-keys/${encodeURIComponent(btn.closest('[data-name]').dataset.name)}`);
+        toast('已吊销'); loadKeys();
+      } catch (err) { toast(err.message, true); }
+    });
+    api('GET', `/api/admin/users/${uid}/api-keys`).then(() => { $('#tab-keys-btn').hidden = false; }, () => {});
 
     $('#threads').addEventListener('click', (e) => { const b = e.target.closest('[data-id]'); if (b) openThread(b.dataset.id); });
     $('#back').addEventListener('click', () => $('#tab-chat').classList.remove('reading'));

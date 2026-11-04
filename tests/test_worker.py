@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
@@ -612,3 +613,34 @@ def test_a_turn_killed_before_init_reports_nothing(tmp_path):
     worker, client = make_worker(tmp_path, [{"__sleep__": 30}], idle_timeout=0.5, chat_timeout=60, local_usage_root=tmp_path / "none")
     worker.run_chat(chat_job())
     assert not [e for p in client.posts for e in p["events"] if e["type"] == "partial_usage"]
+
+
+def test_jobs_run_side_by_side_with_max_concurrent(tmp_path):
+    client = FakeClient([chat_job(jid=1), chat_job(jid=2)])
+    worker, _ = make_worker(tmp_path, [init_ev(), {"__sleep__": 0.8}, result_ev()], client=client, max_concurrent=2)
+    t0, peak = time.time(), 0
+    assert worker.run_concurrent_once() and worker.run_concurrent_once()
+    while len(client.finished) < 2 and time.time() - t0 < 10:
+        peak = max(peak, worker.running_jobs())
+        time.sleep(0.02)
+    assert sorted(f["id"] for f in client.finished) == [1, 2] and all(f["ok"] for f in client.finished)
+    assert peak == 2  # both claude runs overlapped
+    assert worker.running_jobs() == 0
+
+
+def test_a_turn_can_replace_the_system_prompt(tmp_path):
+    worker, client = make_worker(tmp_path, HAPPY, system_prompt="宿主的提示")
+    worker.run_chat(chat_job(system="调用方自己的系统提示", instructions="补充一句"))
+    args = json.loads((tmp_path / "args.json").read_text())
+    path = args[args.index("--system-prompt-file") + 1]
+    assert args[args.index("--append-system-prompt") + 1] == "补充一句"  # the host's own prompt is replaced, not appended
+    assert not os.path.exists(path)  # the temp file is gone after the run
+    assert client.finished[0]["ok"] is True
+
+
+def test_waiting_on_a_client_tool_is_not_idle(tmp_path):
+    client = FakeClient()
+    client.job_state["client_tool_pending"] = True
+    worker, _ = make_worker(tmp_path, [init_ev(), {"__sleep__": 1.2}, result_ev()], client=client, idle_timeout=0.4, chat_timeout=60)
+    worker.run_chat(chat_job())
+    assert client.finished[0]["ok"] is True

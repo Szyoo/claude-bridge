@@ -58,6 +58,7 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 | `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_PERMISSION_MODE` / `_SYSTEM_PROMPT` / `_SYSTEM_PROMPT_FILE` | 对应的 `claude` 参数 |
 | `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
 | `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE` | `1` = worker 上报本机所有 Claude Code 会话的用量（读 `~/.claude/projects` 的 transcript，只发送每分钟的 token 合计与 API 标价等价，不含内容），用于自动标定额度 |
+| `CLAUDE_BRIDGE_CONCURRENCY` | worker 同时执行的任务数（缺省 1） |
 | `CLAUDE_BRIDGE_CLIENT_TOOLS` / `_CONTENT_BLOCKS` | `1` = 启用调用方工具 / 完整内容流（见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)） |
 
 命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。
@@ -108,6 +109,17 @@ scope 需要服务端接受（多用户模式下加进 `CLAUDE_BRIDGE_SCOPES`）
 | `GET /models` · `GET /status` | worker 上报的模型列表 / worker 在线与队列 |
 
 失败时 `error_kind` ∈ `offline`（worker 不在线，提交时直接 503）、`timeout`（超过 `timeout` 秒，自动取消；排队时间也算）、`quota`（账户配额或订阅额度不足）、`busy`（同时进行的任务超过上限，429）、`cancelled`、`claude`、`worker`；提交被拒时另有 `scope` / `owner`（403）、`invalid`（400）。
+
+## Messages 兼容接口（API 模式）
+
+服务端和 worker 都开启调用方工具（`CLAUDE_BRIDGE_CLIENT_TOOLS=1`）后，`/v1/messages`、`/v1/messages/count_tokens`、`/v1/models` 按 Anthropic Messages API 的格式工作（流式与非流式、工具调用、思考块）。支持自定义 API 地址的客户端把地址设为站点根、密钥设为 scope 含 `api` 的调用方令牌即可：
+
+```bash
+ANTHROPIC_BASE_URL=https://bridge.example.com
+ANTHROPIC_API_KEY=cbc_…        # 多用户模式下可在 /account 自助创建；也可 callers add … --scope api
+```
+
+请求以令牌所属账户的身份运行（配额与用量记在其名下）。请求里的 `system` 替换 CLI 自带的系统提示；请求里的 `tools` 注册为调用方工具，由客户端执行，worker 上不开放内置工具。对话按历史指纹续接同一个 CLI 会话（保住提示缓存），无法识别的历史会以文本形式带入新会话。worker 需要一个 `api` profile（见 `deploy/mac/profiles.json`），建议 `--concurrency` 设为 2–3。细节与限制见 [docs/api-mode.md](docs/api-mode.md)。
 
 ## 嵌入 FastAPI 应用
 

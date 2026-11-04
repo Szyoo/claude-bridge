@@ -26,6 +26,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import BaseModel, Field
 
 from claude_bridge.accounts import Accounts, generate_password, public_user, verify_password
+from claude_bridge.api_mode import SCOPE as API_SCOPE
+from claude_bridge.api_mode import create_api_router
 from claude_bridge.auth import COOKIE_NAME, LoginLimiter
 from claude_bridge.callers import Callers, create_caller_router
 from claude_bridge.errors import BridgeError
@@ -90,6 +92,14 @@ LOGIN_ERRORS = {
 class MeIn(BaseModel):
     username: str | None = Field(None, max_length=32)
     display_name: str | None = Field(None, max_length=40)
+
+
+class ApiKeyIn(BaseModel):
+    note: str = Field("", max_length=40)
+
+
+MAX_API_KEYS = 5
+API_KEY_PREFIX = "api-"
 
 
 class PasswordIn(BaseModel):
@@ -171,7 +181,7 @@ def create_multiuser_app(
     extra_scopes = frozenset(scopes_from_env() if scopes is None else scopes)
 
     def scope_ok(scope: str, owner: str) -> bool:
-        if scope == "" or scope in extra_scopes:
+        if scope in ("", API_SCOPE) or scope in extra_scopes:
             return True
         return scope.startswith(PROJECT_SCOPE_PREFIX) and bridge.service.project_ready(owner, scope[len(PROJECT_SCOPE_PREFIX):])
 
@@ -245,7 +255,10 @@ def create_multiuser_app(
         user = accounts.get(int(owner)) if owner.isdigit() else None
         return accounts.principal(user) if user and not user["disabled"] else None
 
-    bridge.caller_router = create_caller_router(bridge.service, Callers(store), caller_principal)
+    callers = Callers(store)
+    bridge.caller_router = create_caller_router(bridge.service, callers, caller_principal)
+    if client_tools_enabled:  # the Messages-compatible endpoint relays the request's tools to the client
+        bridge.api_router, _ = create_api_router(bridge.service, callers, bridge.tools, caller_principal)
 
     app = FastAPI(title="claude-bridge", docs_url=None, redoc_url=None)
     app.state.bridge = bridge
@@ -287,6 +300,55 @@ def create_multiuser_app(
         if user["role"] != "admin":
             raise HTTPException(status_code=403, detail="需要管理员权限")
         return user
+
+    # ---------------- API keys (self-service; only when the Messages-compatible endpoint exists) ----------------
+
+    if client_tools_enabled:
+        import secrets
+
+        def key_item(row: dict[str, Any]) -> dict[str, Any]:
+            return {k: row.get(k) for k in ("name", "note", "created_at", "last_used_at", "disabled")}
+
+        def keys_of(uid: int) -> list[dict[str, Any]]:
+            return [key_item(r) for r in callers.list()
+                    if r["owner"] == str(uid) and API_SCOPE in r["scopes"] and r["name"].startswith(API_KEY_PREFIX)]
+
+        def revoke_key(uid: int, name: str) -> dict[str, Any]:
+            if name not in {k["name"] for k in keys_of(uid)}:
+                raise HTTPException(status_code=404, detail="没有这个密钥")
+            _svc(callers.set_disabled, name, True)
+            return {"ok": True}
+
+        def site_root(request: Request) -> str:
+            proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+            host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+            if proto and host:
+                return f"{proto}://{host}"
+            return str(request.base_url).rstrip("/")
+
+        @app.get("/api/me/api-keys")
+        def my_api_keys(request: Request, user: dict[str, Any] = Depends(api_user)):
+            return {"items": keys_of(user["id"]), "base_url": site_root(request), "max_keys": MAX_API_KEYS}
+
+        @app.post("/api/me/api-keys")
+        def create_api_key(body: ApiKeyIn, user: dict[str, Any] = Depends(api_user)):
+            if sum(1 for k in keys_of(user["id"]) if not k["disabled"]) >= MAX_API_KEYS:
+                raise HTTPException(status_code=400, detail=f"最多同时保留 {MAX_API_KEYS} 个有效密钥，请先吊销不用的")
+            name = f"{API_KEY_PREFIX}u{user['id']}-{secrets.token_hex(3)}"
+            row, token = _svc(callers.add, name, owner=str(user["id"]), scopes=[API_SCOPE], max_inflight=3, note=body.note.strip())
+            return {"key": token, "item": key_item(row)}
+
+        @app.delete("/api/me/api-keys/{name}")
+        def revoke_my_api_key(name: str, user: dict[str, Any] = Depends(api_user)):
+            return revoke_key(user["id"], name)
+
+        @app.get("/api/admin/users/{uid}/api-keys")
+        def admin_api_keys(uid: int, admin: dict[str, Any] = Depends(api_admin)):
+            return {"items": keys_of(uid)}
+
+        @app.delete("/api/admin/users/{uid}/api-keys/{name}")
+        def admin_revoke_api_key(uid: int, name: str, admin: dict[str, Any] = Depends(api_admin)):
+            return revoke_key(uid, name)
 
     # ---------------- pages ----------------
 

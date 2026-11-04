@@ -162,3 +162,9 @@ body.bp-chat .bp-home { background: transparent; }
 body.bp-chat #app { position: relative; z-index: 1; }
 /* the phone drawer overlaps the transcript: keep it opaque enough to read */
 @media (max-width: 720px) { body.bp-chat .bridge.side-open .bridge-side { background: var(--sheet-bg); } }
+
+/* account page: API keys (self-service) */
+.bp-key { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.bp-key:first-child { border-top: 0; }
+.bp-key > div { min-width: 0; overflow-wrap: anywhere; }
+#api pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; border-radius: 10px; background: var(--field-bg); border: 1px solid var(--glass-border); margin: 8px 0 0; }

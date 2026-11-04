@@ -782,6 +782,10 @@ class BridgeStore:
                 continue
         return out
 
+    def client_tool_pending(self, job_id: int) -> bool:
+        return bool(self._one("SELECT 1 FROM bridge_client_tools WHERE job_id=? AND result IS NULL AND deadline > ? LIMIT 1",
+                              (job_id, time.time())))
+
     def add_util_sample(self, window: str, utilization: float, resets_at: float | None, source: str, at: float) -> None:
         self._x("INSERT INTO bridge_util_samples(at, window, utilization, resets_at, source) VALUES(?,?,?,?,?)",
                 (at, window, utilization, resets_at, source))

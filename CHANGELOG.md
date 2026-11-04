@@ -2,6 +2,21 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.14.0 — 2026-11-04
+
+- **Messages 兼容接口（API 模式）**：`POST /v1/messages`（流式 / 非流式、工具调用、思考块）、`POST /v1/messages/count_tokens`、`GET /v1/models`，按 Anthropic Messages API 的格式工作，用 scope 含 `api` 的调用方令牌鉴权（`x-api-key` 或 `Authorization: Bearer`）。详见 [docs/api-mode.md](docs/api-mode.md)
+  - 请求的 `system` 替换 CLI 自带系统提示；`tools` 作为调用方工具由客户端执行；一轮里每次工具调用结束一个 API 响应，客户端带回 `tool_result` 后在同一个进程里继续
+  - 按历史指纹续接同一个 CLI 会话，保留提示缓存；无法识别的历史以文本带入新会话
+  - 连通性探测（`max_tokens` ≤ 1、无工具）直接返回；无工具的小请求以一次性对话在 Haiku 上执行
+  - 流式响应在排队 / 等待时发送 SSE 注释保持连接；错误使用官方格式
+- **API 密钥自助管理**：`/account` 新增「API 接入」（创建、吊销、地址与配置示例），管理员可在用户详情页查看与吊销；接口 `GET/POST /api/me/api-keys`、`DELETE /api/me/api-keys/{name}`、`GET/DELETE /api/admin/users/{uid}/api-keys…`
+- worker：
+  - `--concurrency N`（`CLAUDE_BRIDGE_CONCURRENCY`）：同时执行多个任务（缺省 1）
+  - 逐轮选项新增 `system`：替换 CLI 自带系统提示（`--system-prompt-file`）
+  - 调用方工具的等待上限从 900 秒放宽到 3600 秒；等待调用方工具结果期间不计入空闲超时（任务状态里新增 `client_tool_pending`）
+  - profile 可设置 `client_tool_timeout`、`max_turns`
+  - API 模式的轮次结束后不再额外运行 `/context`
+
 ## v0.13.0 — 2026-11-04
 
 - **被取消、超时或出错的轮次也记账**：这类轮次没有 CLI 的 `result`，此前不记入任何人的用量，但它们实际消耗了账户额度（在管理页里被算进「bridge 之外」）。现在 worker 在收尾时从该会话的本机记录（含子 agent 的记录）读出这一轮的 token，按模型回传新事件 `partial_usage`，服务端按各模型价格记入发起人名下
