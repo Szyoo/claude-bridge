@@ -142,6 +142,11 @@ class WorkerConfig:
     # The admin can override it on the server (Admin › worker); this is the value when they haven't.
     max_concurrent: int = 1
     config_sync_interval: float = 30
+    # macOS can revoke this process's file access while it runs (e.g. Homebrew replaced the Python it started
+    # from): every request then fails on the CA bundle and every job on its files. A fresh process gets access
+    # again, so after a few failed loops with our own files unreadable, stop and exit with this code for
+    # launchd (KeepAlive) / systemd to restart us. 0 = keep retrying forever.
+    lost_access_exit_code: int = 75
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
@@ -200,6 +205,8 @@ class Worker:
         self._slot_free = threading.Condition()
         self._remote_concurrency: int | None = None  # the admin's setting from the server
         self._next_config_sync = 0.0
+        self._access_misses = 0
+        self._lost_access = False
         self._probe_lock = threading.Lock()
         self._probe_thread: threading.Thread | None = None
         self._next_probe = 0.0          # monotonic time of the next model probe
@@ -241,12 +248,35 @@ class Worker:
                 backoff = 2.0
             except BridgeClientError as e:
                 log.warning("bridge unreachable, retry in %.0fs: %s", backoff, e)
+                self._check_file_access()
                 self._sleep(backoff)
                 backoff = min(backoff * 2, 60)
             except Exception:
                 log.exception("job loop error")
+                self._check_file_access()
                 self._sleep(2)
         log.info("worker stopped")
+        if self._lost_access:
+            raise SystemExit(self.config.lost_access_exit_code)
+
+    def _check_file_access(self) -> None:
+        """After a failed loop: can this process still read its own files? Three misses in a row → stop."""
+        if not self.config.lost_access_exit_code:
+            return
+        try:
+            Path(__file__).read_bytes()
+            self._access_misses = 0
+            return
+        except PermissionError as e:
+            self._access_misses += 1
+            log.error("cannot read our own files (%s), %d/3", e, self._access_misses)
+        except OSError:
+            return
+        if self._access_misses >= 3:
+            log.error("file access lost (the OS revoked it); exiting with %d so the service manager restarts us",
+                      self.config.lost_access_exit_code)
+            self._lost_access = True
+            self.request_stop()
 
     def _sleep(self, seconds: float) -> None:
         end = time.time() + seconds

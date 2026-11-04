@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -677,3 +678,39 @@ def test_config_sync_tolerates_an_older_server(tmp_path):
     worker, _ = make_worker(tmp_path, HAPPY, client=client, max_concurrent=2)
     worker.maybe_sync_config(force=True)
     assert worker.concurrency == 2
+
+
+def test_worker_exits_when_the_os_revokes_file_access(tmp_path, monkeypatch):
+    client = FakeClient()
+
+    def down(*a, **kw):
+        raise BridgeClientError("bridge 不可达 /jobs/next: SSLError(PermissionError(1, 'Operation not permitted'))")
+    client.next_job = down
+    worker, _ = make_worker(tmp_path, HAPPY, client=client, model_probe=False, usage_probe_interval=0, config_sync_interval=0)
+    monkeypatch.setattr(worker, "_sleep", lambda s: None)
+    real = Path.read_bytes
+
+    def denied(self):
+        if self.name == "worker.py":
+            raise PermissionError(1, "Operation not permitted")
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", denied)
+    with pytest.raises(SystemExit) as e:
+        worker.run_forever()
+    assert e.value.code == 75
+
+
+def test_a_plain_outage_keeps_retrying(tmp_path, monkeypatch):
+    client = FakeClient()
+    calls = []
+
+    def down(*a, **kw):
+        calls.append(1)
+        if len(calls) >= 5:
+            worker.stopping = True
+        raise BridgeClientError("bridge 不可达")
+    client.next_job = down
+    worker, _ = make_worker(tmp_path, HAPPY, client=client, model_probe=False, usage_probe_interval=0, config_sync_interval=0)
+    monkeypatch.setattr(worker, "_sleep", lambda s: None)
+    worker.run_forever()  # returns normally: files are readable, so no exit
+    assert len(calls) == 5

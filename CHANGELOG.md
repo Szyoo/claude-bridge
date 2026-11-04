@@ -2,6 +2,10 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.15.1 — 2026-11-04
+
+- **worker 失去文件访问时自行退出**：macOS 可能在进程运行期间收回它的文件访问权限（例如 Homebrew 升级删掉了启动它的 Python），之后每个请求都因读不了 CA 证书而失败、任务也读不了文件。worker 在循环出错后检查自己的源文件能否读取，连续 3 次读不了就停止并以退出码 75 结束，交给 launchd（`KeepAlive`）/ systemd 重新拉起。`WorkerConfig.lost_access_exit_code = 0` 关闭。普通断网照旧重试
+
 ## v0.15.0 — 2026-11-04
 
 - **管理页可调 helper 并发**：「管理 › helper」设置同时运行的任务数（1–8，留空 = 用 helper 本机的 `CLAUDE_BRIDGE_CONCURRENCY`），并显示 helper 报告的当前值与正在运行数。worker 每 30 秒向 `POST /api/agent/config` 报告并取回设置，不用重启；调低时正在跑的任务照常跑完。接口 `PUT /api/admin/worker`
