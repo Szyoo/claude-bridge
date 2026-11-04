@@ -767,3 +767,39 @@ def test_thread_quota_pct_is_none_until_calibrated(app, agent):
     alice = login(app, "alice")
     run_turn(alice, agent, 1.0)
     assert [t["quota_pct"] for t in alice.get("/api/threads").json()["items"]] == [None]
+
+
+def test_session_usage_reads_this_turn_and_its_subagents(tmp_path):
+    from claude_bridge.local_usage import session_usage
+    root, now = tmp_path / "projects", time.time()
+    write_lines(root / "-p" / "S1.jsonl",
+                tline("a", now - 100, 999),                          # before the turn
+                tline("b", now + 1, 10, model="claude-opus-5-5-20260901", cr=1000),
+                tline("b", now + 1, 40, model="claude-opus-5-5-20260901", cr=1000),  # same response, final counts
+                tline("c", now + 2, 5, model="<synthetic>"))
+    write_lines(root / "-p" / "S1" / "subagents" / "agent-x.jsonl", tline("d", now + 3, 7, model="claude-haiku-5-5"))
+    write_lines(root / "-p" / "S2.jsonl", tline("e", now + 1, 1000))  # another session
+    got = {m["model"]: m for m in session_usage("S1", now, root)}
+    assert set(got) == {"claude-opus-5-5", "claude-haiku-5-5"}
+    assert got["claude-opus-5-5"]["output_tokens"] == 40 and got["claude-opus-5-5"]["cache_read_input_tokens"] == 1000
+    assert got["claude-opus-5-5"]["requests"] == 1 and got["claude-haiku-5-5"]["output_tokens"] == 7
+    assert session_usage("missing", now, root) == []
+
+
+def test_interrupted_turns_are_booked_per_model_even_after_the_thread_is_gone(app, agent):
+    alice = login(app, "alice")
+    by_model = [{"model": "claude-opus-5-5", "output_tokens": 100_000}, {"model": "claude-haiku-5-5", "output_tokens": 200_000}]
+    data = {"output_tokens": 300_000, "model": "claude-opus-5-5", "by_model": by_model, "reason": "cancel"}
+    expected = 100_000 * 20 / 1e6 + 200_000 * 0.5 / 1e6  # each at its own price: $2.00 + $0.10
+    r = alice.post("/api/send", json={"text": "x"})
+    job = agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"]
+    agent.post(f"/api/agent/jobs/{job['id']}/events", json={"events": [{"type": "partial_usage", "data": data}]})
+    agent.post(f"/api/agent/jobs/{job['id']}/finish", json={"ok": False, "cancelled": True})
+    assert alice.get("/api/me").json()["usage"]["five_hour"]["cost_usd"] == pytest.approx(expected)
+
+    # a one-off call whose thread the caller deleted mid-turn: still the caller's
+    r = alice.post("/api/send", json={"text": "y", "new_thread": True})
+    job = agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"]
+    assert alice.delete(f"/api/threads/{r.json()['thread']}").status_code == 200
+    agent.post(f"/api/agent/jobs/{job['id']}/events", json={"events": [{"type": "partial_usage", "data": data}]})
+    assert alice.get("/api/me").json()["usage"]["five_hour"]["cost_usd"] == pytest.approx(2 * expected)

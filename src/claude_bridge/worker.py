@@ -28,7 +28,7 @@ from typing import Any
 
 from claude_bridge._version import __version__
 from claude_bridge.client import BridgeClient, BridgeClientError
-from claude_bridge.local_usage import TranscriptScanner
+from claude_bridge.local_usage import TranscriptScanner, session_usage
 from claude_bridge.stream_json import (
     StreamState,
     describe_tool,
@@ -844,6 +844,7 @@ class ChatRunner:
         self.proc: subprocess.Popen[str] | None = None
         self.kill_reason: str | None = None
         self.last_activity = time.time()  # last stdout line from claude (idle_timeout)
+        self.started_at = self.last_activity
         self._kill_lock = threading.Lock()
         self._done = threading.Event()
         self.stderr_tail: deque[str] = deque(maxlen=200)
@@ -916,7 +917,7 @@ class ChatRunner:
             {"phase": "started", "text": f"$ claude -p … ({len(prompt)} chars{f', +{len(images)} 张图' if images else ''}, {label}{', with context' if prompt is not text else ''})"},
         )
 
-        start = self.last_activity = time.time()
+        start = self.started_at = self.last_activity = time.time()
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(self.cfg.cwd) if self.cfg.cwd else None,
@@ -973,6 +974,23 @@ class ChatRunner:
                 self.stderr_tail.append(line.rstrip("\n"))
         except ValueError:
             pass
+
+    def _book_interrupted(self, st: StreamState) -> None:
+        """A turn that ends without a usable `result` still spent what it did; read that from its transcript."""
+        if not st.session_id:
+            return
+        try:
+            root = self.cfg.local_usage_root
+            models = session_usage(st.session_id, self.started_at - 1, Path(root).expanduser() if root else None)
+        except Exception:
+            log.exception("job #%s: reading the transcript for its usage failed", self.job["id"])
+            return
+        if not models:
+            return
+        total = {k: sum(m[k] for m in models) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
+        self.emitter.add_event("partial_usage", {**total, "model": models[0]["model"], "by_model": models,
+                                                 "reason": self.kill_reason or "error"})
+        self.emitter.final_flush()
 
     def _supervise(self, start: float) -> None:
         last_poll = time.time()
@@ -1032,6 +1050,8 @@ class ChatRunner:
         effort = settings.get("effort") or None
         summary = st.summary(effort=effort)
         stderr = "\n".join(self.stderr_tail).strip()[-400:]
+        if self.kill_reason is not None or st.result is None or st.result.get("is_error"):
+            self._book_interrupted(st)
 
         if self.kill_reason == "cancel":
             self.worker._safe_finish(

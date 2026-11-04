@@ -580,3 +580,35 @@ def test_project_jobs_init_clone_and_delete(tmp_path):
 
     chat = worker.config_for({"scope": "code:empty", "owner": "4"})
     assert chat.cwd == base / "u4" / "empty"
+
+
+def _transcript(root, sid, entries):
+    path = root / "-proj" / f"{sid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000Z"  # noqa: E731
+    path.write_text("\n".join(json.dumps({"type": "assistant", "timestamp": stamp(t), "message": {"id": mid, "model": model, "usage": u}})
+                              for mid, t, model, u in entries) + "\n")
+
+
+def test_an_interrupted_turn_still_reports_what_it_spent(tmp_path):
+    root = tmp_path / "projects"
+    now = time.time()
+    _transcript(root, SID, [
+        ("old", now - 3600, "claude-opus-5-5", {"output_tokens": 999}),            # an earlier turn: not this one's
+        ("m1", now + 1, "claude-opus-5-5", {"input_tokens": 10, "output_tokens": 200, "cache_read_input_tokens": 5000}),
+        ("m2", now + 2, "claude-haiku-5-5", {"output_tokens": 50}),
+    ])
+    worker, client = make_worker(tmp_path, [init_ev(), {"__sleep__": 30}], idle_timeout=0.5, chat_timeout=60, local_usage_root=root)
+    worker.run_chat(chat_job())
+    evs = [e for p in client.posts for e in p["events"] if e["type"] == "partial_usage"]
+    assert len(evs) == 1
+    d = evs[0]["data"]
+    assert d["reason"] == "idle" and d["output_tokens"] == 250 and d["cache_read_input_tokens"] == 5000
+    assert [m["model"] for m in d["by_model"]] == ["claude-opus-5-5", "claude-haiku-5-5"]
+    assert client.finished[0]["error_kind"] == "timeout"
+
+
+def test_a_turn_killed_before_init_reports_nothing(tmp_path):
+    worker, client = make_worker(tmp_path, [{"__sleep__": 30}], idle_timeout=0.5, chat_timeout=60, local_usage_root=tmp_path / "none")
+    worker.run_chat(chat_job())
+    assert not [e for p in client.posts for e in p["events"] if e["type"] == "partial_usage"]

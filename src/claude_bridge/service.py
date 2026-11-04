@@ -31,6 +31,8 @@ log = logging.getLogger(__name__)
 DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
 DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
 SESSION_JOB_KINDS = ("context", "compact")  # jobs that act on a thread's Claude session; the page shows their progress
+# "usage": a finished turn (the CLI's result); "partial_usage": a cancelled / timed-out / failed one, read from its transcript
+USAGE_EVENTS = ("usage", "partial_usage")
 PROJECT_JOB_KIND = "project"  # create (git init / git clone) or delete a Code-mode project directory on the worker
 PROJECT_SCOPE_PREFIX = "code:"  # a project's threads live in scope "code:<name>"
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -614,6 +616,11 @@ class BridgeService:
         stop = job["status"] != "running" or job["cancel_requested"]
         msg = self.store.message_by_job(job_id)
         if not msg:
+            # the thread is gone (deleted mid-turn, e.g. a one-off call): still book what the turn spent to its owner
+            owner = str(job["payload"].get("owner") or "")
+            for e in body.events or []:
+                if e.type in USAGE_EVENTS:
+                    self._record_usage(owner, e.data, job_id=job_id, kind=job["kind"])
             return {"ok": True, "cancel": stop}
         mid, thread = msg["id"], msg["thread"]
         owner = ((self.store.get_thread(thread) or {}).get("owner") or "")
@@ -643,7 +650,7 @@ class BridgeService:
             for etype, data in events:
                 ev = self.store.add_event(mid, etype, data)
                 frames.append(("event", ev, ev["id"]))
-                if etype == "usage":
+                if etype in USAGE_EVENTS:
                     self._record_usage(owner, data, thread=thread, message_id=mid, job_id=job_id, kind=job["kind"])
                 elif etype == "rate_limit":
                     self.note_rate_limit(data)
@@ -799,11 +806,13 @@ class BridgeService:
                 "cache_write_tokens": usage.get("cache_creation_input_tokens")}
 
     def _record_usage(self, owner: str, data: dict[str, Any], **kw: Any) -> None:
-        # priced from this invocation's tokens; the CLI's total_cost_usd is cumulative on resumed sessions
+        # priced from this invocation's tokens; the CLI's total_cost_usd is cumulative on resumed sessions.
+        # `by_model` (turns read back from the transcript) prices each model's share at its own rate.
         if not has_tokens(data):
             return
-        self.store.add_usage(owner, cost_usd=usage_cost(data.get("model"), data), model=data.get("model"),
-                             **self._ledger_tokens(data), **kw)
+        parts = [m for m in data.get("by_model") or [] if isinstance(m, dict) and has_tokens(m)]
+        cost = sum(usage_cost(m.get("model"), m) for m in parts) if parts else usage_cost(data.get("model"), data)
+        self.store.add_usage(owner, cost_usd=cost, model=data.get("model"), **self._ledger_tokens(data), **kw)
 
     @staticmethod
     def _compact_cost(meta: dict[str, Any]) -> tuple[float, dict[str, Any]]:

@@ -169,3 +169,45 @@ class TranscriptScanner:
     def requeue(self, rows: list[dict[str, Any]]) -> None:
         """Report failed: send these buckets (their latest totals) next time."""
         self._dirty.update((r["bucket"], r["source"], r["model"]) for r in rows)
+
+
+def session_usage(session_id: str, since: float, root: Path | None = None) -> list[dict[str, Any]]:
+    """Token use of one session from `since` (epoch), per model, from its transcript and its subagents' transcripts.
+
+    For turns that end without a `result` (cancelled, timed out, failed): the CLI never reports their usage, but
+    every API response was already written to the transcript, and the account's limits counted it.
+    """
+    root = root or Path.home() / ".claude" / "projects"
+    files = [*root.glob(f"*/{session_id}.jsonl"), *root.glob(f"*/{session_id}/subagents/*.jsonl")]
+    seen: dict[str, tuple[str, dict[str, Any]]] = {}
+    for path in files:
+        try:
+            lines = path.read_bytes().splitlines()
+        except OSError:
+            continue
+        for raw in lines:
+            if b'"usage"' not in raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            msg = ev.get("message") if isinstance(ev, dict) and ev.get("type") == "assistant" else None
+            if not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
+                continue
+            model, ts, mid = msg.get("model"), _parse_ts(ev.get("timestamp")), msg.get("id") or ev.get("requestId") or ev.get("uuid")
+            if not isinstance(model, str) or model.startswith("<") or ts is None or ts < since or not isinstance(mid, str):
+                continue
+            prev = seen.get(mid)
+            if prev is None or sum(int(msg["usage"].get(k) or 0) for k in TOKEN_FIELDS) > sum(int(prev[1].get(k) or 0) for k in TOKEN_FIELDS):
+                seen[mid] = (model, msg["usage"])
+    by_model: dict[str, dict[str, Any]] = {}
+    for model, u in seen.values():
+        key = price_key(model)
+        m = by_model.setdefault(key, {"model": key, **{k: 0 for k in TOKEN_FIELDS}, "cache_creation": {"ephemeral_1h_input_tokens": 0}, "requests": 0})
+        for k in TOKEN_FIELDS:
+            m[k] += int(u.get(k) or 0)
+        cc = u.get("cache_creation") if isinstance(u.get("cache_creation"), dict) else {}
+        m["cache_creation"]["ephemeral_1h_input_tokens"] += int(cc.get("ephemeral_1h_input_tokens") or 0)
+        m["requests"] += 1
+    return sorted(by_model.values(), key=lambda m: -usage_cost(m["model"], m))
