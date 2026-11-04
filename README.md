@@ -58,7 +58,7 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 | `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_PERMISSION_MODE` / `_SYSTEM_PROMPT` / `_SYSTEM_PROMPT_FILE` | 对应的 `claude` 参数 |
 | `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
 | `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE` | `1` = worker 上报本机所有 Claude Code 会话的用量（读 `~/.claude/projects` 的 transcript，只发送每分钟的 token 合计与 API 标价等价，不含内容），用于自动标定额度 |
-| `CLAUDE_BRIDGE_CONCURRENCY` | worker 同时执行的任务数（缺省 1） |
+| `CLAUDE_BRIDGE_CONCURRENCY` | worker 同时执行的任务数（缺省 1）；多用户模式下管理员可在「管理 › helper」覆盖，约 30 秒生效 |
 | `CLAUDE_BRIDGE_CLIENT_TOOLS` / `_CONTENT_BLOCKS` | `1` = 启用调用方工具 / 完整内容流（见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)） |
 
 命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。

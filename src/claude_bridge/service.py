@@ -83,6 +83,9 @@ def sniff_image(data: bytes) -> tuple[str, str] | None:
     return None
 
 
+MAX_CONCURRENCY = 8  # jobs one worker runs at the same time, at most (the admin setting)
+
+
 @dataclass
 class BridgeConfig:
     # None = any scope string; a tuple = those; a callable (scope, owner) -> bool decides (e.g. "code:<project>")
@@ -581,6 +584,39 @@ class BridgeService:
             "worker": self.store.get_meta("agent_worker"),
             "heartbeat": self.store.get_meta("agent_heartbeat"),
         }
+
+    # ---------------- worker settings ----------------
+
+    def worker_settings(self) -> dict[str, Any]:
+        """What the admin set for the worker; None = the worker's own (env / command line) value."""
+        try:
+            saved = json.loads(self.store.get_meta("worker_settings") or "{}")
+        except json.JSONDecodeError:
+            saved = {}
+        return {"concurrency": saved.get("concurrency")}
+
+    def save_worker_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        cur = self.worker_settings()
+        if "concurrency" in patch:
+            n = patch["concurrency"]
+            if n is not None and (not isinstance(n, int) or not 1 <= n <= MAX_CONCURRENCY):
+                raise BadRequest(f"同时运行的任务数要在 1–{MAX_CONCURRENCY} 之间")
+            cur["concurrency"] = n
+        self.store.set_meta("worker_settings", json.dumps(cur))
+        return cur
+
+    def sync_worker(self, report: dict[str, Any]) -> dict[str, Any]:
+        """The worker's periodic check-in: it says what it runs with, gets back what the admin set."""
+        self.note_agent_alive()
+        self.store.set_meta("agent_config", json.dumps({**report, "at": time.time()}))
+        return self.worker_settings()
+
+    def worker_state(self) -> dict[str, Any]:
+        try:
+            seen = json.loads(self.store.get_meta("agent_config") or "null")
+        except json.JSONDecodeError:
+            seen = None
+        return {**self.worker_settings(), "reported": seen}
 
     def status(self) -> dict[str, Any]:
         self.requeue_stale()

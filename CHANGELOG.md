@@ -2,6 +2,12 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.15.0 — 2026-11-04
+
+- **管理页可调 helper 并发**：「管理 › helper」设置同时运行的任务数（1–8，留空 = 用 helper 本机的 `CLAUDE_BRIDGE_CONCURRENCY`），并显示 helper 报告的当前值与正在运行数。worker 每 30 秒向 `POST /api/agent/config` 报告并取回设置，不用重启；调低时正在跑的任务照常跑完。接口 `PUT /api/admin/worker`
+- worker 不论并发是否为 1 都走同一条领取路径；旧服务端没有 `/config` 时沿用本机设置
+- `BridgeClientError.status` 带上 HTTP 状态码
+
 ## v0.14.0 — 2026-11-04
 
 - **Messages 兼容接口（API 模式）**：`POST /v1/messages`（流式 / 非流式、工具调用、思考块）、`POST /v1/messages/count_tokens`、`GET /v1/models`，按 Anthropic Messages API 的格式工作，用 scope 含 `api` 的调用方令牌鉴权（`x-api-key` 或 `Authorization: Bearer`）。详见 [docs/api-mode.md](docs/api-mode.md)

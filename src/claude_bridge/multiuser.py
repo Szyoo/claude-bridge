@@ -142,6 +142,10 @@ class QuotaIn(BaseModel):
     guard_7d_pct: float | None = None
 
 
+class WorkerSettingsIn(BaseModel):
+    concurrency: int | None = None
+
+
 def _svc(fn: Callable[..., Any], *args: Any, **kw: Any) -> Any:
     try:
         return fn(*args, **kw)
@@ -493,7 +497,7 @@ def create_multiuser_app(
         last = accounts.last_access()
         geo = ipgeo.lookup(a["ip"] for a in last.values())
         out = {"items": [user_row(u, account, last, geo) for u in accounts.users()], "account": account,
-               "quota": accounts.quota_config(), "me": admin["id"]}
+               "quota": accounts.quota_config(), "worker": bridge.service.worker_state(), "me": admin["id"]}
         if sso:
             out["sso"] = {"portal": portal, "autocreate": sso_autocreate, "me_portal_user": admin.get("portal_user")}
         return out
@@ -540,6 +544,12 @@ def create_multiuser_app(
     def admin_quota(body: QuotaIn, admin: dict[str, Any] = Depends(api_admin)):
         quota = _svc(accounts.save_quota_config, body.model_dump(exclude_unset=True))
         return {"quota": quota, "account": accounts.account_status()}
+
+    @app.put("/api/admin/worker")
+    def admin_worker(body: WorkerSettingsIn, admin: dict[str, Any] = Depends(api_admin)):
+        _svc(bridge.service.save_worker_settings, body.model_dump(exclude_unset=True))
+        log.warning("worker settings set to %s by %s", body.model_dump(exclude_unset=True), admin["username"])
+        return {"worker": bridge.service.worker_state()}
 
     @app.exception_handler(HTTPException)
     async def http_exc(request: Request, exc: HTTPException):

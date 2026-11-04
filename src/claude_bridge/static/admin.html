@@ -34,6 +34,15 @@
         <div class="actions"><button type="submit" class="btn">保存额度设置</button></div>
       </form>
 
+      <form class="glass panel" id="worker">
+        <h2 class="panel-title">helper</h2>
+        <div class="form-row"><label for="w-concurrency">同时运行的任务数</label>
+          <div class="bp-num-row"><input id="w-concurrency" class="field small" name="concurrency" type="number" min="1" max="8" step="1" />个</div>
+          <p class="hint">多人同时用时，超出的任务排队等前面的跑完。调大后等待更少，但额度消耗也更快。改动约半分钟内生效，正在跑的任务不受影响；留空 = 用 helper 本机的设置。</p>
+          <p class="hint" id="w-state"></p></div>
+        <div class="actions"><button type="submit" class="btn">保存</button></div>
+      </form>
+
       <section class="glass panel">
         <div class="panel-head">
           <h2 class="panel-title">用户</h2>
@@ -135,6 +144,23 @@
         const d = await api('PUT', '/api/admin/quota', Object.fromEntries(Object.values(GUARD).map(n => [n, num(n)])));
         Object.assign(data, d); renderWindows(); toast('已保存'); load();
       } catch (err) { toast(err.message, true); }
+    });
+
+    // ---------- helper ----------
+    function renderWorker() {
+      const w = data.worker, r = w.reported, input = $('#w-concurrency');
+      input.value = w.concurrency ?? '';
+      input.placeholder = r ? `本机设置 ${r.local_concurrency}` : '本机设置';
+      $('#w-state').textContent = r
+        ? `helper ${ago(r.at)}报告：按 ${r.concurrency} 个运行，正在跑 ${r.running} 个${w.concurrency && w.concurrency !== r.concurrency ? '（新设置还没同步过去）' : ''}。`
+        : 'helper 还没报告过（需要升级到 v0.15.0 以上）。';
+    }
+
+    $('#worker').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const v = e.target.concurrency.value;
+      try { const d = await api('PUT', '/api/admin/worker', { concurrency: v === '' ? null : Number(v) }); Object.assign(data, d); renderWorker(); toast('已保存'); }
+      catch (err) { toast(err.message, true); }
     });
 
     // ---------- users ----------
@@ -242,6 +268,7 @@
       data = await api('GET', '/api/admin/users');
       renderUsers();
       if (!document.activeElement?.closest('#quota')) renderWindows();
+      if (!document.activeElement?.closest('#worker')) renderWorker();
     }
     load().catch(e => toast(e.message, true));
     setInterval(() => { if (!document.hidden && !dlg.isOpen && !secretSheet.isOpen) load().catch(() => {}); }, 60000);

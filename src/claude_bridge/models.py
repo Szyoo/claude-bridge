@@ -165,6 +165,15 @@ class AgentLocalUsageIn(BaseModel):
     buckets: list[LocalUsageBucket] = Field(max_length=1000)
 
 
+class AgentConfigIn(BaseModel):
+    """The worker's periodic check-in: what it runs with right now."""
+
+    worker: str = Field("", max_length=200)
+    concurrency: int = Field(1, ge=1, le=64)
+    local_concurrency: int = Field(1, ge=1, le=64)
+    running: int = Field(0, ge=0, le=64)
+
+
 class AgentChatIn(BaseModel):
     text: str = Field(min_length=1)
     scope: str = ""

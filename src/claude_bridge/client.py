@@ -8,7 +8,9 @@ import requests
 
 
 class BridgeClientError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status  # HTTP status, None when the bridge couldn't be reached
 
 
 class BridgeClient:
@@ -44,7 +46,7 @@ class BridgeClient:
                 detail = resp.json().get("detail")
             except ValueError:
                 detail = resp.text[:200]
-            raise BridgeClientError(f"bridge {method} {path} HTTP {resp.status_code}: {detail}")
+            raise BridgeClientError(f"bridge {method} {path} HTTP {resp.status_code}: {detail}", resp.status_code)
         return resp.json() if resp.content else None
 
     def get_file(self, file_id: str) -> tuple[bytes, str]:
@@ -70,6 +72,9 @@ class BridgeClient:
 
     def report_local_usage(self, buckets: list[dict[str, Any]]) -> None:
         self._call("POST", "/local-usage", json={"buckets": buckets})
+
+    def sync_config(self, report: dict[str, Any]) -> dict[str, Any]:
+        return self._call("POST", "/config", json=report) or {}
 
     def next_job(self, worker: str, kinds: list[str], wait: int = 25) -> dict[str, Any] | None:
         body = {"worker": worker, "kinds": kinds, "wait": wait}

@@ -581,3 +581,19 @@ def test_extra_scopes_accept_named_scope_reject_others(tmp_path, monkeypatch):
     me2 = login(app2, "me")
     assert me2.post("/api/send", json={"text": "hi", "scope": "only"}).status_code == 201
     assert me2.post("/api/send", json={"text": "hi", "scope": "ext"}).status_code == 400
+
+
+def test_admin_sets_worker_concurrency(app, agent):
+    boss = login(app, "boss")
+    alice = login(app, "alice")
+    sync = {"worker": "mac:1", "concurrency": 1, "local_concurrency": 1, "running": 0}
+    assert agent.post("/api/agent/config", json=sync).json() == {"concurrency": None}  # unset: the worker keeps its own
+    w = boss.get("/api/admin/users").json()["worker"]
+    assert w["concurrency"] is None and w["reported"]["local_concurrency"] == 1
+
+    assert alice.put("/api/admin/worker", json={"concurrency": 3}).status_code == 403
+    assert boss.put("/api/admin/worker", json={"concurrency": 9}).status_code == 400
+    assert boss.put("/api/admin/worker", json={"concurrency": 3}).json()["worker"]["concurrency"] == 3
+    assert agent.post("/api/agent/config", json=sync).json() == {"concurrency": 3}
+    assert boss.put("/api/admin/worker", json={"concurrency": None}).json()["worker"]["concurrency"] is None
+    assert TestClient(app).post("/api/agent/config", json=sync).status_code == 401  # agent token only

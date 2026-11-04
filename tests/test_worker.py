@@ -644,3 +644,36 @@ def test_waiting_on_a_client_tool_is_not_idle(tmp_path):
     worker, _ = make_worker(tmp_path, [init_ev(), {"__sleep__": 1.2}, result_ev()], client=client, idle_timeout=0.4, chat_timeout=60)
     worker.run_chat(chat_job())
     assert client.finished[0]["ok"] is True
+
+
+def test_the_admins_concurrency_overrides_the_local_one(tmp_path):
+    client = FakeClient([chat_job(jid=1), chat_job(jid=2)])
+    client.remote = {"concurrency": None}
+    client.sync_config = lambda report: (client.reports.append(report), client.remote)[1]
+    client.reports = []
+    worker, _ = make_worker(tmp_path, [init_ev(), {"__sleep__": 0.8}, result_ev()], client=client, max_concurrent=1)
+    worker.maybe_sync_config(force=True)
+    assert worker.concurrency == 1 and client.reports[-1]["local_concurrency"] == 1
+    client.remote = {"concurrency": 2}
+    worker.maybe_sync_config(force=True)
+    assert worker.concurrency == 2
+    assert worker.run_concurrent_once() and worker.run_concurrent_once()  # the second doesn't wait for the first
+    t0, peak = time.time(), 0
+    while len(client.finished) < 2 and time.time() - t0 < 10:
+        peak = max(peak, worker.running_jobs())
+        time.sleep(0.02)
+    assert peak == 2
+    client.remote = {"concurrency": None}
+    worker.maybe_sync_config(force=True)
+    assert worker.concurrency == 1  # cleared on the server: back to the local value
+
+
+def test_config_sync_tolerates_an_older_server(tmp_path):
+    client = FakeClient()
+
+    def missing(report):
+        raise BridgeClientError("bridge POST /config HTTP 404: Not Found", 404)
+    client.sync_config = missing
+    worker, _ = make_worker(tmp_path, HAPPY, client=client, max_concurrent=2)
+    worker.maybe_sync_config(force=True)
+    assert worker.concurrency == 2

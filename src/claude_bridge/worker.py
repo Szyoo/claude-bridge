@@ -139,7 +139,9 @@ class WorkerConfig:
     local_usage_interval: float = 120
     local_usage_root: str | Path | None = None
     # jobs run at the same time (1 = one after another). The server never runs two turns of one thread at once.
+    # The admin can override it on the server (Admin › worker); this is the value when they haven't.
     max_concurrent: int = 1
+    config_sync_interval: float = 30
     tool_result_max_chars: int = 4000
     thinking_max_chars: int = 4000
     kill_grace: float = 3.0
@@ -194,7 +196,10 @@ class Worker:
         self.stopping = False
         self._running: dict[int, ChatRunner] = {}  # job id → its runner, so a stop can kill every claude
         self._running_lock = threading.Lock()
-        self._slots: threading.Semaphore | None = None
+        self._active = 0               # claimed jobs whose thread hasn't finished
+        self._slot_free = threading.Condition()
+        self._remote_concurrency: int | None = None  # the admin's setting from the server
+        self._next_config_sync = 0.0
         self._probe_lock = threading.Lock()
         self._probe_thread: threading.Thread | None = None
         self._next_probe = 0.0          # monotonic time of the next model probe
@@ -231,10 +236,8 @@ class Worker:
                     self.hooks.tick()
                 except Exception:
                     log.exception("hooks.tick failed")
-                if self.config.max_concurrent > 1:
-                    self.run_concurrent_once()
-                else:
-                    self.run_once()
+                self.maybe_sync_config()
+                self.run_concurrent_once()
                 backoff = 2.0
             except BridgeClientError as e:
                 log.warning("bridge unreachable, retry in %.0fs: %s", backoff, e)
@@ -269,20 +272,54 @@ class Worker:
         self.execute(job)
         return True
 
+    @property
+    def concurrency(self) -> int:
+        return max(1, self._remote_concurrency or self.config.max_concurrent)
+
+    def maybe_sync_config(self, force: bool = False) -> None:
+        """Every `config_sync_interval`: report what we run with, take the admin's concurrency (None = ours)."""
+        now = time.monotonic()
+        if not self.config.config_sync_interval or (now < self._next_config_sync and not force):
+            return
+        self._next_config_sync = now + self.config.config_sync_interval
+        try:
+            got = self.client.sync_config({"worker": self.config.worker_name, "concurrency": self.concurrency,
+                                           "local_concurrency": max(1, self.config.max_concurrent),
+                                           "running": self.running_jobs()})
+        except BridgeClientError as e:
+            if e.status == 404:  # an older server: keep our own value, ask again much later
+                self._next_config_sync = now + 3600
+            else:
+                log.warning("config sync failed: %s", e)
+            return
+        except Exception:
+            log.exception("config sync failed")
+            return
+        n = got.get("concurrency")
+        n = n if isinstance(n, int) and n >= 1 else None
+        if n != self._remote_concurrency:
+            self._remote_concurrency = n
+            log.info("concurrency now %d (%s)", self.concurrency, "set by admin" if n else "local default")
+            with self._slot_free:
+                self._slot_free.notify_all()
+
     def run_concurrent_once(self) -> bool:
-        """With max_concurrent > 1: claim a job only while a slot is free, and run it on its own thread."""
-        if self._slots is None:
-            self._slots = threading.Semaphore(max(1, self.config.max_concurrent))
-        while not self._slots.acquire(timeout=0.5):
-            if self.stopping:
-                return False
+        """Claim a job only while fewer than `concurrency` run, and run it on its own thread. The limit can
+        change while jobs run (the admin's setting): lowering it lets running jobs finish, raising it frees slots."""
+        with self._slot_free:
+            while self._active >= self.concurrency:
+                if self.stopping:
+                    return False
+                self._slot_free.wait(0.5)
+                self.maybe_sync_config()
+            self._active += 1
         try:
             job = self.client.next_job(self.config.worker_name, self.kinds, self.config.poll_wait)
         except BaseException:
-            self._slots.release()
+            self._release_slot()
             raise
         if not job:
-            self._slots.release()
+            self._release_slot()
             return False
         log.info("claimed job #%s %s (%d running)", job["id"], job["kind"], self.running_jobs() + 1)
 
@@ -290,10 +327,14 @@ class Worker:
             try:
                 self.execute(job)
             finally:
-                assert self._slots is not None
-                self._slots.release()
+                self._release_slot()
         threading.Thread(target=run, name=f"job-{job['id']}", daemon=True).start()
         return True
+
+    def _release_slot(self) -> None:
+        with self._slot_free:
+            self._active -= 1
+            self._slot_free.notify_all()
 
     def execute(self, job: dict[str, Any]) -> None:
         try:

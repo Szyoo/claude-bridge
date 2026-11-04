@@ -18,6 +18,7 @@ from claude_bridge.client_tools import ClientToolService
 from claude_bridge.errors import BridgeError
 from claude_bridge.models import (
     AgentChatIn,
+    AgentConfigIn,
     AgentLimitsIn,
     AgentLocalUsageIn,
     AgentModelsIn,
@@ -360,6 +361,11 @@ def create_bridge(
     @agent.post("/local-usage")
     def a_report_local_usage(body: AgentLocalUsageIn):
         return service.save_local_usage([b.model_dump() for b in body.buckets])
+
+    # every ~30 s: the worker reports its concurrency and picks up the admin's setting (null = its own)
+    @agent.post("/config")
+    def a_sync_config(body: AgentConfigIn):
+        return service.sync_worker(body.model_dump())
 
     # the worker validates these pinned ids against its local CLI and reports what it supports
     @agent.get("/models")
