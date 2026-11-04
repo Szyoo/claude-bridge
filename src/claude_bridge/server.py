@@ -319,6 +319,7 @@ def create_bridge(
             raise HTTPException(status_code=404, detail="没有这个任务")
         if job["status"] == "running":
             store.touch_job(job_id)
+            service.note_agent_alive()
         return {"job": job}
 
     @agent.post("/jobs/{job_id}/events")

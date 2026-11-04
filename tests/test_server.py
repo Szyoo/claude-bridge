@@ -189,3 +189,17 @@ def test_non_chat_jobs_are_generic(agent, bridge):
     agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": True, "result": json.dumps({"chars": 12})})
     assert bridge.store.get_job(jid)["status"] == "done"
     assert agent.post("/api/agent/jobs/99/events", json={}).status_code == 404
+
+
+def test_a_worker_busy_with_a_long_turn_is_still_online(web, agent, bridge):
+    jid = web.post("/api/send", json={"text": "长任务", "scope": "stock"}).json()["job_id"]
+    assert _claim(agent)["id"] == jid
+    store = bridge.store
+    stale = lambda: store.set_meta("agent_heartbeat", repr(0.0))  # noqa: E731 — as if the last /jobs/next was long ago
+    stale()
+    assert web.get("/api/status").json()["online"] is False
+    agent.get(f"/api/agent/jobs/{jid}")  # the worker's cancel poll while claude runs
+    assert web.get("/api/status").json()["online"] is True
+    stale()
+    agent.post(f"/api/agent/jobs/{jid}/events", json={"deltas": ["…"]})  # streamed output
+    assert web.get("/api/status").json()["online"] is True

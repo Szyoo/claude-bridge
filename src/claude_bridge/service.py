@@ -561,6 +561,11 @@ class BridgeService:
             return {"source": "static"}
         return {"source": "helper", "cli_version": rep.get("cli_version"), "probed_at": rep.get("probed_at")}
 
+    def note_agent_alive(self) -> None:
+        """The worker talked to us. While it runs a job it doesn't poll /jobs/next, but it still polls the job
+        (cancel check, every few seconds) and posts its events, so those count too: a long turn is not "offline"."""
+        self.store.set_meta("agent_heartbeat", repr(time.time()))
+
     def agent_online(self) -> bool:
         raw = self.store.get_meta("agent_heartbeat")
         try:
@@ -590,7 +595,7 @@ class BridgeService:
         deadline = time.time() + max(0, wait)
         self.requeue_stale()
         while True:
-            self.store.set_meta("agent_heartbeat", repr(time.time()))
+            self.note_agent_alive()
             self.store.set_meta("agent_worker", worker)
             job = self.store.claim_job(worker, kinds)
             remaining = deadline - time.time()
@@ -605,6 +610,7 @@ class BridgeService:
         if not job:
             raise NotFound("没有这个任务")
         self.store.touch_job(job_id)
+        self.note_agent_alive()
         stop = job["status"] != "running" or job["cancel_requested"]
         msg = self.store.message_by_job(job_id)
         if not msg:
