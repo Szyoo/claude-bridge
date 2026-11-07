@@ -25,8 +25,10 @@
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';
-    import { api, esc, fmtPct, fmtSeen, toast, confirmTyped } from '/static/bridge/bridge-pages.js';
+    import { api, esc, fmtPct, fmtSeen, toast } from '/static/bridge/bridge-pages.js';
     import { enhanceSwitches } from '@szyyw/design/switch.js';
+    import { confirm } from '@szyyw/design/confirm.js';
+    import { iconSvg } from '@szyyw/design/icons.js';
 
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
     const app = document.getElementById('app');
@@ -107,15 +109,15 @@
         const p = projects.find(x => x.name === project && x.status === 'ready');
         if (p) {
           document.title = `claude-bridge · ${p.name}`;
-          return mountChat(`code:${p.name}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>▾</i></button>`, p);
+          return mountChat(`code:${p.name}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>${iconSvg('chevron-down')}</i></button>`, p);
         }
         project = null; store.set('bridge_project', null);
       }
       return showHome();
     }
 
-    const FOLDER = '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M1.8 4.2c0-.6.5-1.1 1.1-1.1h3.2l1.4 1.5h5.6c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H2.9c-.6 0-1.1-.5-1.1-1.1z"/></svg>';
-    const STATUS = { creating: ['准备中…', 'amber'], deleting: ['删除中…', 'red'], failed: ['失败', 'red'] };
+    const FOLDER = iconSvg('folder');
+    const STATUS = { creating: ['准备中…', 'warn'], deleting: ['删除中…', 'err'], failed: ['失败', 'err'] };
 
     async function loadProjects() {
       try { const d = await api('GET', '/api/projects'); projects = d.items; agentOnline = !!d.agent?.online; } catch (e) { toast(e.message, true); }
@@ -134,12 +136,12 @@
         const [st, cls] = STATUS[p.status] || ['', ''];
         const src = p.source ? esc(p.source.replace(/^https?:\/\//, '')) : '空项目';
         const meta = [p.info?.branch ? `分支 ${esc(p.info.branch)}` : '', p.threads ? `${p.threads} 段对话` : '', p.last_used ? esc(fmtSeen(p.last_used)) : ''].filter(Boolean).join(' · ');
-        return `<div class="inner bp-project${p.status === 'ready' ? ' ready' : ''}" ${p.status === 'ready' ? `data-open="${esc(p.name)}" tabindex="0" role="button"` : ''}>
-          <span class="ic">${FOLDER}</span>
-          <div class="who"><div class="n">${esc(p.name)} ${st ? `<span class="pill ${cls}">${st}</span>` : ''}</div>
-            <div class="d">${src}${meta ? ` · ${meta}` : ''}</div>
-            ${p.status === 'failed' && p.error ? `<div class="d err-text">${esc(p.error)}</div>` : ''}</div>
-          ${p.status === 'deleting' ? '' : `<button type="button" class="btn-ghost btn-small danger" data-del="${esc(p.name)}" title="删除项目">删除</button>`}
+        return `<div class="list-row"${p.status === 'ready' ? ` data-open="${esc(p.name)}" tabindex="0" role="button"` : ''}>
+          <span class="row-lead">${FOLDER}</span>
+          <span class="row-main"><span class="row-title">${esc(p.name)} ${st ? `<span class="pill ${cls}">${st}</span>` : ''}</span>
+            <span class="row-sub">${src}${meta ? ` · ${meta}` : ''}</span>
+            ${p.status === 'failed' && p.error ? `<span class="row-sub err-text">${esc(p.error)}</span>` : ''}</span>
+          ${p.status === 'deleting' ? '' : `<span class="row-end"><button type="button" class="btn-ghost btn-small danger" data-del="${esc(p.name)}" title="删除项目">删除</button></span>`}
         </div>`;
       }).join('');
       // same frame as the chat: sidebar (the projects, like the thread list) + top bar + the picker in the main area
@@ -152,15 +154,15 @@
           + `<span class="m">${esc(meta)}</span></button>`;
       }).join('');
       app.innerHTML = `<div class="bridge fill bp-homeview">
-        <aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="home-new">＋ 新建项目</button>
+        <aside class="bridge-side"><button type="button" class="bridge-btn bridge-new" data-act="home-new">${iconSvg('plus')}新建项目</button>
           <div class="bridge-threads">${side}</div><div class="bridge-side-foot"><div class="bp-me bp-me-side"></div></div></aside>
         <div class="bridge-side-scrim" data-act="side-close"></div>
         <div class="bridge-main">
-          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">☰</button>${toggle()}<span class="bridge-title">选择项目</span>${ME}</div>
+          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button>${toggle()}<span class="bridge-title">选择项目</span>${ME}</div>
           <div class="bp-home"><main class="bp-wrap narrow">
           <p class="page-sub">每个项目是你专属空间里的一个目录（通常是 git 仓库）。Claude 在项目里读写文件、跑命令，每个项目有自己的对话记录。</p>
           ${agentOnline ? '' : '<div class="callout warn">helper 现在离线：新建 / 克隆会排队，等它上线后执行。</div>'}
-          <div class="bp-projects">${rows || '<p class="muted small">还没有项目，先克隆一个仓库或新建一个空项目。</p>'}</div>
+          <div class="list gap bp-projects">${rows || '<p class="muted small">还没有项目，先克隆一个仓库或新建一个空项目。</p>'}</div>
           <div class="bp-grid">
             <form class="glass panel" data-form="clone">
               <h2 class="panel-title bp-lead">克隆 Git 仓库</h2>
@@ -200,7 +202,9 @@
       const del = e.target.closest('[data-del]');
       if (del) {
         const name = del.dataset.del;
-        if (!await confirmTyped({ title: `删除项目「${name}」`, message: '目录里的文件和这个项目的对话都会删掉。', expect: name, okLabel: '删除项目' })) return;
+        const typed = await confirm({ title: `删除项目「${name}」`, message: '无法恢复。目录里的文件和这个项目的对话都会删掉。', danger: true, confirmLabel: '删除项目',
+          input: { label: `输入「${name}」确认`, placeholder: name, required: true, validate: (v) => v === name ? '' : '输入的名字不一致' } });
+        if (typed === null) return;
         try { await api('DELETE', `/api/projects/${encodeURIComponent(name)}`); } catch (err) { toast(err.message, true); }
         return showHome();
       }

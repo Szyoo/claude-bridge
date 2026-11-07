@@ -1,5 +1,7 @@
 // Helpers shared by the multi-user pages (app / account / admin). Framework-free ES module.
 import { toast as dsToast } from '@szyyw/design/toast.js';
+import { mountOverlay } from '@szyyw/design/overlay.js';
+import { armConfirm } from '@szyyw/design/confirm.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -25,70 +27,36 @@ export function toast(msg, isErr = false) {
 
 /**
  * A modal sheet (@szyyw/design .overlay > .sheet). `.overlay` is display:flex, so `hidden` can't hide it: the overlay
- * is attached on open and removed on close. Closes on ✕ / Esc / a click on the backdrop. Returns { open, close, isOpen }.
+ * is attached on open and removed on close. Backdrop click / Esc / scroll lock come from the package's mountOverlay;
+ * anything marked `data-close` inside also closes. Returns { open, close, isOpen }.
  */
 export function sheet(el) {
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   overlay.append(el);
   el.hidden = false;
-  // Esc closes only the topmost sheet (a confirmation can sit on top of the user editor)
-  const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('body > .overlay')].pop() === overlay) close(); };
-  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
-  overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-close]')) close(); });
+  let mounted = null;
+  function close() { mounted?.destroy(); mounted = null; overlay.remove(); }
+  overlay.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
   return {
-    open() { if (!overlay.isConnected) { document.body.append(overlay); document.addEventListener('keydown', onKey); } el.querySelector('input:not([type=hidden]), button')?.focus(); },
+    open() {
+      if (!overlay.isConnected) { document.body.append(overlay); mounted = mountOverlay(overlay, { onClose: close }); }
+      el.querySelector('input:not([type=hidden]), button')?.focus();
+    },
     close,
     get isOpen() { return overlay.isConnected; },
   };
 }
 
 /**
- * Two-step confirm for a destructive button (DESIGN §8): the first click turns it red into「再点一次确认」and shows
- * `warning` (the impact) in `warnEl` (a .callout); a second click within 5 s returns true. Returns false while arming.
+ * Two-step confirm for a destructive button (DESIGN §16.3): the package's armConfirm, plus a .callout (`warnEl`) that
+ * shows the impact while the button is armed. The second click is left to the caller's own click handler.
  */
-export function armConfirm(btn, { warnEl = null, warning = '', label = '再点一次确认' } = {}) {
-  if (btn.dataset.armed) { disarm(btn, warnEl); return true; }
-  for (const other of document.querySelectorAll('[data-armed]')) disarm(other, warnEl);
-  btn.dataset.armed = btn.textContent;
-  btn.textContent = label;
-  btn.classList.add('bp-armed');
-  if (warnEl) { warnEl.textContent = warning; warnEl.hidden = false; }
-  btn._disarm = setTimeout(() => disarm(btn, warnEl), 5000);
-  return false;
-}
-export function disarm(btn, warnEl = null) {
-  if (!btn.dataset.armed) return;
-  clearTimeout(btn._disarm);
-  btn.textContent = btn.dataset.armed;
-  delete btn.dataset.armed;
-  btn.classList.remove('bp-armed');
-  if (warnEl) warnEl.hidden = true;
-}
-
-/**
- * Typed confirmation in a sheet: the destructive button only enables once the input equals `expect`
- * (replaces `prompt("输入…确认") === expect`). Resolves true on confirm, false on cancel / ✕ / Esc / backdrop.
- */
-export function confirmTyped({ title, message, expect, okLabel = '删除' }) {
-  return new Promise((resolve) => {
-    const el = document.createElement('form');
-    el.className = 'sheet';
-    el.innerHTML = `<div class="sheet-head"><h3 class="sheet-title">${esc(title)}</h3><button type="button" class="close-x" data-close aria-label="关闭">✕</button></div>
-      <div class="sheet-body"><div class="callout err"><strong>无法恢复。</strong>${esc(message)}</div>
-        <div class="form-row bp-gap"><label for="bp-confirm-input">输入「${esc(expect)}」确认</label>
-        <input id="bp-confirm-input" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" /></div></div>
-      <div class="sheet-foot"><button type="submit" class="btn-ghost danger bp-armed" disabled>${esc(okLabel)}</button><button type="button" class="btn-ghost" data-close>取消</button></div>`;
-    const input = el.querySelector('input'), ok = el.querySelector('[type=submit]');
-    let done = false;
-    const sh = sheet(el);
-    const finish = (v) => { if (done) return; done = true; sh.close(); resolve(v); };
-    input.addEventListener('input', () => { ok.disabled = input.value !== expect; });
-    el.addEventListener('submit', (e) => { e.preventDefault(); if (input.value === expect) finish(true); });
-    // ✕ / 取消 / backdrop / Esc all go through sheet(): watch for the overlay leaving the page
-    new MutationObserver((_, mo) => { if (!el.isConnected) { mo.disconnect(); finish(false); } }).observe(document.body, { childList: true });
-    sh.open();
-    input.focus();
+export function armWithWarning(btn, warnEl, warning) {
+  return armConfirm(btn, {
+    timeout: 5000,
+    onArm: () => { warnEl.textContent = warning; warnEl.hidden = false; },
+    onDisarm: () => { warnEl.hidden = true; },
   });
 }
 
@@ -143,14 +111,14 @@ export function fmtGeo(g) {
   return [place, shortIsp(g.isp)].filter(Boolean).join(' · ');
 }
 
-/** A usage bar (@szyyw/design .bar): `used` fills it, `limit` (if any) draws a tick; both in percent. */
+/** A usage meter (@szyyw/design .meter + .bar): `used` fills it, `limit` (if any) draws a mark; both in percent. */
 export function meterHtml({ label, used, limit, sub = '', right = null }) {
   const pct = used == null ? 0 : Math.min(100, used);
-  const cls = limit != null && used != null && used >= limit ? ' over' : limit != null && used != null && used >= limit * 0.8 ? ' bp-warn' : '';
-  const tick = limit != null && limit < 100 ? `<s style="left:${limit}%"></s>` : '';
+  const tone = limit != null && used != null && used >= limit ? ' err' : limit != null && used != null && used >= limit * 0.8 ? ' warn' : '';
+  const mark = limit != null && limit < 100 ? `<span class="bar-mark" style="--at:${limit}%"></span>` : '';
   const txt = right ?? (used == null ? '—' : limit != null ? `${fmtPct(used)} / ${fmtPct(limit)}` : fmtPct(used));
-  return `<div class="bp-meter"><div class="spread small"><span>${esc(label)}</span><b class="num">${esc(txt)}</b></div>`
-    + `<div class="bar"><div class="bar-fill${cls}" style="width:${pct}%"></div>${tick}</div>${sub ? `<div class="tiny muted">${sub}</div>` : ''}</div>`;
+  return `<div class="meter"><div class="meter-head"><span class="meter-label">${esc(label)}</span><span class="meter-value">${esc(txt)}</span></div>`
+    + `<div class="bar${tone}"><div class="bar-fill" style="width:${pct}%"></div>${mark}</div>${sub ? `<div class="hint">${sub}</div>` : ''}</div>`;
 }
 
 /** One window of a user's usage (from /api/me or /api/admin/users). */

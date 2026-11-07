@@ -21,7 +21,7 @@
       <div class="app-brand"><h1 class="app-title">我的账户</h1><p class="app-sub">claude-bridge</p></div>
       <nav class="app-actions">
         <a class="btn-ghost btn-small" href="/admin" data-admin hidden>管理</a>
-        <a class="btn-ghost btn-small" href="/">← 回到聊天</a>
+        <a class="btn-ghost btn-small" href="/"><i data-icon="arrow-left"></i>回到聊天</a>
       </nav>
     </header>
 
@@ -70,7 +70,7 @@
   </div>
 
   <div class="sheet" id="key-sheet" hidden>
-    <div class="sheet-head"><h3 class="sheet-title">新密钥</h3><button type="button" class="close-x" data-close aria-label="关闭">✕</button></div>
+    <div class="sheet-head"><h3 class="sheet-title">新密钥</h3><button type="button" class="close-x" data-close aria-label="关闭"></button></div>
     <div class="sheet-body">
       <div class="field-row bp-secret"><code class="mono" id="key-value"></code><button type="button" class="btn-ghost btn-small" id="copy-key">复制</button></div>
       <p class="hint">只显示这一次，关闭后无法再查看；丢了只能吊销后重新建一个。</p>
@@ -79,7 +79,9 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armConfirm, copyText, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, copyText, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { enhanceIcons } from '@szyyw/design/icons.js';
+    enhanceIcons();
     const $ = (s) => document.querySelector(s);
     const profile = $('#profile'), pw = $('#password');
 
@@ -136,11 +138,12 @@
       $('#api-env').textContent = `ANTHROPIC_BASE_URL=${apiBase}\nANTHROPIC_API_KEY=<你的密钥>`;
       $('#api-curl').textContent = `curl ${apiBase}/v1/messages \\\n  -H "x-api-key: <你的密钥>" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n`
         + `  -d '{"model":"claude-sonnet-5-5","max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'`;
-      $('#api-keys').innerHTML = d.items.length ? d.items.map(k => `<div class="bp-key" data-name="${esc(k.name)}">`
-        + `<div><span class="n">${esc(k.note || '（无备注）')}</span> <span class="tiny muted mono">${esc(k.name)}</span>`
-        + `<div class="tiny muted">创建：${esc(fmtTime(k.created_at))} · 最近使用：${k.last_used_at ? esc(fmtSeen(k.last_used_at)) : '从未使用'} · ${k.disabled ? '已吊销' : '有效'}</div></div>`
-        + (k.disabled ? '' : '<button type="button" class="btn-ghost btn-small" data-revoke>吊销</button>') + '</div>').join('')
+      $('#api-keys').innerHTML = d.items.length ? '<div class="list divided">' + d.items.map(k => `<div class="list-row" data-name="${esc(k.name)}">`
+        + `<span class="row-main"><span class="row-title">${esc(k.note || '（无备注）')}</span><span class="row-sub mono">${esc(k.name)}</span>`
+        + `<span class="row-sub">创建：${esc(fmtTime(k.created_at))} · 最近使用：${k.last_used_at ? esc(fmtSeen(k.last_used_at)) : '从未使用'} · ${k.disabled ? '已吊销' : '有效'}</span></span>`
+        + (k.disabled ? '' : '<span class="row-end"><button type="button" class="btn-ghost btn-small" data-revoke>吊销</button></span>') + '</div>').join('') + '</div>'
         : '<p class="muted small">还没有密钥。</p>';
+      for (const b of $('#api-keys').querySelectorAll('[data-revoke]')) armWithWarning(b, apiWarn, '吊销后这个密钥立刻失效，正在使用它的应用会收到 401，无法恢复。');
       $('#api-new button').disabled = d.items.filter(k => !k.disabled).length >= d.max_keys;
       apiBox.hidden = false;
     }
@@ -159,7 +162,6 @@
     $('#api-keys').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-revoke]');
       if (!btn) return;
-      if (!armConfirm(btn, { warnEl: apiWarn, warning: '吊销后这个密钥立刻失效，正在使用它的应用会收到 401，无法恢复。' })) return;
       try {
         await api('DELETE', `/api/me/api-keys/${encodeURIComponent(btn.closest('[data-name]').dataset.name)}`);
         toast('已吊销'); loadKeys();

@@ -21,7 +21,7 @@
       <div class="app-brand"><h1 class="app-title">管理</h1><p class="app-sub">claude-bridge</p></div>
       <nav class="app-actions">
         <a class="btn-ghost btn-small" href="/account">我的账户</a>
-        <a class="btn-ghost btn-small" href="/">← 回到聊天</a>
+        <a class="btn-ghost btn-small" href="/"><i data-icon="arrow-left"></i>回到聊天</a>
       </nav>
     </header>
 
@@ -54,7 +54,7 @@
   </div>
 
   <form class="sheet" id="user-form" hidden>
-    <div class="sheet-head"><h3 class="sheet-title"></h3><button type="button" class="close-x" data-close aria-label="关闭">✕</button></div>
+    <div class="sheet-head"><h3 class="sheet-title"></h3><button type="button" class="close-x" data-close aria-label="关闭"></button></div>
     <div class="sheet-body">
       <div class="form-row"><label for="u-username">用户名</label><input id="u-username" class="field" name="username" autocapitalize="none" spellcheck="false" required maxlength="32" /></div>
       <div class="form-row"><label for="u-display">显示名</label><input id="u-display" class="field" name="display_name" maxlength="40" placeholder="可留空" /></div>
@@ -83,7 +83,7 @@
   </form>
 
   <div class="sheet" id="secret-sheet" hidden>
-    <div class="sheet-head"><h3 class="sheet-title">密码</h3><button type="button" class="close-x" data-close aria-label="关闭">✕</button></div>
+    <div class="sheet-head"><h3 class="sheet-title">密码</h3><button type="button" class="close-x" data-close aria-label="关闭"></button></div>
     <div class="sheet-body">
       <p class="muted small" id="secret-for"></p>
       <div class="field-row bp-secret"><code class="mono" id="secret"></code><button type="button" class="btn-ghost btn-small" id="copy">复制</button></div>
@@ -93,7 +93,10 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armConfirm, disarm, confirmTyped, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { confirm } from '@szyyw/design/confirm.js';
+    import { enhanceIcons, iconSvg } from '@szyyw/design/icons.js';
+    enhanceIcons();
     const $ = (s, el = document) => el.querySelector(s);
     const CAP = { five_hour: 'cap_5h_usd', seven_day: 'cap_7d_usd' };
     const GUARD = { five_hour: 'guard_5h_pct', seven_day: 'guard_7d_pct' };
@@ -167,8 +170,8 @@
     function renderUsers() {
       const noCap = WINDOWS.every(([k]) => !data.account[k].effective_cap_usd);
       const rows = data.items.map(u => {
-        const tags = [u.role === 'admin' ? '<span class="pill cyan">管理员</span>' : '', u.disabled ? '<span class="pill red">已停用</span>' : '',
-          u.id === data.me ? '<span class="pill">我</span>' : ''].join(' ');
+        const tags = [u.role === 'admin' ? '<span class="pill info">管理员</span>' : '', u.disabled ? '<span class="pill err">已停用</span>' : '',
+          u.id === data.me ? '<span class="pill neutral">我</span>' : ''].join(' ');
         const meters = u.role === 'admin'
           ? WINDOWS.map(([k, l]) => meterHtml({ label: l, used: u.usage[k].used_pct, sub: `${u.usage[k].turns} 次 · 不限` })).join('')
           : WINDOWS.map(([k, l]) => userMeter(u.usage[k], l)).join('');
@@ -184,20 +187,21 @@
         </div>`;
       });
       const nu = $('#new-user');
-      nu.textContent = data.sso ? '在门户新建用户 ↗' : '新建用户';
+      nu.innerHTML = data.sso ? `在门户新建用户${iconSvg('arrow-up-right')}` : '新建用户';
       nu.title = data.sso ? '在门户「管理 › 用户」新建；对方第一次登录后会出现在这里' : '';
       $('#users').innerHTML = (data.sso ? '<p class="muted small bp-lead">账户由门户统一管理：新建账户、改密码都在门户「管理 › 用户」里做，对方第一次登录后自动出现在这个列表。这里只设置每个人在 claude 里的份额、备注和停用。</p>' : '')
         + `<div class="bp-user head"><div>用户</div><div>5 小时</div><div>本周</div><div>最近</div><div></div></div>${rows.join('')}`
         + (noCap && data.items.some(u => u.role !== 'admin' && (u.limit_5h_pct != null || u.limit_7d_pct != null))
-          ? '<div class="callout warn bp-gap">⚠ 换算比例还没标定出来，按人份额上限暂不生效（只有保护线生效）。</div>' : '');
+          ? '<div class="callout warn bp-gap">换算比例还没标定出来，按人份额上限暂不生效（只有保护线生效）。</div>' : '');
       for (const b of document.querySelectorAll('#users button[data-edit]')) b.addEventListener('click', () => openUser(data.items.find(u => u.id === Number(b.dataset.edit))));
     }
 
     const form = $('#user-form'), warnEl = $('[data-warn]', form), dlg = sheet(form), secretEl = $('#secret-sheet'), secretSheet = sheet(secretEl);
+    let toggleArm = null;
     function openUser(u) {
       editing = u || null;
       form.reset();
-      for (const b of form.querySelectorAll('[data-armed]')) disarm(b, warnEl);
+      warnEl.hidden = true;
       $('.sheet-title', form).textContent = u ? `编辑 ${u.username}` : '新建用户';
       for (const el of form.querySelectorAll('[data-create]')) el.hidden = !!u;
       for (const el of form.querySelectorAll('[data-edit]')) el.hidden = !u;
@@ -206,7 +210,11 @@
         for (const n of ['username', 'display_name', 'role', 'note', 'portal_sub']) form[n].value = u[n] ?? '';
         form.limit_5h_pct.value = u.limit_5h_pct ?? '';
         form.limit_7d_pct.value = u.limit_7d_pct ?? '';
-        $('[data-op="toggle"]', form).textContent = u.disabled ? '启用账户' : '停用账户';
+        const tg = $('[data-op="toggle"]', form);
+        toggleArm?.destroy(); toggleArm = null;
+        tg.textContent = u.disabled ? '启用账户' : '停用账户';
+        if (!u.disabled) toggleArm = armWithWarning(tg, warnEl, `停用 ${u.username}：对方会立即被登出，记录保留，之后可以再启用。`);
+        armWithWarning($('[data-op="reset"]', form), warnEl, `给 ${u.username} 生成一个新密码：对方所有设备会被登出。`);
         $('[data-op="reset"]', form).hidden = !!data.sso;  // portal SSO: nobody logs in with this password
       }
       dlg.open();
@@ -244,19 +252,18 @@
     form.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-op]'), op = btn?.dataset.op;
       if (!editing || !['reset', 'toggle', 'delete'].includes(op)) return;
-      for (const b of form.querySelectorAll('[data-armed]')) if (b !== btn) disarm(b, warnEl);
       const u = editing;
       try {
         if (op === 'reset') {
-          if (!armConfirm(btn, { warnEl, warning: `给 ${u.username} 生成一个新密码：对方所有设备会被登出。` })) return;
           const r = await api('POST', `/api/admin/users/${u.id}/password`, {});
           dlg.close(); showSecret(u.username, r.password);
         } else if (op === 'toggle') {
-          if (!u.disabled && !armConfirm(btn, { warnEl, warning: `停用 ${u.username}：对方会立即被登出，记录保留，之后可以再启用。` })) return;
           await api('PATCH', `/api/admin/users/${u.id}`, { disabled: !u.disabled });
           dlg.close(); toast(u.disabled ? '已启用' : '已停用');
         } else if (op === 'delete') {
-          if (!await confirmTyped({ title: `删除 ${u.username}`, message: `${u.username} 的账户、全部对话和上传的图片都会删除。`, expect: u.username, okLabel: '删除用户' })) return;
+          const typed = await confirm({ title: `删除 ${u.username}`, message: `无法恢复。${u.username} 的账户、全部对话和上传的图片都会删除。`, danger: true, confirmLabel: '删除用户',
+            input: { label: `输入「${u.username}」确认`, placeholder: u.username, required: true, validate: (v) => v === u.username ? '' : '输入的名字不一致' } });
+          if (typed === null) return;
           await api('DELETE', `/api/admin/users/${u.id}`);
           dlg.close(); toast('已删除');
         }

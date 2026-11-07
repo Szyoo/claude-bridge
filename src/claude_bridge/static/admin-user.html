@@ -16,24 +16,17 @@
   <script type="module" src="/static/bridge/corner-boot.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.12/marked.min.js" defer></script>
   <style>
-    .au-tabs { margin-bottom: 14px; }
+    .au-tabs { margin-bottom: var(--sp-3); }
     .au-chat { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 12px; align-items: start; }
-    .au-threads { display: flex; flex-direction: column; gap: 2px; max-height: calc(100vh - 250px); overflow: auto; padding: 8px; }
-    .au-group { font-size: 11.5px; font-weight: 600; color: var(--text-dim); padding: 10px 8px 4px; }
+    .au-threads { max-height: calc(100vh - 250px); overflow: auto; padding: var(--sp-2); }
+    .au-group { font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); padding: var(--sp-3) var(--sp-2) var(--sp-1); }
     .au-group:first-child { padding-top: 2px; }
-    .au-thread { text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; min-width: 0; }
-    .au-thread:hover { background: var(--hover-tint); }
-    .au-thread.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-    .au-thread .t, .au-thread .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .au-thread .m { font-size: 11.5px; color: var(--text-dim); }
+    .au-threads .list-row { width: 100%; text-align: left; }
     .au-view { min-width: 0; overflow: hidden; }
-    .au-view-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+    .au-view-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line-soft); }
     .au-view-head .t { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .au-msgs { max-height: calc(100vh - 290px); overflow: auto; padding: 14px 18px; }
+    .au-msgs { max-height: calc(100vh - 290px); overflow: auto; padding: var(--sp-4); }
     .au-back { display: none; }
-    .au-key { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
-    .au-key:first-child { border-top: 0; }
-    .au-key > div { min-width: 0; overflow-wrap: anywhere; }
     .au-access td.ua { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
     .au-access td { vertical-align: top; }
     @media (max-width: 720px) {
@@ -42,7 +35,7 @@
       .au-chat:not(.reading) .au-view { display: none; }
       .au-threads, .au-msgs { max-height: none; }
       .au-back { display: inline-block; }
-      .au-msgs { padding: 12px; }
+      .au-msgs { padding: var(--sp-3); }
       .au-access td.ua, .au-access th.ua { display: none; }
     }
   </style>
@@ -52,7 +45,7 @@
   <div class="app-frame">
     <header class="app-header">
       <div class="app-brand"><h1 class="app-title" id="who">用户</h1><p class="app-sub">claude-bridge · 只读查看</p></div>
-      <nav class="app-actions"><a class="btn-ghost btn-small" href="/admin">← 管理</a></nav>
+      <nav class="app-actions"><a class="btn-ghost btn-small" href="/admin"><i data-icon="arrow-left"></i>管理</a></nav>
     </header>
 
     <main class="app-main bp-wrap">
@@ -64,9 +57,9 @@
       </div>
 
       <section id="tab-chat" class="au-chat">
-        <div class="glass au-list"><div class="au-threads" id="threads"></div></div>
+        <div class="glass au-list"><div class="list compact au-threads" id="threads"></div></div>
         <div class="glass au-view">
-          <div class="au-view-head"><button type="button" class="btn-ghost btn-small au-back" id="back">← 列表</button><span class="t" id="title">选一段对话</span><span class="muted small" id="meta"></span></div>
+          <div class="au-view-head"><button type="button" class="btn-ghost btn-small au-back" id="back"><i data-icon="arrow-left"></i>列表</button><span class="t" id="title">选一段对话</span><span class="muted small" id="meta"></span></div>
           <div class="au-msgs bridge-root" id="msgs"><p class="muted small">左边选一段对话查看内容。</p></div>
         </div>
       </section>
@@ -86,7 +79,9 @@
 
   <script type="module">
     import { renderTurn } from '/static/bridge/bridge-widget.js';
-    import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo, armConfirm } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo, armWithWarning } from '/static/bridge/bridge-pages.js';
+    import { enhanceIcons } from '@szyyw/design/icons.js';
+    enhanceIcons();
     const $ = (s) => document.querySelector(s);
     const uid = Number(location.pathname.split('/').pop());
     const KIND = { visit: '访问', login: '登录', login_failed: '登录失败' };
@@ -117,14 +112,14 @@
       const label = (k) => k === '' ? 'Chat' : k.startsWith('code:') ? `Code · ${k.slice(5)}` : k;
       const html = [...groups].filter(([, ts]) => ts.length).map(([k, ts]) =>
         `<div class="au-group">${esc(label(k))}</div>` + ts.map(t =>
-          `<button type="button" class="au-thread" data-id="${esc(t.id)}"><span class="t">${esc(t.title || '新对话')}</span>`
-          + `<span class="m">${t.n} 条 · ${esc(fmtSeen(t.updated_at))}</span></button>`).join('')).join('');
+          `<button type="button" class="list-row" data-id="${esc(t.id)}"><span class="row-main"><span class="row-title">${esc(t.title || '新对话')}</span>`
+          + `<span class="row-sub">${t.n} 条 · ${esc(fmtSeen(t.updated_at))}</span></span></button>`).join('')).join('');
       $('#threads').innerHTML = html || '<p class="muted small">还没有对话。</p>';
     }
 
     async function openThread(id) {
       current = id;
-      for (const b of document.querySelectorAll('.au-thread')) b.classList.toggle('active', b.dataset.id === id);
+      for (const b of document.querySelectorAll('#threads [data-id]')) b.classList.toggle('selected', b.dataset.id === id);
       $('#tab-chat').classList.add('reading');
       $('#msgs').innerHTML = '<p class="muted small"><span class="spinner"></span> 加载中…</p>';
       let d;
@@ -160,16 +155,16 @@
     async function loadKeys() {
       let d;
       try { d = await api('GET', `/api/admin/users/${uid}/api-keys`); } catch { return; }
-      $('#keys').innerHTML = d.items.length ? d.items.map(k => `<div class="au-key" data-name="${esc(k.name)}">`
-        + `<div><span>${esc(k.note || '（无备注）')}</span> <span class="tiny muted mono">${esc(k.name)}</span>`
-        + `<div class="tiny muted">创建：${esc(local(k.created_at) || '—')} · 最近使用：${k.last_used_at ? esc(fmtSeen(k.last_used_at)) : '从未使用'} · ${k.disabled ? '已吊销' : '有效'}</div></div>`
-        + (k.disabled ? '' : '<button type="button" class="btn-ghost btn-small" data-revoke>吊销</button>') + '</div>').join('')
+      $('#keys').innerHTML = d.items.length ? '<div class="list divided">' + d.items.map(k => `<div class="list-row" data-name="${esc(k.name)}">`
+        + `<span class="row-main"><span class="row-title">${esc(k.note || '（无备注）')}</span><span class="row-sub mono">${esc(k.name)}</span>`
+        + `<span class="row-sub">创建：${esc(local(k.created_at) || '—')} · 最近使用：${k.last_used_at ? esc(fmtSeen(k.last_used_at)) : '从未使用'} · ${k.disabled ? '已吊销' : '有效'}</span></span>`
+        + (k.disabled ? '' : '<span class="row-end"><button type="button" class="btn-ghost btn-small" data-revoke>吊销</button></span>') + '</div>').join('') + '</div>'
         : '<p class="muted small">还没有密钥。</p>';
+      for (const b of $('#keys').querySelectorAll('[data-revoke]')) armWithWarning(b, $('#keys-warn'), '吊销后这个密钥立刻失效，无法恢复。');
     }
     $('#keys').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-revoke]');
       if (!btn) return;
-      if (!armConfirm(btn, { warnEl: $('#keys-warn'), warning: '吊销后这个密钥立刻失效，无法恢复。' })) return;
       try {
         await api('DELETE', `/api/admin/users/${uid}/api-keys/${encodeURIComponent(btn.closest('[data-name]').dataset.name)}`);
         toast('已吊销'); loadKeys();
