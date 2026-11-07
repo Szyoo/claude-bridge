@@ -29,6 +29,7 @@
     .au-back { display: none; }
     .au-access td.ua { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
     .au-access td { vertical-align: top; }
+    .au-access tr.empty-row td { vertical-align: middle; }
     @media (max-width: 720px) {
       .au-chat { grid-template-columns: minmax(0, 1fr); }
       .au-chat.reading .au-list { display: none; }
@@ -66,7 +67,7 @@
 
       <section id="tab-access" class="glass panel" hidden>
         <p class="muted small bp-lead">同一 IP、同一设备连续访问合并为一行（30 分钟内没有请求才算新的一次）；保留 180 天。门户登录模式下登录发生在门户，这里记的是访问。</p>
-        <div class="table-wrap"><table class="tbl au-access"><thead><tr><th>时间</th><th>IP</th><th>设备</th><th class="ua">User-Agent</th></tr></thead><tbody id="access"></tbody></table></div>
+        <div class="table-wrap"><table class="tbl reflow au-access"><thead><tr><th aria-sort="descending"><button type="button" class="th-sort">时间</button></th><th aria-sort="none"><button type="button" class="th-sort">IP</button></th><th aria-sort="none"><button type="button" class="th-sort">设备</button></th><th class="col-num" aria-sort="none"><button type="button" class="th-sort">请求数</button></th><th class="ua">User-Agent</th></tr></thead><tbody id="access"></tbody></table></div>
       </section>
 
       <section id="tab-keys" class="glass panel" hidden>
@@ -81,7 +82,9 @@
     import { renderTurn } from '/static/bridge/bridge-widget.js';
     import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo, armWithWarning } from '/static/bridge/bridge-pages.js';
     import { enhanceIcons } from '@szyyw/design/icons.js';
+    import { enhanceSortTable } from '@szyyw/design/table.js';
     enhanceIcons();
+    enhanceSortTable(document.querySelector('.au-access'));
     const $ = (s) => document.querySelector(s);
     const uid = Number(location.pathname.split('/').pop());
     const KIND = { visit: '访问', login: '登录', login_failed: '登录失败' };
@@ -144,10 +147,12 @@
         const d = await api('GET', `/api/admin/users/${uid}/access`);
         $('#access').innerHTML = d.items.map(a => {
           const span = a.first_at === a.last_at ? local(a.last_at) : `${local(a.first_at)} – ${local(a.last_at).split(' ').pop()}`;
-          const kind = a.kind === 'visit' ? (a.hits > 1 ? `${a.hits} 次请求` : '') : `<span class="${a.kind === 'login_failed' ? 'err-text' : ''}">${KIND[a.kind]}</span>`;
-          return `<tr><td>${esc(span)}${kind ? `<div class="tiny muted">${kind}</div>` : ''}</td><td>${esc(a.ip || '—')}${a.geo ? `<div class="tiny muted">${esc(fmtGeo(a.geo))}</div>` : ''}</td>`
-            + `<td>${esc(fmtDevice(a.user_agent))}</td><td class="ua" title="${esc(a.user_agent)}">${esc(a.user_agent)}</td></tr>`;
-        }).join('') || '<tr><td colspan="4" class="muted">还没有记录。</td></tr>';
+          const kind = a.kind === 'visit' ? '' : `<span class="${a.kind === 'login_failed' ? 'err-text' : ''}">${KIND[a.kind]}</span>`;
+          return `<tr${a.kind === 'login_failed' ? ' class="err"' : ''}><td data-sort="${esc(a.last_at)}">${esc(span)}${kind ? `<div class="tiny muted">${kind}</div>` : ''}</td>`
+            + `<td data-label="IP">${esc(a.ip || '—')}${a.geo ? `<div class="tiny muted">${esc(fmtGeo(a.geo))}</div>` : ''}</td>`
+            + `<td data-label="设备">${esc(fmtDevice(a.user_agent))}</td><td class="col-num" data-label="请求数">${a.hits ?? 1}</td>`
+            + `<td class="ua" title="${esc(a.user_agent)}">${esc(a.user_agent)}</td></tr>`;
+        }).join('') || '<tr class="empty-row"><td colspan="5">还没有记录。</td></tr>';
       } catch (e) { toast(e.message, true); }
     }
 

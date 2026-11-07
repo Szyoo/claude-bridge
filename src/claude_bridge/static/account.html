@@ -54,7 +54,7 @@
         <h2 class="panel-title">API 接入</h2>
         <p class="muted small bp-lead">可以在 Claude 桌面版（第三方 API 模式）、Cursor、Cline 或你自己的脚本里使用。用量计入你的额度份额；工具在你自己的电脑上执行；请妥善保管密钥。</p>
         <div class="form-row"><label>API 地址</label>
-          <div class="field-row bp-secret"><code class="mono" id="api-base"></code><button type="button" class="btn-ghost btn-small" id="copy-base">复制</button></div></div>
+          <div class="field-row bp-secret"><code class="mono" id="api-base"></code><button type="button" class="btn-icon" data-copy id="copy-base" aria-label="复制"></button></div></div>
         <pre class="mono small" id="api-env"></pre>
         <pre class="mono small" id="api-curl"></pre>
         <div id="api-keys" class="bp-gap"></div>
@@ -72,15 +72,16 @@
   <div class="sheet" id="key-sheet" hidden>
     <div class="sheet-head"><h3 class="sheet-title">新密钥</h3><button type="button" class="close-x" data-close aria-label="关闭"></button></div>
     <div class="sheet-body">
-      <div class="field-row bp-secret"><code class="mono" id="key-value"></code><button type="button" class="btn-ghost btn-small" id="copy-key">复制</button></div>
+      <div class="field-row bp-secret"><code class="mono" id="key-value"></code><button type="button" class="btn-icon" data-copy id="copy-key" aria-label="复制"></button></div>
       <p class="hint">只显示这一次，关闭后无法再查看；丢了只能吊销后重新建一个。</p>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>好</button></div>
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armWithWarning, copyText, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
     import { enhanceIcons } from '@szyyw/design/icons.js';
+    import { mountCopy } from '@szyyw/design/copy.js';
     enhanceIcons();
     const $ = (s) => document.querySelector(s);
     const profile = $('#profile'), pw = $('#password');
@@ -147,8 +148,8 @@
       $('#api-new button').disabled = d.items.filter(k => !k.disabled).length >= d.max_keys;
       apiBox.hidden = false;
     }
-    $('#copy-base').addEventListener('click', () => copyText(apiBase));
-    keyEl.querySelector('#copy-key').addEventListener('click', () => copyText(keyValue.textContent));
+    mountCopy($('#copy-base'), { text: () => apiBase });
+    mountCopy(keyEl.querySelector('#copy-key'), { text: () => keyValue.textContent });
     $('#api-new').addEventListener('submit', async (e) => {
       e.preventDefault();
       try {

@@ -138,9 +138,3 @@ export function shareLine(w) {
   if (w.outside_pct != null) bits.push(`bridge 之外 ${fmtPct(w.outside_pct)}`);
   return `整个账户已用 ${fmtPct(w.account_pct)}：${bits.join(' · ')}`;
 }
-
-export function copyText(text) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => toast('已复制'), () => toast('复制失败，请手动选中', true));
-  toast('请手动选中复制', true);
-  return Promise.resolve();
-}

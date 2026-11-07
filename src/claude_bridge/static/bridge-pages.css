@@ -16,25 +16,13 @@
 .bp-num-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); color: var(--text-dim); }
 .bp-num-row .field { width: 9em; }
 
-/* admin: user rows (a table on wide screens, cards on phones) */
-.bp-users { display: flex; flex-direction: column; }
-.bp-user { display: grid; grid-template-columns: minmax(140px, 1.3fr) 1fr 1fr minmax(96px, .7fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-3) 0; border-top: 1px solid var(--line-soft); }
-.bp-user > * { min-width: 0; }
-.bp-user:first-child { border-top: 0; }
-.bp-user.head { font-size: var(--fs-sm); color: var(--text-dim); padding: 0 0 var(--sp-2); }
-.bp-user .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-user .d { font-size: var(--fs-sm); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-user .d.err-text { white-space: normal; }
-.bp-user .seen { font-size: var(--fs-sm); color: var(--text-dim); }
-.bp-user .ops { display: flex; gap: var(--sp-2); justify-content: flex-end; }
-.bp-user.is-off .who, .bp-user.is-off .bp-meter { opacity: .55; }
-@media (max-width: 720px) {
-  .bp-user { grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
-  .bp-user.head { display: none; }
-  .bp-user .who { grid-column: 1 / -1; }
-  .bp-user .seen { grid-column: 1; }
-  .bp-user .ops { grid-column: 2; }
-}
+/* admin: user table (cards on phones via .tbl.reflow) */
+.bp-users-tbl .n { font-weight: 600; }
+.bp-users-tbl .d, .bp-users-tbl .seen { font-size: var(--fs-sm); color: var(--text-dim); }
+.bp-users-tbl .d.err-text { color: var(--err); }
+.bp-users-tbl td { vertical-align: top; }
+.bp-users-tbl .meter { min-width: 140px; }
+.bp-users-tbl tr.is-off .who, .bp-users-tbl tr.is-off .meter { opacity: .55; }
 
 /* the one-time password in the admin's sheet */
 .bp-secret code { flex: 1 1 12rem; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); font-size: var(--fs-body); letter-spacing: .04em; user-select: all; overflow-wrap: anywhere; }

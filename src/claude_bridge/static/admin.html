@@ -86,16 +86,17 @@
     <div class="sheet-head"><h3 class="sheet-title">密码</h3><button type="button" class="close-x" data-close aria-label="关闭"></button></div>
     <div class="sheet-body">
       <p class="muted small" id="secret-for"></p>
-      <div class="field-row bp-secret"><code class="mono" id="secret"></code><button type="button" class="btn-ghost btn-small" id="copy">复制</button></div>
+      <div class="field-row bp-secret"><code class="mono" id="secret"></code><button type="button" class="btn-icon" data-copy id="copy" aria-label="复制"></button></div>
       <p class="hint">只显示这一次，请直接发给对方；对方登录后可以在「我的账户」里自己改。</p>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>好</button></div>
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armWithWarning, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, copyText, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, fmtPct, fmtWhen, fmtSeen, fmtDevice, fmtGeo, meterHtml, userMeter, WINDOWS } from '/static/bridge/bridge-pages.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { enhanceIcons, iconSvg } from '@szyyw/design/icons.js';
+    import { mountCopy } from '@szyyw/design/copy.js';
     enhanceIcons();
     const $ = (s, el = document) => el.querySelector(s);
     const CAP = { five_hour: 'cap_5h_usd', seven_day: 'cap_7d_usd' };
@@ -172,25 +173,25 @@
       const rows = data.items.map(u => {
         const tags = [u.role === 'admin' ? '<span class="pill info">管理员</span>' : '', u.disabled ? '<span class="pill err">已停用</span>' : '',
           u.id === data.me ? '<span class="pill neutral">我</span>' : ''].join(' ');
-        const meters = u.role === 'admin'
-          ? WINDOWS.map(([k, l]) => meterHtml({ label: l, used: u.usage[k].used_pct, sub: `${u.usage[k].turns} 次 · 不限` })).join('')
-          : WINDOWS.map(([k, l]) => userMeter(u.usage[k], l)).join('');
-        return `<div class="bp-user${u.disabled ? ' is-off' : ''}">
-          <div class="who"><div class="n">${esc(u.display_name || u.username)} ${tags}</div>
+        const meters = WINDOWS.map(([k, l]) => `<td data-label="${l}">${u.role === 'admin'
+          ? meterHtml({ label: l, used: u.usage[k].used_pct, sub: `${u.usage[k].turns} 次 · 不限` }) : userMeter(u.usage[k], l)}</td>`).join('');
+        return `<tr class="${[u.usage.blocked ? 'warn' : '', u.disabled ? 'is-off' : ''].filter(Boolean).join(' ')}">
+          <td class="who"><div class="n">${esc(u.display_name || u.username)} ${tags}</div>
             <div class="d">${esc(u.username)}${u.note ? ` · ${esc(u.note)}` : ''}</div>
             ${u.portal_sub || data.sso ? `<div class="d">门户 ID：${u.portal_sub ? esc(u.portal_sub) : '未映射'}${data.sso && u.id === data.me && data.sso.me_portal_user ? ` · 当前门户用户名 ${esc(data.sso.me_portal_user)}` : ''}</div>` : ''}
-            ${u.usage.blocked ? `<div class="d err-text">${esc(u.usage.blocked)}</div>` : ''}</div>
+            ${u.usage.blocked ? `<div class="d err-text">${esc(u.usage.blocked)}</div>` : ''}</td>
           ${meters}
-          <div class="seen">${esc(fmtSeen(u.last_seen_at))}${u.last_access ? `<div class="d" title="${esc(u.last_access.user_agent)}">${esc(u.last_access.ip)} · ${esc(fmtDevice(u.last_access.user_agent))}</div>`
-            + (u.last_access.geo ? `<div class="d geo" title="${esc(fmtGeo(u.last_access.geo))}">${esc(fmtGeo(u.last_access.geo))}</div>` : '') : ''}</div>
-          <div class="ops"><a class="btn-ghost btn-small" href="/admin/users/${u.id}">查看</a><button type="button" class="btn-ghost btn-small" data-edit="${u.id}">编辑</button></div>
-        </div>`;
+          <td class="seen" data-label="最近">${esc(fmtSeen(u.last_seen_at))}${u.last_access ? `<div class="d" title="${esc(u.last_access.user_agent)}">${esc(u.last_access.ip)} · ${esc(fmtDevice(u.last_access.user_agent))}</div>`
+            + (u.last_access.geo ? `<div class="d geo" title="${esc(fmtGeo(u.last_access.geo))}">${esc(fmtGeo(u.last_access.geo))}</div>` : '') : ''}</td>
+          <td class="col-actions"><a class="btn-ghost btn-small" href="/admin/users/${u.id}">查看</a> <button type="button" class="btn-ghost btn-small" data-edit="${u.id}">编辑</button></td>
+        </tr>`;
       });
       const nu = $('#new-user');
       nu.innerHTML = data.sso ? `在门户新建用户${iconSvg('arrow-up-right')}` : '新建用户';
       nu.title = data.sso ? '在门户「管理 › 用户」新建；对方第一次登录后会出现在这里' : '';
       $('#users').innerHTML = (data.sso ? '<p class="muted small bp-lead">账户由门户统一管理：新建账户、改密码都在门户「管理 › 用户」里做，对方第一次登录后自动出现在这个列表。这里只设置每个人在 claude 里的份额、备注和停用。</p>' : '')
-        + `<div class="bp-user head"><div>用户</div><div>5 小时</div><div>本周</div><div>最近</div><div></div></div>${rows.join('')}`
+        + `<div class="table-wrap"><table class="tbl reflow bp-users-tbl"><thead><tr><th>用户</th>${WINDOWS.map(([, l]) => `<th>${l}</th>`).join('')}<th>最近</th><th class="col-actions" aria-label="操作"></th></tr></thead>`
+        + `<tbody>${rows.join('') || '<tr class="empty-row"><td colspan="5">还没有用户。</td></tr>'}</tbody></table></div>`
         + (noCap && data.items.some(u => u.role !== 'admin' && (u.limit_5h_pct != null || u.limit_7d_pct != null))
           ? '<div class="callout warn bp-gap">换算比例还没标定出来，按人份额上限暂不生效（只有保护线生效）。</div>' : '');
       for (const b of document.querySelectorAll('#users button[data-edit]')) b.addEventListener('click', () => openUser(data.items.find(u => u.id === Number(b.dataset.edit))));
@@ -227,7 +228,7 @@
       $('#secret', secretEl).textContent = password;
       secretSheet.open();
     }
-    $('#copy', secretEl).addEventListener('click', () => copyText($('#secret', secretEl).textContent));
+    mountCopy($('#copy', secretEl), { text: () => $('#secret', secretEl).textContent });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
