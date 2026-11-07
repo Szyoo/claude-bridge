@@ -1,42 +1,35 @@
 /* Pages around the chat in `serve --multi-user`: login, account, admin, the Code project picker.
    Built on @szyyw/design (tokens.css + components.css from design.szyyw.xyz, see DESIGN_VERSION in standalone.py): cards are .glass.panel, forms
-   .form-row/.field, buttons .btn/.btn-ghost, tags .pill, meters .bar, dialogs .overlay+.sheet, notices .callout,
+   .form-row/.field, buttons .btn/.btn-ghost, tags .pill, meters .meter/.bar, rows .list-row, login .auth-card, dialogs .overlay+.sheet, notices .callout,
    toasts toast.js. What is left here is bridge-only layout, on the package's tokens; names never reuse a package class. */
 
 /* page column (account / admin / user): used together with .app-main */
-.bp-wrap { --page-max-w: 960px; padding-block: 4px 48px; }
+.bp-wrap { --page-max-w: 960px; padding-block: var(--sp-1) 48px; }
 .bp-wrap.narrow { --page-max-w: 560px; }
-.bp-wrap > .glass { margin-bottom: 16px; }
-.bp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 16px; }
+.bp-wrap > .glass { margin-bottom: var(--sp-4); }
+.bp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-3) var(--sp-4); }
 .bp-grid.tight { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); row-gap: 0; }
-.bp-lead { margin: 4px 0 14px; }
-.bp-gap { margin-top: 12px; }
+.bp-lead { margin: var(--sp-1) 0 var(--sp-3); }
+.bp-gap { margin-top: var(--sp-3); }
 .bp-center { justify-content: center; }
-/* a destructive button armed for its second click (armConfirm / confirmTyped) */
-.bp-armed:not(:disabled), .btn-ghost.bp-armed:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, transparent); background: var(--tint-red-bg); }
-.bp-num-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
+/* a number input with its unit text */
+.bp-num-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-md); color: var(--text-dim); }
 .bp-num-row .field { width: 9em; }
-
-/* usage meters: label row + .bar (+ a tick at the share limit) + sub line */
-.bp-meter { min-width: 0; }
-.bp-meter .bar { position: relative; overflow: visible; margin: 6px 0 4px; }
-.bp-meter .bar-fill.bp-warn { background: var(--warn); }
-.bp-meter .bar > s { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); opacity: .55; text-decoration: none; }
 
 /* admin: user rows (a table on wide screens, cards on phones) */
 .bp-users { display: flex; flex-direction: column; }
-.bp-user { display: grid; grid-template-columns: minmax(140px, 1.3fr) 1fr 1fr minmax(96px, .7fr) auto; gap: 14px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.bp-user { display: grid; grid-template-columns: minmax(140px, 1.3fr) 1fr 1fr minmax(96px, .7fr) auto; gap: var(--sp-3); align-items: center; padding: var(--sp-3) 0; border-top: 1px solid var(--line-soft); }
 .bp-user > * { min-width: 0; }
 .bp-user:first-child { border-top: 0; }
-.bp-user.head { font-size: 12px; color: var(--text-dim); padding: 0 0 6px; }
+.bp-user.head { font-size: var(--fs-sm); color: var(--text-dim); padding: 0 0 var(--sp-2); }
 .bp-user .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-user .d { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-user .d { font-size: var(--fs-sm); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-user .d.err-text { white-space: normal; }
-.bp-user .seen { font-size: 12px; color: var(--text-dim); }
-.bp-user .ops { display: flex; gap: 6px; justify-content: flex-end; }
+.bp-user .seen { font-size: var(--fs-sm); color: var(--text-dim); }
+.bp-user .ops { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 .bp-user.is-off .who, .bp-user.is-off .bp-meter { opacity: .55; }
 @media (max-width: 720px) {
-  .bp-user { grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .bp-user { grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
   .bp-user.head { display: none; }
   .bp-user .who { grid-column: 1 / -1; }
   .bp-user .seen { grid-column: 1; }
@@ -44,19 +37,16 @@
 }
 
 /* the one-time password in the admin's sheet */
-.bp-secret code { flex: 1 1 12rem; padding: 10px 12px; border-radius: 10px; background: var(--field-bg); border: 1px solid var(--glass-border); font-size: 15px; letter-spacing: .04em; user-select: all; overflow-wrap: anywhere; }
+.bp-secret code { flex: 1 1 12rem; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); font-size: var(--fs-body); letter-spacing: .04em; user-select: all; overflow-wrap: anywhere; }
 
-/* login (local accounts) */
-.bp-login { display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; padding: 16px; }
-.bp-login form { width: min(380px, 100%); }
-.bp-login .btn { width: 100%; margin: 4px 0 12px; }
-.bp-err { min-height: 1.2em; margin-bottom: 8px; }
+/* login error line: keeps its height so the card doesn't jump */
+.bp-err { min-height: 1.2em; }
 
 /* ---------- inside the chat (bridge-widget): these follow the widget's --bridge-* tokens ---------- */
 
 /* the user block at the bottom of the chat sidebar */
-.bp-me { display: flex; align-items: center; gap: 6px; }
-.bp-me a.me { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 6px 8px; border-radius: var(--chat-radius, 6px); color: var(--bridge-fg); text-decoration: none; }
+.bp-me { display: flex; align-items: center; gap: var(--sp-2); }
+.bp-me a.me { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: var(--sp-2); border-radius: var(--chat-radius, var(--r-xs)); color: var(--bridge-fg); text-decoration: none; }
 .bp-me a.me:hover { background: var(--bridge-hover); }
 .bp-me .n { font-weight: 600; font-size: .928em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-me .u { font-size: .786em; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -65,15 +55,15 @@
 .bp-me .grow { flex: 1; }
 
 /* Chat ⟨switch⟩ Code in the top bar: @szyyw/design Squish Switch between two clickable words */
-.bp-mode { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 0 4px; }
-.bp-mode .l { border: 0; background: none; padding: 2px 0; font: inherit; font-size: .857em; color: var(--bridge-muted); cursor: pointer; transition: color .2s var(--ease, ease); }
+.bp-mode { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-1); }
+.bp-mode .l { border: 0; background: none; padding: 2px 0; font: inherit; font-size: .857em; color: var(--bridge-muted); cursor: pointer; transition: color var(--dur-fast) var(--ease); }
 .bp-mode .l.on { color: var(--bridge-fg); font-weight: 600; }
 .bp-mode .l:hover { color: var(--bridge-fg); }
-.bp-mode .l:focus-visible { outline: 2px solid var(--bridge-accent); outline-offset: 2px; border-radius: 4px; }
+.bp-mode .l:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); border-radius: var(--r-xs); }
 
 /* signed-in user + own usage: top right on desktop (like the project picker always had), sidebar foot on phones */
 .bp-me-top { flex: none; }
-.bp-me-top a.me { padding: 2px 8px; }
+.bp-me-top a.me { padding: 2px var(--sp-2); }
 .bridge-side-foot:has(.bp-me-side) { display: none; }
 @media (max-width: 720px) {
   .bp-me-top { display: none; }
@@ -87,11 +77,11 @@
 .bp-chat .bridge-new { view-transition-name: bp-new; }
 .bp-chat .bp-mode { view-transition-name: bp-mode; }
 .bp-chat .bridge-list, .bp-chat .bp-home { view-transition-name: bp-body; }
-::view-transition-group(*) { animation-duration: .28s; animation-timing-function: cubic-bezier(.2, .7, .2, 1); }
-html[data-vt="fwd"]::view-transition-old(bp-list), html[data-vt="fwd"]::view-transition-old(bp-body) { animation: bp-vt-out-l .2s ease-in both; }
-html[data-vt="fwd"]::view-transition-new(bp-list), html[data-vt="fwd"]::view-transition-new(bp-body) { animation: bp-vt-in-r .28s cubic-bezier(.2, .7, .2, 1) both; }
-html[data-vt="back"]::view-transition-old(bp-list), html[data-vt="back"]::view-transition-old(bp-body) { animation: bp-vt-out-r .2s ease-in both; }
-html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-transition-new(bp-body) { animation: bp-vt-in-l .28s cubic-bezier(.2, .7, .2, 1) both; }
+::view-transition-group(*) { animation-duration: var(--dur-base); animation-timing-function: var(--ease-out); }
+html[data-vt="fwd"]::view-transition-old(bp-list), html[data-vt="fwd"]::view-transition-old(bp-body) { animation: bp-vt-out-l var(--dur-fast) ease-in both; }
+html[data-vt="fwd"]::view-transition-new(bp-list), html[data-vt="fwd"]::view-transition-new(bp-body) { animation: bp-vt-in-r var(--dur-base) var(--ease-out) both; }
+html[data-vt="back"]::view-transition-old(bp-list), html[data-vt="back"]::view-transition-old(bp-body) { animation: bp-vt-out-r var(--dur-fast) ease-in both; }
+html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-transition-new(bp-body) { animation: bp-vt-in-l var(--dur-base) var(--ease-out) both; }
 @keyframes bp-vt-out-l { to { opacity: 0; transform: translateX(-18px); } }
 @keyframes bp-vt-in-r { from { opacity: 0; transform: translateX(18px); } }
 @keyframes bp-vt-out-r { to { opacity: 0; transform: translateX(18px); } }
@@ -99,32 +89,24 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
 
 /* Code mode: project button in the chat top bar */
-.bp-proj { display: inline-flex; align-items: center; gap: 5px; max-width: 40vw; border: 1px solid var(--bridge-border); background: var(--bridge-panel); color: var(--bridge-fg); font: inherit; font-size: .857em; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer; flex: none; }
+.bp-proj { display: inline-flex; align-items: center; gap: var(--sp-1); max-width: 40vw; border: 1px solid var(--bridge-border); background: var(--bridge-panel); color: var(--bridge-fg); font: inherit; font-size: .857em; font-weight: 600; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-xs); cursor: pointer; flex: none; }
 .bp-proj span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-proj i { font-style: normal; color: var(--bridge-muted); font-size: .8em; }
+.bp-proj i { display: inline-flex; color: var(--bridge-muted); font-size: .8em; }
 .bp-proj:hover { background: var(--bridge-hover); }
 
 /* Code mode: project picker page, in the chat's frame (sidebar = projects) */
 .bp-homeview .bridge-main { grid-template-rows: auto 1fr; }
 .bp-home { min-height: 0; overflow: auto; color: var(--bridge-fg); }
-.bp-home > .bp-wrap { max-width: 560px; margin: 0 auto; padding: 20px 16px 48px; }  /* inside the chat frame (has a sidebar): no .app-main */
+.bp-home > .bp-wrap { max-width: 560px; margin: 0 auto; padding: var(--sp-5) var(--sp-4) 48px; }  /* inside the chat frame (has a sidebar): no .app-main */
 .bridge-thread:disabled { cursor: default; opacity: .6; }
-.bp-projects { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 16px; }
-.bp-project { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
-.bp-project.ready { cursor: pointer; }
-.bp-project.ready:hover, .bp-project.ready:focus-visible { border-color: var(--accent); outline: none; }
-.bp-project .ic { color: var(--text-dim); font-size: 18px; display: flex; }
-.bp-project .who { flex: 1; min-width: 0; }
-.bp-project .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-project .d { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-project .d.err-text { white-space: normal; }
-
+.bp-projects { margin: var(--sp-3) 0 var(--sp-4); }
+.bp-projects .list-row[data-open] { cursor: pointer; }
 /* Code mode: the open project at the top of the session list */
-.bp-side-proj { display: flex; align-items: center; gap: 8px; padding: 4px 4px 10px; border-bottom: 1px solid var(--bridge-border); }
-.bp-side-proj .ic { color: var(--bridge-muted); display: flex; font-size: 16px; }
+.bp-side-proj { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--bridge-border); }
+.bp-side-proj .ic { color: var(--bridge-muted); display: flex; font-size: var(--fs-title); }
 .bp-side-proj .who { flex: 1; min-width: 0; }
 .bp-side-proj .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-side-proj .d { font-size: 11.5px; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-side-proj .d { font-size: var(--fs-sm); color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* full-width bars under the top-right corner tools: make room for them (measured by corner.js, like .corner-clear) */
 .bp-chat .bridge-top { padding-right: max(12px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px))); }
@@ -151,20 +133,17 @@ body.bp-chat .bridge-side, body.bp-chat .bridge-top, body.bp-chat .bridge-form {
    keeps its contrast on every theme / scheme / palette */
 body.bp-chat .bridge-turn, body.bp-chat .bridge-empty {
   background: color-mix(in srgb, var(--bg) 74%, transparent);
-  border-radius: 12px;
+  border-radius: var(--r-md);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
-body.bp-chat .bridge-turn { padding: 10px 14px; }
-body.bp-chat .bridge-empty { width: fit-content; margin: 40px auto 0; padding: 6px 14px; }
+body.bp-chat .bridge-turn { padding: var(--sp-3) var(--sp-4); }
+body.bp-chat .bridge-empty { width: fit-content; margin: 40px auto 0; padding: var(--sp-2) var(--sp-4); }
 body.bp-chat .bridge-form { background: color-mix(in srgb, var(--bg) 66%, var(--glass-bg)); }
 body.bp-chat .bp-home { background: transparent; }
 body.bp-chat #app { position: relative; z-index: 1; }
 /* the phone drawer overlaps the transcript: keep it opaque enough to read */
 @media (max-width: 720px) { body.bp-chat .bridge.side-open .bridge-side { background: var(--sheet-bg); } }
 
-/* account page: API keys (self-service) */
-.bp-key { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
-.bp-key:first-child { border-top: 0; }
-.bp-key > div { min-width: 0; overflow-wrap: anywhere; }
-#api pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; border-radius: 10px; background: var(--field-bg); border: 1px solid var(--glass-border); margin: 8px 0 0; }
+/* account page: API keys */
+#api pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); margin: var(--sp-2) 0 0; }
