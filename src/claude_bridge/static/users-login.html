@@ -16,18 +16,22 @@
 </head>
 <body>
   <div class="bg-layer"></div>
-  <main class="app-frame bp-login">
-    <form class="glass panel rise" method="post" action="/login">
-      <h1 class="app-title bp-lead">claude-bridge</h1>
-      <div class="form-row"><label for="l-user">用户名</label>
-        <input id="l-user" class="field" name="username" value="{{username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus /></div>
-      <div class="form-row"><label for="l-pass">密码</label>
-        <input id="l-pass" class="field" type="password" name="password" autocomplete="current-password" required /></div>
-      <div class="err-text bp-err" role="alert">{{error}}</div>
-      <button type="submit" class="btn">登录</button>
-      <p class="hint">账户由管理员分发。登录一次后这台设备会一直保持登录。</p>
-    </form>
-  </main>
+  <div class="app-frame">
+    <main class="app-main auth-shell">
+      <div class="glass auth-card rise">
+        <h1 class="app-title">claude-bridge</h1>
+        <form class="stack" method="post" action="/login">
+          <div class="form-row"><label for="l-user">用户名</label>
+            <input id="l-user" class="field" name="username" value="{{username}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus /></div>
+          <div class="form-row"><label for="l-pass">密码</label>
+            <input id="l-pass" class="field" type="password" name="password" autocomplete="current-password" required /></div>
+          <div class="err-text bp-err" role="alert">{{error}}</div>
+          <button type="submit" class="btn">登录</button>
+        </form>
+        <p class="auth-foot">账户由管理员分发。登录一次后这台设备会一直保持登录。</p>
+      </div>
+    </main>
+  </div>
   <script>
     // with a remembered username, put the cursor on the password
     const u = document.querySelector('[name=username]');
