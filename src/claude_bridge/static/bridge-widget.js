@@ -2,7 +2,7 @@
 //
 // Exports, roughly in layers a host can pick from:
 //   pure helpers   describeTool, sessionSummary, splitTurn, DEFAULT_PREFS, loadPrefs, savePrefs
-//   renderers      renderTurn, renderSteps, renderContextPanel, renderSessionPanel, renderPrefsPanel, applyPrefs, placePopover
+//   renderers      renderTurn, enhanceTurnImages, renderSteps, renderContextPanel, renderSessionPanel, renderPrefsPanel, applyPrefs, placePopover
 //   composer       parseToken, modelMenuRows, modelLabel, effortState, composerCommands, morphPath, mountVoicePill, startDictation, speechLang
 //   full widget    mountBridgeWidget(el, client, opts) -> { destroy(), openThread(id), refresh(), input }
 // Renderers emit `bridge-*` structural class names; a host either loads bridge-widget.css or skins those classes itself.
@@ -1387,6 +1387,22 @@ export function startDictation({ lang, transcribe = null, stream = null, write, 
     try { rec.stop(); } catch { /* ignore */ } setTimeout(finish, 2500); } };
 }
 
+// Image viewer for turns drawn by renderTurn: a click on a sent image calls `openImage(items, start, link)` with every
+// image of that message (items: [{ src, alt }]); a click with a modifier key keeps the plain link (new tab).
+// mountBridgeWidget does this itself when given `openImage`; hosts that call renderTurn directly call this on their
+// message list. Returns a function that removes the listener.
+export function enhanceTurnImages(root, openImage) {
+  const onClick = (e) => {
+    const a = e.target.closest?.('.bridge-files a[data-bridge-img]');
+    if (!a || !root.contains(a) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const links = [...a.closest('.bridge-files').querySelectorAll('a[data-bridge-img]')];
+    e.preventDefault();
+    openImage(links.map((l) => ({ src: l.href, alt: l.querySelector('img')?.alt || undefined })), links.indexOf(a), a);
+  };
+  root.addEventListener('click', onClick);
+  return () => root.removeEventListener('click', onClick);
+}
+
 // ============================================================
 // Reference widget
 // ============================================================
@@ -1455,15 +1471,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   const $ = (sel) => el.querySelector(sel);
   const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), pill = $('[data-act="ctx"]');
-  // A click on a sent image: the host's viewer `openImage(items, start, link)` for all images of that message
-  // (items: [{ src, alt }]); without one, or with a modifier key, the plain link (new tab)
-  list.addEventListener('click', (e) => {
-    const a = o.openImage && e.target.closest('.bridge-files a[data-bridge-img]');
-    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const links = [...a.closest('.bridge-files').querySelectorAll('a[data-bridge-img]')];
-    e.preventDefault();
-    o.openImage(links.map((l) => ({ src: l.href, alt: l.querySelector('img')?.alt || undefined })), links.indexOf(a), a);
-  });
+  if (o.openImage) enhanceTurnImages(list, o.openImage);
   const form = $('.bridge-form'), pbMenu = $('.bridge-pb-menu'), fileInput = $('.bridge-file'), plusBtn = $('[data-pb="plus"]');
   let voice = null;      // Voice Pill api (set up with the composer below)
   const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null, job: null, ticker: null };

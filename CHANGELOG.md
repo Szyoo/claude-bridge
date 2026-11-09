@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.16.1 — 2026-11-09
+
+- 新增导出 `enhanceTurnImages(root, openImage)`：自己调 `renderTurn` 渲染消息的宿主也能把图片点击交给查看器（`mountBridgeWidget` 的 `openImage` 改为基于它）
+- 管理页「查看用户对话」里的图片同样用设计包查看器打开
+
 ## v0.16.0 — 2026-11-09
 
 - **聊天里的图片用查看器打开**：widget 新增选项 `openImage(items, start, link)`，点开消息里的图片时交给宿主的查看器，`items` 是该条消息的全部图片，可左右翻页；按住修饰键点击仍在新标签打开。bridge 自己的聊天页传入 `@szyyw/design` 的 `openLightbox`（放大、平移、缩略图带、手机下拉关闭）。不传时与以前一样在新标签页打开原图；widget 本身仍不依赖设计包

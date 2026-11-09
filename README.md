@@ -174,7 +174,7 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 | `commands` | `[]` | 追加的 `/` 命令：`[{ name: '/report', description, run({ widget, thread, input, toast }) }]`；传 `false` 关闭 `/` 菜单 |
 | `sources` | `null` | `@` 来源：数组 `[{ key, name, description?, icon?, insert?, onPick? }]`，或函数 `(query) => 数组或 Promise`。`icon` 为内置图标名（`file` / `image`）或一段 SVG；选中后把 `insert`（缺省 `@名称 `）插入输入框并调用 `onPick(source)` |
 | `onSource` | `null` | 来源未带 `onPick` 时的统一回调 `(source) => …` |
-| `openImage` | `null` | 点开消息里的图片：`(items, start, link) => …`，`items` 为该条消息全部图片 `[{ src, alt }]`。用设计包时传 `(items, start, link) => openLightbox({ items, start, returnFocus: link })`（`@szyyw/design/lightbox.js`，v0.31.0+）；不传则在新标签页打开原图 |
+| `openImage` | `null` | 点开消息里的图片：`(items, start, link) => …`，`items` 为该条消息全部图片 `[{ src, alt }]`。用设计包时传 `(items, start, link) => openLightbox({ items, start, returnFocus: link })`（`@szyyw/design/lightbox.js`，v0.31.0+）；不传则在新标签页打开原图。自己调 `renderTurn` 渲染消息的宿主，对消息列表调用 `enhanceTurnImages(listEl, openImage)`（返回解绑函数） |
 | `voice` | `true` | `false` 关闭语音；或对象 `{ lang, transcribe, mode, holdAfter, slideToCancel, cancelDistance, showTime, waveform, reactive, size, shape, reach, attack, release, sensitivity, floor, openDuration, pressScale, accentColor, iconColor, background, ariaLabel, onStart, onStop, onResult }` |
 
 自定义转写：`voice.transcribe({ lang, stream, signal, onPartial })` 返回 `Promise<string>`（最终文本）。`stream` 是 `Promise<MediaStream | null>`（组件为音量条打开的麦克风流），`onPartial(text)` 把中间结果写进输入框，用户结束时 `signal` 中止（`signal.reason === 'cancel'` 表示取消、结果丢弃）。提供 `transcribe` 时即使浏览器没有 Web Speech 也显示麦克风。

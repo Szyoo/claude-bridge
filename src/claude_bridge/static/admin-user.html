@@ -79,10 +79,11 @@
   </div>
 
   <script type="module">
-    import { renderTurn } from '/static/bridge/bridge-widget.js';
+    import { renderTurn, enhanceTurnImages } from '/static/bridge/bridge-widget.js';
     import { api, esc, toast, fmtSeen, fmtDevice, fmtGeo, armWithWarning } from '/static/bridge/bridge-pages.js';
     import { enhanceIcons } from '@szyyw/design/icons.js';
     import { enhanceSortTable } from '@szyyw/design/table.js';
+    import { openLightbox } from '@szyyw/design/lightbox.js';
     enhanceIcons();
     enhanceSortTable(document.querySelector('.au-access'));
     const $ = (s) => document.querySelector(s);
@@ -141,6 +142,8 @@
       if (!d.items.length) box.innerHTML = '<p class="muted small">这段对话还没有消息。</p>';
       box.scrollTop = box.scrollHeight;
     }
+
+    enhanceTurnImages($('#msgs'), (items, start, link) => openLightbox({ items, start, returnFocus: link }));
 
     async function loadAccess() {
       try {
