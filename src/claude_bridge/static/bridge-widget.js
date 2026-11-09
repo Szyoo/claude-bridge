@@ -587,7 +587,7 @@ export function renderTurn(el, m, opts = {}) {
   if (m.role === 'user') {
     const files = (m.files || []).map((f) => {
       const u = o.fileUrl?.(f.id);
-      return u ? `<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(f.name || '查看原图')}"><img src="${esc(u)}" alt="${esc(f.name || '图片')}" loading="lazy"></a>`
+      return u ? `<a href="${esc(u)}" target="_blank" rel="noopener" data-bridge-img title="${esc(f.name || '查看原图')}"><img src="${esc(u)}" alt="${esc(f.name || '图片')}" loading="lazy"></a>`
         : '<span class="bridge-file-ph">[图片]</span>';
     }).join('');
     body = (files ? `<div class="bridge-files">${files}</div>` : '') + (m.content ? `<div class="bridge-user-text">${esc(m.content)}</div>` : '');
@@ -1455,6 +1455,15 @@ export function mountBridgeWidget(el, client, opts = {}) {
 
   const $ = (sel) => el.querySelector(sel);
   const list = $('.bridge-list'), input = $('.bridge-input'), sendBtn = $('.bridge-send'), pill = $('[data-act="ctx"]');
+  // A click on a sent image: the host's viewer `openImage(items, start, link)` for all images of that message
+  // (items: [{ src, alt }]); without one, or with a modifier key, the plain link (new tab)
+  list.addEventListener('click', (e) => {
+    const a = o.openImage && e.target.closest('.bridge-files a[data-bridge-img]');
+    if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const links = [...a.closest('.bridge-files').querySelectorAll('a[data-bridge-img]')];
+    e.preventDefault();
+    o.openImage(links.map((l) => ({ src: l.href, alt: l.querySelector('img')?.alt || undefined })), links.indexOf(a), a);
+  });
   const form = $('.bridge-form'), pbMenu = $('.bridge-pb-menu'), fileInput = $('.bridge-file'), plusBtn = $('[data-pb="plus"]');
   let voice = null;      // Voice Pill api (set up with the composer below)
   const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null, job: null, ticker: null };

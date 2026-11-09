@@ -25,9 +25,11 @@
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
+    import { openLightbox } from '@szyyw/design/lightbox.js';
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
     mountBridgeWidget(document.getElementById('app'), client, {
       scope: '', title: 'claude-bridge', fill: true,
+      openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
       sideFoot: '<form method="post" action="/logout" class="bp-me"><span class="grow"></span><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny">退出</button></form>',
     });
   </script>

@@ -29,6 +29,7 @@
     import { enhanceSwitches } from '@szyyw/design/switch.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { iconSvg } from '@szyyw/design/icons.js';
+    import { openLightbox } from '@szyyw/design/lightbox.js';
 
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
     const app = document.getElementById('app');
@@ -96,6 +97,7 @@
       widget = mountBridgeWidget(app, client, {
         scope, title: 'claude-bridge', fill: true, topStart: toggle() + extra, topEnd: ME, sideFoot: '<div class="bp-me bp-me-side"></div>',
         placeholder: scope ? '让 Claude 读代码、改文件、跑命令' : '输入消息', ...code,
+        openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
       });
       wireSwitch();
       renderMe();

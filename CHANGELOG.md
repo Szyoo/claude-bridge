@@ -2,6 +2,10 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.16.0 — 2026-11-09
+
+- **聊天里的图片用查看器打开**：widget 新增选项 `openImage(items, start, link)`，点开消息里的图片时交给宿主的查看器，`items` 是该条消息的全部图片，可左右翻页；按住修饰键点击仍在新标签打开。bridge 自己的聊天页传入 `@szyyw/design` 的 `openLightbox`（放大、平移、缩略图带、手机下拉关闭）。不传时与以前一样在新标签页打开原图；widget 本身仍不依赖设计包
+
 ## v0.15.1 — 2026-11-04
 
 - **worker 失去文件访问时自行退出**：macOS 可能在进程运行期间收回它的文件访问权限（例如 Homebrew 升级删掉了启动它的 Python），之后每个请求都因读不了 CA 证书而失败、任务也读不了文件。worker 在循环出错后检查自己的源文件能否读取，连续 3 次读不了就停止并以退出码 75 结束，交给 launchd（`KeepAlive`）/ systemd 重新拉起。`WorkerConfig.lost_access_exit_code = 0` 关闭。普通断网照旧重试
