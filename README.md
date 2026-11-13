@@ -158,7 +158,7 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 
 只用传输层时调用 `client.subscribe(threadId, handlers)`。
 
-回答进行中继续发送：`client.send(text, { thread, queue: true })` 在对话忙时不再返回 409，而是排队（返回 `{ queued, thread }`）。worker 把排队的消息写进正在运行的 `claude` 的输入，Claude 在下一步读到时，这条消息以 `user_note` 事件出现在当前回答里（组件渲染为「你插话」）；当前回答结束时还没读到的，自动作为下一轮发出。`client.removeQueued(thread, id)` 撤回还没交给 Claude 的一条，`client.sendQueueNow(thread)` 停止当前回答（已做的保留）并马上回复排队的消息。排队状态在快照的 `queue` 和 SSE 的 `queue` 帧（`onQueue` 回调）里。组件自带的输入框已接好：回答中输入内容时发送键变为「排队发送」，输入框为空时是「停止」。
+回答进行中继续发送：`client.send(text, { thread, queue: true })` 在对话忙时不再返回 409，而是排队（返回 `{ queued, thread }`）。worker 把排队的消息写进正在运行的 `claude` 的输入，Claude 在下一步读到时，这条消息以 `user_note` 事件出现在当前回答里（组件渲染为「你插话」）；当前回答结束时还没读到的，自动作为下一轮发出。`client.removeQueued(thread, id)` 撤回还没交给 Claude 的一条，`client.sendQueueNow(thread)` 停止当前回答（已做的保留）并马上回复排队的消息。排队状态在快照的 `queue` 和 SSE 的 `queue` 帧（`onQueue` 回调）里。组件自带的输入框已接好：回答中输入内容时发送键变为「排队发送」，输入框为空时是「停止」。自己写输入框的宿主用 `mountQueue(el, client, { thread: () => id, onRestore(text, files) })` 显示排队区，把快照的 `queue` 和每个 `onQueue` 帧交给它的 `update(items, busy)`。
 
 一次性调用（阅后即焚）：`client.send(text, { scope, ephemeral: true })` 每次新建一个隐藏对话，不续接会话，worker 端不保留 CLI 会话（`--no-session-persistence`），不出现在对话列表里，也不会变成当前对话。拿到结果后调用 `client.deleteThread(thread, scope)` 立即删除；没删的在最后一次活动 1 小时后（`BridgeConfig.ephemeral_seconds`）由服务端自动清掉。适合翻译、抽取、识图这类每次独立的任务。组件样式通过 `--bridge-*` CSS 变量覆盖；`bridge-widget.js` 还导出 `renderTurn`、`splitTurn` 等渲染函数，供宿主自行排版。
 

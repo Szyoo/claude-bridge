@@ -3,7 +3,7 @@
 // Exports, roughly in layers a host can pick from:
 //   pure helpers   describeTool, sessionSummary, splitTurn, DEFAULT_PREFS, loadPrefs, savePrefs
 //   renderers      renderTurn, enhanceTurnImages, renderSteps, renderContextPanel, renderSessionPanel, renderPrefsPanel, applyPrefs, placePopover
-//   composer       parseToken, modelMenuRows, modelLabel, effortState, composerCommands, morphPath, mountVoicePill, startDictation, speechLang
+//   composer       mountQueue, parseToken, modelMenuRows, modelLabel, effortState, composerCommands, morphPath, mountVoicePill, startDictation, speechLang
 //   full widget    mountBridgeWidget(el, client, opts) -> { destroy(), openThread(id), refresh(), input }
 // Renderers emit `bridge-*` structural class names; a host either loads bridge-widget.css or skins those classes itself.
 
@@ -1412,6 +1412,45 @@ export function enhanceTurnImages(root, openImage) {
   return () => root.removeEventListener('click', onClick);
 }
 
+// ---------- queue: messages sent while Claude is answering ----------
+export const QUEUE_STRINGS = { queueNow: '立即发送', queueSend: '发送', queueBack: '撤回', queueDelivered: '已交给 Claude',
+  queueBusy: (n) => `排队 ${n} 条 · Claude 会在下一步读到`, queueIdle: (n) => `${n} 条还没发出`, queueInterrupting: '正在中断当前回答…',
+  queueNowHint: '停止当前回答（已做的保留），马上回复排队的消息', busyPlaceholder: 'Claude 正在回答，可以接着输入，会在下一步读到…', image: '图片' };
+// The strip above a composer listing what was sent with `client.send(text, { queue: true })` while a turn ran.
+// Feed it the snapshot's `queue` and every `onQueue` frame: `update(items, busy)`. Buttons: 立即发送 (sendQueueNow) and
+// 撤回 (removeQueued → onRestore(text, files), to put the text back in the input). opts: { thread(): id, onRestore,
+// onError(message), strings }. Uses the .bridge-queue* styles of bridge-widget.css.
+export function mountQueue(el, client, opts = {}) {
+  const S = { ...QUEUE_STRINGS, ...opts.strings };
+  el.classList.add('bridge-queue');
+  const update = (items = [], busy = false) => {
+    el.hidden = !items.length;
+    if (!items.length) { el.innerHTML = ''; return; }
+    const urgent = items.some(i => i.urgent);
+    const head = urgent ? S.queueInterrupting : busy ? S.queueBusy(items.length) : S.queueIdle(items.length);
+    el.innerHTML = `<div class="bridge-queue-head"><span>${esc(head)}</span>`
+      + (urgent ? '' : `<button type="button" class="bridge-btn bridge-tiny" data-q="now"${busy ? ` title="${esc(S.queueNowHint)}"` : ''}>${esc(busy ? S.queueNow : S.queueSend)}</button>`)
+      + '</div>' + items.map(i => `<div class="bridge-queue-item" data-id="${Number(i.id)}"><span class="t">${esc(i.text || '')}`
+        + (i.files?.length ? `<span class="n">${esc(`${i.files.length} ${S.image}`)}</span>` : '') + '</span>'
+        // delivered: already written to Claude (it reads it after the current step) — can't be taken back
+        + (i.delivered ? `<span class="s">${esc(S.queueDelivered)}</span>`
+          : `<button type="button" class="bridge-btn bridge-tiny" data-q="back" title="${esc(S.queueBack)}">${esc(S.queueBack)}</button>`) + '</div>').join('');
+  };
+  const onClick = async (e) => {
+    const b = e.target.closest('[data-q]'); const thread = opts.thread?.();
+    if (!b || !thread) return;
+    e.stopPropagation();
+    b.disabled = true;
+    try {
+      if (b.dataset.q === 'now') { await client.sendQueueNow(thread); return; }
+      const r = await client.removeQueued(thread, Number(b.closest('.bridge-queue-item')?.dataset.id));
+      opts.onRestore?.(r.item?.text || '', r.item?.files || []);
+    } catch (err) { opts.onError?.(err.message); b.disabled = false; }
+  };
+  el.addEventListener('click', onClick);
+  return { update, destroy: () => el.removeEventListener('click', onClick) };
+}
+
 // ============================================================
 // Reference widget
 // ============================================================
@@ -1427,9 +1466,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     rename: '重命名', pin: '置顶', unpin: '取消置顶', del: '删除对话', delConfirm: '删除这个对话？消息记录会一起删除。', delArm: '再点一次确认删除', renameLabel: '对话标题', save: '保存', cancel: '取消', stop: '停止', me: '我', assistant: 'Claude',
     ctx: '自动带背景', send: '发送', voice: '语音输入', listening: '正在听…', attach: '添加图片或来源', image: '图片', imageHint: '从本机选择，也可以粘贴或拖进来',
     model: '模型', effort: '思考深度', effortDefault: '默认', faster: '更快', smarter: '更聪明', effortHelp: '越深想得越久再回答；「默认」跟随 helper 的 claude 配置',
-    queue: '排队发送', queueNow: '立即发送', queueSend: '发送', queueBack: '撤回', queueDelivered: '已交给 Claude',
-    queueBusy: (n) => `排队 ${n} 条 · Claude 会在下一步读到`, queueIdle: (n) => `${n} 条还没发出`, queueInterrupting: '正在中断当前回答…',
-    queueNowHint: '停止当前回答（已做的保留），马上回复排队的消息', busyPlaceholder: 'Claude 正在回答，可以接着输入，会在下一步读到…',
+    queue: '排队发送', busyPlaceholder: QUEUE_STRINGS.busyPlaceholder,
     noMatch: '没有匹配', compactArm: '再点一次确认压缩', compactWarn: 'Claude 会把这段对话的历史压缩成摘要：细节会丢失，但上下文会明显变小。', ...o.strings };
   // voice input: on unless the host says `voice: false`; shown only where it can work (Web Speech, or the host's transcriber)
   const voiceCfg = o.voice === false ? null : (o.voice && typeof o.voice === 'object' ? o.voice : {});
@@ -1514,34 +1551,14 @@ export function mountBridgeWidget(el, client, opts = {}) {
   }
 
   // messages sent while Claude is answering: handed to the running turn at its next step, or answered next
-  const queueBox = el.querySelector('.bridge-queue');
-  function renderQueue() {
-    const q = state.queue || [];
-    queueBox.hidden = !q.length;
-    if (!q.length) { queueBox.innerHTML = ''; return; }
-    const busy = !!state.inflight, urgent = q.some(i => i.urgent);
-    const head = urgent ? S.queueInterrupting : busy ? S.queueBusy(q.length) : S.queueIdle(q.length);
-    queueBox.innerHTML = `<div class="bridge-queue-head"><span>${esc(head)}</span>`
-      + (urgent ? '' : `<button type="button" class="bridge-btn bridge-tiny" data-q="now"${busy ? ` title="${esc(S.queueNowHint)}"` : ''}>${esc(busy ? S.queueNow : S.queueSend)}</button>`)
-      + '</div>' + q.map(i => `<div class="bridge-queue-item" data-id="${Number(i.id)}"><span class="t">${esc(i.text || '')}`
-        + (i.files?.length ? `<span class="n">${esc(`${i.files.length} ${S.image}`)}</span>` : '') + '</span>'
-        // delivered: already written to Claude (it reads it after the current step) — can't be taken back
-        + (i.delivered ? `<span class="s">${esc(S.queueDelivered)}</span>`
-          : `<button type="button" class="bridge-btn bridge-tiny" data-q="back" title="${esc(S.queueBack)}">${esc(S.queueBack)}</button>`) + '</div>').join('');
-  }
-  queueBox.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-q]'); if (!b || !state.thread) return;
-    e.stopPropagation();
-    b.disabled = true;
-    try {
-      if (b.dataset.q === 'now') { await client.sendQueueNow(state.thread); return; }
-      const id = Number(b.closest('.bridge-queue-item')?.dataset.id);
-      const r = await client.removeQueued(state.thread, id);
-      const text = r.item?.text || '';
+  const queue = mountQueue(el.querySelector('.bridge-queue'), client, {
+    thread: () => state.thread, strings: S, onError: (m) => toast(m, true),
+    onRestore: (text, files) => {
       if (text) { input.value = input.value.trim() ? `${text}\n${input.value}` : text; autoGrow(); syncSend(); input.focus({ preventScroll: true }); }
-      if (r.item?.files?.length) toast('图片没法放回输入框，需要的话重新添加');
-    } catch (err) { toast(err.message, true); b.disabled = false; }
+      if (files.length) toast('图片没法放回输入框，需要的话重新添加');
+    },
   });
+  function renderQueue() { queue.update(state.queue, !!state.inflight); }
 
   function usePrefs(key) {
     applyPrefs(root, prefs);
