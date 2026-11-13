@@ -125,6 +125,8 @@ class WorkerConfig:
     flush_interval: float = 0.15
     flush_chars: int = 400
     cancel_poll_interval: float = 2.0
+    # keep claude's stdin open (stream-json) so messages sent mid-turn reach it at its next step
+    accept_input: bool = True
     argv_limit: int = 200_000
     # report which models this machine's `claude` supports (zero-cost local `/model` probes)
     session_heartbeat: float = 15.0  # /compact can take minutes; keep the server from declaring the job dead
@@ -973,6 +975,11 @@ class ChatRunner:
         self.stderr_tail: deque[str] = deque(maxlen=200)
         self.emitter = Emitter(worker.client, job["id"], self.cfg, on_cancel=lambda: self.kill("cancel"))
         self.state: StreamState | None = None
+        self._input_lock = threading.Lock()
+        self._input_open = False
+        self._inbox_ok = True
+        self._replay_seen = False  # claude echoed our first message: it reports when it reads later ones too
+        self._delivered: deque[int] = deque()  # queue ids written to claude, not yet read
 
     # ---------------- lifecycle ----------------
 
@@ -1017,13 +1024,17 @@ class ChatRunner:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(replace_system)
             self._cleanup.append(system_file)
+        live_input = self.cfg.accept_input and not p.get("ephemeral") and not settings.get("system")
+        input_json = bool(images) or live_input
         cmd, via_stdin = self.worker.build_chat_command(
-            prompt, session_id, settings, system_prompt, input_json=bool(images), cfg=self.cfg,
+            prompt, session_id, settings, system_prompt, input_json=input_json, cfg=self.cfg,
             ephemeral=bool(p.get("ephemeral")), system_file=system_file,
         )
+        if live_input:  # claude echoes each input message when it actually reads it (isReplay)
+            cmd.append("--replay-user-messages")
         if p.get('client_tools'):
             cmd += ['--mcp-config',self.mcp_config]
-        stdin_data = stream_json_user_message(prompt, images) if images else prompt
+        stdin_data = stream_json_user_message(prompt, images) if input_json else prompt
         env = {**os.environ, **self.cfg.extra_env, **self.worker.hooks.env(p)}
         # The model's shell and MCP children must not inherit control-plane credentials.
         for key in ('CLAUDE_BRIDGE_AGENT_TOKEN','CLAUDE_BRIDGE_SECRET','CLAUDE_BRIDGE_PASSWORD'):
@@ -1064,8 +1075,14 @@ class ChatRunner:
         if via_stdin and proc.stdin is not None:
             try:
                 proc.stdin.write(stdin_data)
+                if live_input:
+                    proc.stdin.flush()
+                    self._input_open = True
+            except OSError:
+                log.warning("job #%s: writing the prompt to claude failed", self.job["id"])
             finally:
-                proc.stdin.close()
+                if not self._input_open:
+                    proc.stdin.close()
 
         threads = [
             threading.Thread(target=self._drain_stderr, daemon=True),
@@ -1077,6 +1094,13 @@ class ChatRunner:
             assert proc.stdout is not None
             for ev in iter_stream(proc.stdout):
                 self.last_activity = time.time()
+                if live_input and ev.get("type") == "user" and ev.get("isReplay"):
+                    self._on_replay()
+                    continue
+                if ev.get("type") == "result":
+                    # end of the turn: later messages wait for the next one. Anything written before this
+                    # point and not yet read makes claude run one more turn on the same process.
+                    self._close_input()
                 for emission in self.state.feed(ev):
                     self.emitter.add(emission)
                     if emission[0] == "event" and emission[1]["type"] == "tool_use":
@@ -1088,6 +1112,7 @@ class ChatRunner:
                 proc.wait(timeout=10)
         finally:
             self._done.set()
+            self._close_input()
             if proc.poll() is None:
                 self._terminate(proc)
             for path in self._cleanup:
@@ -1096,6 +1121,58 @@ class ChatRunner:
             t.join(timeout=5)
         self.emitter.final_flush()
         self._finish(proc.returncode, settings)
+
+    def _close_input(self) -> None:
+        with self._input_lock:
+            if not self._input_open:
+                return
+            self._input_open = False
+            try:
+                if self.proc is not None and self.proc.stdin is not None:
+                    self.proc.stdin.close()
+            except OSError:
+                pass
+
+    def _on_replay(self) -> None:
+        """claude read one of our input messages: the first is the prompt, later ones are mid-turn messages."""
+        if not self._replay_seen:
+            self._replay_seen = True
+            return
+        with self._input_lock:
+            qid = self._delivered.popleft() if self._delivered else None
+        if qid is not None and self.state is not None:
+            self.emitter.add_event("user_note", {"queue_id": qid, "at": self.state.text_total})
+
+    def _deliver_inbox(self) -> None:
+        """Hands messages queued on the server to the running claude (read at its next step)."""
+        if not self._inbox_ok or not self._input_open or not self._replay_seen:
+            return
+        with self._input_lock:
+            if not self._input_open:
+                return
+            try:
+                items = self.worker.client.claim_inbox(self.job["id"])
+            except BridgeClientError as e:
+                if e.status == 404:  # an older server: queued messages wait for the next turn there
+                    self._inbox_ok = False
+                else:
+                    log.debug("inbox poll failed: %s", e)
+                return
+            for item in items:
+                try:
+                    images = self._load_images(item.get("files") or [])
+                except Exception:
+                    log.exception("job #%s: loading a mid-turn image failed", self.job["id"])
+                    images = []
+                try:
+                    assert self.proc is not None and self.proc.stdin is not None
+                    self.proc.stdin.write(stream_json_user_message(item.get("text") or "", images))
+                    self.proc.stdin.flush()
+                    self._delivered.append(int(item["id"]))
+                    log.info("job #%s: handed a mid-turn message to claude (%d chars)", self.job["id"], len(item.get("text") or ""))
+                except (OSError, ValueError):
+                    log.warning("job #%s: claude closed its input; a mid-turn message was not delivered", self.job["id"])
+                    return
 
     def _drain_stderr(self) -> None:
         proc = self.proc
@@ -1145,8 +1222,10 @@ class ChatRunner:
                     continue
                 if job is None or job.get("cancel_requested") or job.get("status") != "running":
                     self.kill("cancel")
-                elif job.get("client_tool_pending"):
-                    self.last_activity = now  # waiting on the caller's tool (a build, a test run): not idle
+                else:
+                    if job.get("client_tool_pending"):
+                        self.last_activity = now  # waiting on the caller's tool (a build, a test run): not idle
+                    self._deliver_inbox()
 
     # ---------------- kill ----------------
 

@@ -53,6 +53,8 @@ class SendIn(BaseModel):
     options: TurnOptions | None = None
     client_tools: list[ClientTool] = Field(default_factory=list, max_length=50)
     client_environment: dict[str, str] = Field(default_factory=dict, max_length=16)
+    # the thread is still answering: hold the message (the running turn reads it at its next step) instead of 409
+    queue: bool = False
 
 
 class ThreadMessageIn(BaseModel):
@@ -61,6 +63,7 @@ class ThreadMessageIn(BaseModel):
     options: TurnOptions | None = None
     client_tools: list[ClientTool] = Field(default_factory=list, max_length=50)
     client_environment: dict[str, str] = Field(default_factory=dict, max_length=16)
+    queue: bool = False
 
 
 class ThreadIn(BaseModel):

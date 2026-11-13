@@ -2,6 +2,13 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.17.0 — 2026-11-13
+
+- **回答进行中可以接着发消息**：和 Claude Code 客户端一样，消息先排队，Claude 在下一步（工具调用之间）读到并接着回答，消息以「你插话」显示在当前回答里读到它的位置；当前回答结束时还没读到的自动作为下一轮发出。排队区可「撤回」还没交给 Claude 的消息（文字放回输入框），或「立即发送」：停止当前回答（已做的保留）并马上回复排队的消息。回答中输入内容时发送键变为「排队发送」，输入框为空时仍是「停止」
+- 接口：发送时带 `queue: true`（不带仍返回 409）；`DELETE /threads/{id}/queue/{qid}`、`POST /threads/{id}/queue/send-now`；快照新增 `queue`，SSE 新增 `queue` 帧；`BridgeClient` 新增 `removeQueued`、`sendQueueNow` 与 `onQueue` 回调
+- worker：聊天回合改为 stream-json 输入并保持 stdin 打开（`--replay-user-messages` 用来确认 Claude 何时读到），每 2 秒从 `POST /api/agent/jobs/{id}/inbox` 取排队消息写入；同一进程里多跑的一轮，用量与费用合并记账。`WorkerConfig.accept_input = False` 恢复旧行为；一次性调用与 API 模式不受影响。旧服务端没有 `/inbox` 时，排队消息等到下一轮
+- 一个回答失败时排队的消息保留，可手动发送；普通「停止」也保留排队
+
 ## v0.16.1 — 2026-11-09
 
 - 新增导出 `enhanceTurnImages(root, openImage)`：自己调 `renderTurn` 渲染消息的宿主也能把图片点击交给查看器（`mountBridgeWidget` 的 `openImage` 改为基于它）

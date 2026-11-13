@@ -164,6 +164,19 @@ CREATE TABLE IF NOT EXISTS bridge_projects (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (owner, name)
 );
+
+-- messages sent while a turn is still running: handed to that turn at its next step, or opened as the next turn
+CREATE TABLE IF NOT EXISTS bridge_queue (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread     TEXT NOT NULL,
+  owner      TEXT NOT NULL DEFAULT '',
+  text       TEXT NOT NULL DEFAULT '',
+  files      TEXT NOT NULL DEFAULT '[]',
+  urgent     INTEGER NOT NULL DEFAULT 0,
+  delivered  INTEGER NOT NULL DEFAULT 0,  -- job id it was written to (claude reads it at its next step); 0 = waiting
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bridge_queue_thread ON bridge_queue(thread, id);
 """
 
 # indexes on migrated columns: created after MIGRATIONS so an old file has the column by then
@@ -426,6 +439,7 @@ class BridgeStore:
                 (thread_id,),
             )
             self._x("DELETE FROM bridge_messages WHERE thread=?", (thread_id,))
+            self._x("DELETE FROM bridge_queue WHERE thread=?", (thread_id,))
             self._x("DELETE FROM bridge_threads WHERE id=?", (thread_id,))
         return int(n)
 
@@ -532,6 +546,58 @@ class BridgeStore:
             names = [r["fname"] for r in self._q("SELECT fname FROM bridge_files WHERE thread=?", (thread,))]
             self._x("DELETE FROM bridge_files WHERE thread=?", (thread,))
         return names
+
+    # ---------------- queue (sent while a turn runs) ----------------
+
+    @staticmethod
+    def _queued(row: dict[str, Any]) -> dict[str, Any]:
+        return {**row, "files": json.loads(row.get("files") or "[]"), "urgent": bool(row.get("urgent")),
+                "delivered": int(row.get("delivered") or 0)}
+
+    def queue_add(self, thread: str, owner: str, text: str, files: list[dict[str, Any]]) -> dict[str, Any]:
+        with self.transaction():
+            for f in files:  # reserved for this thread; still unattached until the message is delivered
+                self._x("UPDATE bridge_files SET thread=? WHERE id=? AND message_id IS NULL", (thread, f["id"]))
+            cur = self._x("INSERT INTO bridge_queue(thread, owner, text, files) VALUES(?,?,?,?) RETURNING *",
+                          (thread, owner, text, json.dumps(files, ensure_ascii=False)))
+            return self._queued(dict(cur.fetchone()))
+
+    def queue(self, thread: str) -> list[dict[str, Any]]:
+        return [self._queued(r) for r in self._q("SELECT * FROM bridge_queue WHERE thread=? ORDER BY id", (thread,))]
+
+    def queue_take(self, thread: str) -> list[dict[str, Any]]:
+        """Removes and returns the thread's queued messages (oldest first)."""
+        with self.transaction():
+            rows = self._q("SELECT * FROM bridge_queue WHERE thread=? ORDER BY id", (thread,))
+            if rows:
+                self._x(f"DELETE FROM bridge_queue WHERE id IN ({','.join('?' * len(rows))})", tuple(r["id"] for r in rows))
+        return [self._queued(r) for r in rows]
+
+    def queue_deliver(self, thread: str, job_id: int) -> list[dict[str, Any]]:
+        """Marks the waiting (non-urgent) messages as written to `job_id`'s claude; returns them."""
+        with self.transaction():
+            rows = self._q("SELECT * FROM bridge_queue WHERE thread=? AND urgent=0 AND delivered=0 ORDER BY id", (thread,))
+            if rows:
+                self._x(f"UPDATE bridge_queue SET delivered=? WHERE id IN ({','.join('?' * len(rows))})",
+                        (job_id, *(r["id"] for r in rows)))
+        return [self._queued({**r, "delivered": job_id}) for r in rows]
+
+    def queue_consume(self, queue_id: int, job_id: int) -> dict[str, Any] | None:
+        """Claude has read it: it leaves the queue (it lives on in the reply as a note)."""
+        cur = self._x("DELETE FROM bridge_queue WHERE id=? AND delivered=? RETURNING *", (queue_id, job_id))
+        row = cur.fetchone()
+        return self._queued(dict(row)) if row else None
+
+    def queue_undeliver(self, job_id: int) -> int:
+        return self._x("UPDATE bridge_queue SET delivered=0 WHERE delivered=?", (job_id,)).rowcount
+
+    def queue_remove(self, thread: str, queue_id: int) -> dict[str, Any] | None:
+        cur = self._x("DELETE FROM bridge_queue WHERE id=? AND thread=? AND delivered=0 RETURNING *", (queue_id, thread))
+        row = cur.fetchone()
+        return self._queued(dict(row)) if row else None
+
+    def queue_mark_urgent(self, thread: str) -> int:
+        return self._x("UPDATE bridge_queue SET urgent=1 WHERE thread=?", (thread,)).rowcount
 
     def purge_orphans(self, older_than_seconds: int) -> list[str]:
         """Uploads never attached to a message (the user removed them or never hit send)."""

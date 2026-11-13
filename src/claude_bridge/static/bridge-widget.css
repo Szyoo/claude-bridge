@@ -185,6 +185,20 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; }
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
+/* a message the user sent mid-turn, at the point Claude got it */
+.bridge-note.user { color: var(--bridge-fg); margin: 4px 0; padding: .35em .8em; background: var(--bridge-user); border-left: 2px solid var(--bridge-accent); border-radius: var(--chat-radius); }
+.bridge-note.user .bridge-files { margin: 4px 0; }
+.bridge-note-who { display: block; font-size: .857em; color: var(--bridge-muted); }
+.bridge-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- composer queue: sent while Claude is answering ---------- */
+.bridge-queue { display: flex; flex-direction: column; gap: 4px; }
+.bridge-queue-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--bridge-muted); }
+.bridge-queue-head > span { flex: 1; min-width: 0; }
+.bridge-queue-item { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; border-radius: 8px; background: var(--bridge-user); font-size: .928em; }
+.bridge-queue-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bridge-queue-item .n { margin-left: 6px; color: var(--bridge-muted); font-size: .9em; }
+.bridge-queue-item .s { flex: none; padding: 0 6px; color: var(--bridge-muted); font-size: 12px; }
 
 /* ---------- images: thumbnails in a user turn, the composer's attachment tray ---------- */
 .bridge-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }

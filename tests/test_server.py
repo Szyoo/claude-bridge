@@ -203,3 +203,100 @@ def test_a_worker_busy_with_a_long_turn_is_still_online(web, agent, bridge):
     stale()
     agent.post(f"/api/agent/jobs/{jid}/events", json={"deltas": ["…"]})  # streamed output
     assert web.get("/api/status").json()["online"] is True
+
+
+# ---------------- messages sent while a turn runs ----------------
+
+def test_queued_message_reaches_the_running_turn(web, agent):
+    r = web.post("/api/send", json={"text": "查一下持仓", "scope": "stock"}).json()
+    jid, th, mid = r["job_id"], r["thread"], r["message_id"]
+    q = web.post(f"/api/threads/{th}/messages", json={"text": "顺便看看 B 股", "queue": True})
+    assert q.status_code == 201 and q.json()["queued"] and "message_id" not in q.json()
+    assert [i["text"] for i in web.get(f"/api/threads/{th}").json()["queue"]] == ["顺便看看 B 股"]
+    assert agent.post(f"/api/agent/jobs/{jid}/inbox").json() == {"items": []}  # not claimed by a worker yet
+    _claim(agent)
+    agent.post(f"/api/agent/jobs/{jid}/events", json={"status": "streaming", "deltas": ["先看 A 股。"]})
+    items = agent.post(f"/api/agent/jobs/{jid}/inbox").json()["items"]
+    assert [(i["text"], i["files"]) for i in items] == [("顺便看看 B 股", [])]
+    qid = items[0]["id"]
+    assert agent.post(f"/api/agent/jobs/{jid}/inbox").json() == {"items": []}  # handed over once
+    queue = web.get(f"/api/threads/{th}").json()["queue"]
+    assert queue[0]["delivered"] is True  # written to claude, not read yet: still shown, still interruptible
+    assert web.delete(f"/api/threads/{th}/queue/{qid}").status_code == 400
+    agent.post(f"/api/agent/jobs/{jid}/events", json={"events": [{"type": "user_note", "data": {"queue_id": qid, "at": 6}}]})
+    assert web.get(f"/api/threads/{th}").json()["queue"] == []
+    note = [e for e in web.get(f"/api/threads/{th}/messages?after={mid - 1}").json()["items"][0]["events"] if e["type"] == "user_note"]
+    assert note[0]["data"] == {"text": "顺便看看 B 股", "files": [], "at": 6}
+    agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": True, "result": "{}"})
+    assert web.get(f"/api/threads/{th}/messages").json()["inflight"] is None  # nothing left to answer
+
+
+def test_written_but_unread_goes_to_the_next_turn(web, agent):
+    jid = web.post("/api/send", json={"text": "一", "scope": "stock"}).json()["job_id"]
+    web.post("/api/send", json={"text": "二", "scope": "stock", "queue": True})
+    _claim(agent)
+    assert len(agent.post(f"/api/agent/jobs/{jid}/inbox").json()["items"]) == 1
+    agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": True, "result": "{}"})  # ended before claude read it
+    assert _claim(agent)["payload"]["text"] == "二"
+
+
+def test_a_queue_left_at_the_end_opens_the_next_turn(web, agent):
+    r = web.post("/api/send", json={"text": "第一问", "scope": "stock"}).json()
+    jid, th = r["job_id"], r["thread"]
+    assert web.post("/api/send", json={"text": "第二问", "scope": "stock"}).status_code == 409  # no queue flag: as before
+    web.post("/api/send", json={"text": "第二问", "scope": "stock", "queue": True})
+    web.post("/api/send", json={"text": "第三问", "scope": "stock", "queue": True})
+    _claim(agent)
+    agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": True, "result": "{}", "session_id": "s1"})
+    msgs = web.get(f"/api/threads/{th}/messages").json()
+    assert [(m["role"], m["content"]) for m in msgs["items"][-3:]] == [("user", "第二问"), ("user", "第三问"), ("assistant", "")]
+    nxt = _claim(agent)
+    assert nxt["payload"]["text"] == "第二问\n\n第三问" and nxt["payload"]["session_id"] == "s1"
+    assert web.get(f"/api/threads/{th}").json()["queue"] == []
+
+
+def test_a_failed_turn_keeps_the_queue_and_withdraw_returns_the_text(web, agent):
+    r = web.post("/api/send", json={"text": "第一问", "scope": "stock"}).json()
+    jid, th = r["job_id"], r["thread"]
+    qid = web.post("/api/send", json={"text": "第二问", "scope": "stock", "queue": True}).json()["queued"]
+    _claim(agent)
+    agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": False, "error": "boom"})
+    assert web.get(f"/api/threads/{th}/messages").json()["inflight"] is None
+    assert [i["id"] for i in web.get(f"/api/threads/{th}").json()["queue"]] == [qid]
+    assert web.delete(f"/api/threads/{th}/queue/{qid}").json()["item"]["text"] == "第二问"
+    assert web.delete(f"/api/threads/{th}/queue/{qid}").status_code == 404
+    assert web.post(f"/api/threads/{th}/queue/send-now").json() == {"status": "empty"}
+
+
+def test_send_now_interrupts_and_answers_the_queue(web, agent):
+    r = web.post("/api/send", json={"text": "慢慢分析", "scope": "stock"}).json()
+    jid, th, mid = r["job_id"], r["thread"], r["message_id"]
+    web.post("/api/send", json={"text": "停，先看这个", "scope": "stock", "queue": True})
+    _claim(agent)
+    assert web.post(f"/api/threads/{th}/queue/send-now").json() == {"status": "interrupting"}
+    assert agent.post(f"/api/agent/jobs/{jid}/inbox").json() == {"items": []}  # urgent: not handed to the old turn
+    assert agent.post(f"/api/agent/jobs/{jid}/events", json={"deltas": ["x"]}).json()["cancel"] is True
+    agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": False, "cancelled": True})
+    items = web.get(f"/api/threads/{th}/messages").json()["items"]
+    assert items[-3]["id"] == mid and items[-3]["status"] == "cancelled"
+    assert (items[-2]["role"], items[-2]["content"]) == ("user", "停，先看这个") and items[-1]["status"] == "pending"
+    assert _claim(agent)["payload"]["text"] == "停，先看这个"
+
+
+def test_send_now_on_a_turn_not_yet_picked_up(web, agent):
+    r = web.post("/api/send", json={"text": "一", "scope": "stock"}).json()
+    th = r["thread"]
+    web.post("/api/send", json={"text": "二", "scope": "stock", "queue": True})
+    assert web.post(f"/api/threads/{th}/queue/send-now").json()["status"] == "started"
+    assert _claim(agent)["payload"]["text"] == "二"
+
+
+def test_a_plain_stop_keeps_the_queue(web, agent):
+    r = web.post("/api/send", json={"text": "一", "scope": "stock"}).json()
+    jid, th, mid = r["job_id"], r["thread"], r["message_id"]
+    web.post("/api/send", json={"text": "二", "scope": "stock", "queue": True})
+    _claim(agent)
+    web.post(f"/api/messages/{mid}/cancel")
+    agent.post(f"/api/agent/jobs/{jid}/finish", json={"ok": False, "cancelled": True})
+    assert web.get(f"/api/threads/{th}/messages").json()["inflight"] is None
+    assert len(web.get(f"/api/threads/{th}").json()["queue"]) == 1

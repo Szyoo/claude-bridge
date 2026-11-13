@@ -80,9 +80,12 @@ export class BridgeClient {
   // `files` = ids returned by upload(); text may be empty when images are attached
   // ephemeral: one-off turn in a fresh hidden thread (no resume, no CLI session kept on the worker), deleted by the
   // server after an idle hour; call deleteThread(thread, scope) as soon as you have the answer to remove it at once
+  // queue: if the thread is still answering, hold the message instead of failing with 409 → { queued, thread };
+  // the running turn reads it at its next step (or it opens the next turn). See removeQueued / sendQueueNow.
   send(text, { thread = null, scope = '', key = '', newThread = false, ephemeral = false, files = [], options = null,
-               clientTools = [], clientEnvironment = {} } = {}) {
+               clientTools = [], clientEnvironment = {}, queue = false } = {}) {
     const extra = options ? { options } : {};
+    if (queue) extra.queue = true;
     if (clientTools.length) { extra.client_tools = clientTools; extra.client_environment = clientEnvironment; }
     if (thread) return this.request('POST', `/threads/${encodeURIComponent(thread)}/messages`, { text, files, ...extra });
     return this.request('POST', '/send', { text, scope, key, new_thread: newThread, files, ...extra, ...(ephemeral ? { ephemeral: true } : {}) });
@@ -92,6 +95,10 @@ export class BridgeClient {
   upload(blob, { name = '' } = {}) { return this.request('POST', `/files?name=${encodeURIComponent(name)}`, undefined, { raw: blob }); }
   fileUrl(id) { return `${this.baseUrl}/files/${encodeURIComponent(id)}`; }
   cancel(messageId) { return this.request('POST', `/messages/${messageId}/cancel`); }
+  // a queued message back out of the queue → { item: { id, text, files } } (to put the text back in the input)
+  removeQueued(threadId, queueId) { return this.request('DELETE', `/threads/${encodeURIComponent(threadId)}/queue/${queueId}`); }
+  // stop the running turn (what it did stays) and answer everything queued right away
+  sendQueueNow(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/queue/send-now`); }
   pendingClientTools(threadId) { return this.request('GET', `/threads/${encodeURIComponent(threadId)}/client-tools`); }
   respondClientTool(messageId, callId, content, { isError = false } = {}) {
     return this.request('POST', `/messages/${messageId}/client-tools/${encodeURIComponent(callId)}/result`, { content, is_error: isError });
@@ -113,7 +120,8 @@ export class BridgeClient {
 }
 
 // Keeps one thread's view in sync. Handlers: onSnapshot, onMessage, onDelta, onEvent, onStatus, onDone,
-// onThread, onFallback(bool), onError(err). Deltas are applied only when rev === known + 1; a gap re-fetches the row.
+// onThread, onQueue({ thread, items }), onFallback(bool), onError(err). Snapshots carry `queue` too.
+// Deltas are applied only when rev === known + 1; a gap re-fetches the row.
 export function mergeMessageEvents(previous = [], incoming = []) {
   const out = previous.slice(), byId = new Map();
   out.forEach((ev, i) => { if (Number.isInteger(ev.id)) byId.set(ev.id, i); });
@@ -174,6 +182,7 @@ export class Subscription {
     on('thread', (t) => this.h.onThread?.(t));
     on('context', (c) => this.h.onContext?.(c));
     on('job', (j) => this.h.onJob?.(j));
+    on('queue', (q) => this.h.onQueue?.(q));
     es.onerror = async () => {
       if (this.closed) return;
       this.errors += 1;

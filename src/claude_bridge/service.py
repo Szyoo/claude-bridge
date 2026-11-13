@@ -280,7 +280,10 @@ class BridgeService:
         client_tools: list[ClientTool] | None = None,
         client_environment: dict[str, str] | None = None,
         ephemeral: bool = False,
+        queue: bool = False,
     ) -> dict[str, Any]:
+        """`queue`: if the thread is still answering, hold the message instead of refusing it — the running turn
+        reads it at its next step (a worker that supports it), otherwise it opens the next turn."""
         owner = principal.owner
         if ephemeral and thread_id:
             raise BadRequest("一次性消息不能发到已有对话")
@@ -331,46 +334,155 @@ class BridgeService:
 
         self.requeue_stale()
         if self.store.inflight(tid):
-            raise ChatBusy("上一条还在回答中")
+            if not queue or client_tools or ephemeral:
+                raise ChatBusy("上一条还在回答中")
+            item = self.store.queue_add(tid, owner, text, [public_file(self.store.get_file(f) or {"id": f}) for f in file_ids])
+            self._pub_queue(tid)
+            return {"queued": item["id"], "thread": tid, "agent_online": self.agent_online()}
 
-        titled = False
+        th = self.store.get_thread(tid) or {}
+        title = auto_title(text) or "图片"
+        titled = not th.get("title")
         with self.store.transaction():
-            th = self.store.get_thread(tid) or {}
-            title = auto_title(text) or "图片"
-            if not th.get("title"):
+            if titled:
                 self.store.update_thread(tid, title=title)
-                titled = True
-            user_msg = self.store.add_message(tid, "user", text)
-            attached = self.store.attach_files(user_msg["id"], tid, file_ids) if file_ids else []
-            if len(attached) != len(file_ids):  # raced with another send of the same upload
-                raise BadRequest("图片已经发送过，请重新添加")
-            user_msg["files"] = [public_file(f) for f in attached]
-            asst_msg = self.store.add_message(tid, "assistant", "", status="pending")
-            payload: dict[str, Any] = {
-                "thread": tid,
-                "message_id": asst_msg["id"],
-                "text": text,
-                "settings": turn_settings,
-                "session_id": th.get("session_id"),
-                "scope": th.get("scope") or "",
-                "owner": owner,
-                **({"files": user_msg["files"]} if attached else {}),
-                **({'client_tools':[tool.model_dump() for tool in client_tools],
-                    'client_environment':client_environment or {}} if client_tools else {}),
-                **(extra_payload or {}),
-            }
-            jid = self.store.enqueue_job("chat", payload)
-            self.store.set_message_job(asst_msg["id"], jid)
-            asst_msg["job_id"] = jid
-            self.store.touch_thread(tid)
+            user_msgs, asst_msg, payload = self._open_turn(
+                tid, th, owner, [(text, file_ids)], turn_settings, strict=True, extra_payload=extra_payload,
+                client_tools=client_tools, client_environment=client_environment)
 
-        self._pub(tid, "message", user_msg)
+        for m in user_msgs:
+            self._pub(tid, "message", m)
         self._pub(tid, "message", asst_msg)
         if titled:
             self._pub(tid, "thread", {"id": tid, "title": title, "pinned": bool(th.get("pinned"))})
         if self.config.on_chat_started:
             self.config.on_chat_started(payload)
-        return {"message_id": asst_msg["id"], "job_id": jid, "thread": tid, "agent_online": self.agent_online()}
+        return {"message_id": asst_msg["id"], "job_id": asst_msg["job_id"], "thread": tid, "agent_online": self.agent_online()}
+
+    def _open_turn(
+        self, tid: str, th: dict[str, Any], owner: str, parts: list[tuple[str, list[str]]], turn_settings: dict[str, Any],
+        *, strict: bool, extra_payload: dict[str, Any] | None = None, client_tools: list[ClientTool] | None = None,
+        client_environment: dict[str, str] | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+        """User row(s) + a pending assistant row + its chat job; call inside a transaction.
+        Several parts (queued messages) become several user rows answered by one turn."""
+        user_msgs: list[dict[str, Any]] = []
+        all_files: list[dict[str, Any]] = []
+        for text, file_ids in parts:
+            user_msg = self.store.add_message(tid, "user", text)
+            attached = self.store.attach_files(user_msg["id"], tid, file_ids) if file_ids else []
+            if strict and len(attached) != len(file_ids):  # raced with another send of the same upload
+                raise BadRequest("图片已经发送过，请重新添加")
+            user_msg["files"] = [public_file(f) for f in attached]
+            all_files += user_msg["files"]
+            user_msgs.append(user_msg)
+        asst_msg = self.store.add_message(tid, "assistant", "", status="pending")
+        payload: dict[str, Any] = {
+            "thread": tid,
+            "message_id": asst_msg["id"],
+            "text": "\n\n".join(t for t, _ in parts if t),
+            "settings": turn_settings,
+            "session_id": th.get("session_id"),
+            "scope": th.get("scope") or "",
+            "owner": owner,
+            **({"files": all_files} if all_files else {}),
+            **({'client_tools':[tool.model_dump() for tool in client_tools],
+                'client_environment':client_environment or {}} if client_tools else {}),
+            **(extra_payload or {}),
+        }
+        jid = self.store.enqueue_job("chat", payload)
+        self.store.set_message_job(asst_msg["id"], jid)
+        asst_msg["job_id"] = jid
+        self.store.touch_thread(tid)
+        return user_msgs, asst_msg, payload
+
+    # ---------------- queue: messages sent while a turn is running ----------------
+
+    def queue_items(self, thread: str) -> list[dict[str, Any]]:
+        return [{**{k: q[k] for k in ("id", "text", "files", "urgent", "created_at")}, "delivered": bool(q["delivered"])}
+                for q in self.store.queue(thread)]
+
+    def _pub_queue(self, thread: str) -> None:
+        self._pub(thread, "queue", {"thread": thread, "items": self.queue_items(thread)})
+
+    def drain_queue(self, thread: str) -> dict[str, Any] | None:
+        """Opens the next turn from everything queued (when the thread is idle)."""
+        if self.store.inflight(thread):
+            return None
+        th = self.store.get_thread(thread)
+        if not th:
+            return None
+        with self.store.transaction():
+            items = self.store.queue_take(thread)
+            if not items:
+                return None
+            owner = th.get("owner") or ""
+            user_msgs, asst_msg, payload = self._open_turn(
+                thread, th, owner, [(q["text"], [f["id"] for f in q["files"]]) for q in items], self.settings(owner),
+                strict=False)
+        for m in user_msgs:
+            self._pub(thread, "message", m)
+        self._pub(thread, "message", asst_msg)
+        self._pub_queue(thread)
+        if self.config.on_chat_started:
+            try:
+                self.config.on_chat_started(payload)
+            except Exception:
+                log.exception("on_chat_started failed for a queued turn")
+        return {"message_id": asst_msg["id"], "job_id": asst_msg["job_id"], "thread": thread}
+
+    def remove_queued(self, thread: str, queue_id: int, owner: str = "") -> dict[str, Any]:
+        self.own_thread(thread, owner)
+        item = self.store.queue_remove(thread, queue_id)
+        if not item:
+            if any(q["id"] == queue_id for q in self.store.queue(thread)):
+                raise BadRequest("已经交给 Claude 了，撤不回来；可以点「立即发送」打断它")
+            raise NotFound("这条已经发出去了")
+        self._pub_queue(thread)
+        return {"item": {k: item[k] for k in ("id", "text", "files")}}
+
+    def send_queue_now(self, thread: str, owner: str = "") -> dict[str, Any]:
+        """Stops the running turn (what it did so far stays) and answers the queued messages right away."""
+        self.own_thread(thread, owner)
+        if not self.store.queue(thread):
+            return {"status": "empty"}
+        self.store.queue_mark_urgent(thread)
+        inflight = self.store.inflight(thread)
+        if inflight and self.cancel(inflight["id"], owner).get("status") == "cancelling":
+            self._pub_queue(thread)
+            return {"status": "interrupting"}  # finish() of the cancelled job opens the turn
+        started = self.drain_queue(thread)
+        return {"status": "started" if started else "empty", **(started or {})}
+
+    def claim_inbox(self, job_id: int) -> dict[str, Any]:
+        """Agent side: queued messages for the running turn. The worker writes them to claude's input and reports
+        a `user_note` {queue_id, at} event once claude has read them (at its next step); until then they stay in the
+        queue, marked delivered, and 立即发送 can still interrupt for them."""
+        job = self.store.get_job(job_id)
+        if not job:
+            raise NotFound("没有这个任务")
+        self.store.touch_job(job_id)
+        self.note_agent_alive()
+        msg = self.store.message_by_job(job_id)
+        if job["kind"] != "chat" or job["status"] != "running" or job["cancel_requested"] or not msg \
+                or msg["status"] not in INFLIGHT:
+            return {"items": []}
+        items = self.store.queue_deliver(msg["thread"], job_id)
+        if items:
+            self._pub_queue(msg["thread"])
+        return {"items": [{"id": q["id"], "text": q["text"], "files": q["files"]} for q in items]}
+
+    def _consume_queued(self, job_id: int, thread: str, mid: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        """A `user_note` from the worker names a queue row; the stored event carries its text and images."""
+        try:
+            item = self.store.queue_consume(int(data.get("queue_id")), job_id)
+        except (TypeError, ValueError):
+            return None
+        if not item:
+            return None
+        ids = [f["id"] for f in item["files"]]
+        files = [public_file(f) for f in self.store.attach_files(mid, thread, ids)] if ids else []
+        return {"text": item["text"], "files": files, "at": data.get("at") or 0}
 
     # ---------------- files ----------------
 
@@ -482,6 +594,7 @@ class BridgeService:
             "agent": self.agent_status(),
             "cursor": cursor,
             "jobs": [job_frame(j) for j in self.store.active_jobs(thread_id, SESSION_JOB_KINDS)],
+            "queue": self.queue_items(thread_id),
         }
 
     # ---------------- settings / status ----------------
@@ -683,7 +796,13 @@ class BridgeService:
                 text = "".join(deltas)
                 rev = self.store.append_content(mid, text)
                 frames.append(("delta", {"message_id": mid, "text": text, "rev": rev}, None))
+            consumed = False
             for etype, data in events:
+                if etype == "user_note" and "queue_id" in data:
+                    data = self._consume_queued(job_id, thread, mid, data)
+                    if data is None:
+                        continue
+                    consumed = True
                 ev = self.store.add_event(mid, etype, data)
                 frames.append(("event", ev, ev["id"]))
                 if etype in USAGE_EVENTS:
@@ -692,6 +811,8 @@ class BridgeService:
                     self.note_rate_limit(data)
         for ftype, data, fid in frames:
             self._pub(thread, ftype, data, id=fid)
+        if consumed:
+            self._pub_queue(thread)
         return {"ok": True, "cancel": stop}
 
     def finish(self, job_id: int, body: JobFinishIn) -> None:
@@ -744,6 +865,14 @@ class BridgeService:
                 if job["kind"] == "compact":
                     self._record_compact_usage(thread, job_id, body.result)
                 self._pub(thread, "job", job_frame(job))
+            elif job["kind"] == "chat":
+                # written to claude but never read (the turn ended first): back to waiting
+                back = self.store.queue_undeliver(job_id)
+                drained = None
+                if status == "done" or (status == "cancelled" and any(q["urgent"] for q in self.store.queue(thread))):
+                    drained = self.drain_queue(thread)
+                if back and not drained:
+                    self._pub_queue(thread)
 
     def _note_compaction(self, thread: str, result: str | None) -> None:
         """Leave a visible line in the conversation: the history Claude sees is now a summary."""

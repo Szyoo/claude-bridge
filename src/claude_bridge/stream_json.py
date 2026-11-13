@@ -135,6 +135,25 @@ def tool_result_text(content: Any) -> str:
     return "" if content is None else json.dumps(content, ensure_ascii=False)
 
 
+USAGE_SUM_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def merge_results(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+    """Two `result` envelopes of one process (consecutive turns) → one, with usage / cost / turns summed."""
+    out = {**b}
+    ua, ub = a.get("usage") or {}, b.get("usage") or {}
+    usage = {**ub, **{k: (ua.get(k) or 0) + (ub.get(k) or 0) for k in USAGE_SUM_KEYS if k in ua or k in ub}}
+    ca, cb = ua.get("cache_creation") or {}, ub.get("cache_creation") or {}
+    if ca or cb:
+        usage["cache_creation"] = {k: (ca.get(k) or 0) + (cb.get(k) or 0) for k in {*ca, *cb}}
+    out["usage"] = usage
+    for k in ("total_cost_usd", "num_turns", "duration_ms", "duration_api_ms"):
+        if a.get(k) is not None or b.get(k) is not None:
+            out[k] = (a.get(k) or 0) + (b.get(k) or 0)
+    out["is_error"] = bool(b.get("is_error"))
+    return out
+
+
 class StreamState:
     def __init__(self, *, resumed: bool = False, thinking_max: int = 4000, tool_result_max: int = 4000,
                  emit_content_blocks: bool = False) -> None:
@@ -156,6 +175,7 @@ class StreamState:
         self._cur_msg: str | None = None
         self._open: dict[int, dict[str, Any]] = {}
         self._tools_seen: set[str] = set()
+        self._turn_ended = False
 
     @property
     def text(self) -> str:
@@ -184,8 +204,11 @@ class StreamState:
         if kind == "rate_limit_event":
             return self._rate_limit(ev)
         if kind == "result":
-            self.result = ev
+            # a message handed over mid-turn can make claude run one more turn on the same process:
+            # the reply continues in the same message and the turns' usage adds up
+            self.result = merge_results(self.result, ev) if self.result else ev
             self.session_id = ev.get("session_id") or self.session_id
+            self._turn_ended = True
             return []
         return []
 
@@ -352,6 +375,10 @@ class StreamState:
     # ---------------- helpers ----------------
 
     def _delta(self, text: str) -> Emission:
+        if self._turn_ended:
+            self._turn_ended = False
+            if self.text_total and text and not self.text.endswith("\n\n"):
+                text = "\n\n" + text
         self.text_total += len(text)
         self.chunks.append(text)
         return ("delta", text)

@@ -70,7 +70,17 @@ if not os.path.exists({str(tmp_path / 'args.json')!r}):
 open({str(tmp_path / 'args.jsonl')!r}, 'a').write(argv + '\\n')  # every invocation, incl. the /context follow-up
 if not os.path.exists({str(tmp_path / 'env.txt')!r}):
     open({str(tmp_path / 'env.txt')!r}, 'w').write(os.environ.get('BRIDGE_TEST_ENV', ''))
-if not sys.stdin.isatty():
+live = '--input-format' in sys.argv and 'stream-json' in sys.argv
+if live:  # like claude: the first message starts the turn, later ones (mid-turn) are read as they come
+    import threading
+    data = sys.stdin.readline()
+    if data:
+        open({str(tmp_path / 'stdin.txt')!r}, 'w').write(data)
+    def more():
+        for extra in sys.stdin:
+            open({str(tmp_path / 'stdin_more.jsonl')!r}, 'a').write(extra)
+    threading.Thread(target=more, daemon=True).start()
+elif not sys.stdin.isatty():
     try:
         data = sys.stdin.read()
     except Exception:

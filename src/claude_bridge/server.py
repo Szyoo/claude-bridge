@@ -171,7 +171,7 @@ def create_bridge(
     def get_thread(thread_id: str, p: Principal = Depends(who)):
         _svc(service.own_thread, thread_id, p.owner)
         snap = _svc(service.snapshot, thread_id)
-        return {k: snap[k] for k in ("thread", "messages", "inflight", "agent", "jobs")}
+        return {k: snap[k] for k in ("thread", "messages", "inflight", "agent", "jobs", "queue")}
 
     @browser.post("/threads/{thread_id}/select")
     def select_thread(thread_id: str, body: ThreadSelectIn | None = None, p: Principal = Depends(who)):
@@ -203,14 +203,22 @@ def create_bridge(
     @browser.post("/threads/{thread_id}/messages", status_code=201)
     def send_to_thread(thread_id: str, body: ThreadMessageIn, p: Principal = Depends(who)):
         return _svc(service.start_chat, body.text, thread_id=thread_id, files=body.files, principal=p, options=body.options,
-                    client_tools=body.client_tools,client_environment=body.client_environment)
+                    client_tools=body.client_tools,client_environment=body.client_environment, queue=body.queue)
+
+    @browser.delete("/threads/{thread_id}/queue/{queue_id}")
+    def remove_queued(thread_id: str, queue_id: int, p: Principal = Depends(who)):
+        return _svc(service.remove_queued, thread_id, queue_id, p.owner)
+
+    @browser.post("/threads/{thread_id}/queue/send-now")
+    def send_queue_now(thread_id: str, p: Principal = Depends(who)):
+        return _svc(service.send_queue_now, thread_id, p.owner)
 
     @browser.post("/send", status_code=201)
     def send(body: SendIn, p: Principal = Depends(who)):
         return _svc(
             service.start_chat, body.text, scope=body.scope, key=body.key, new_thread=body.new_thread, files=body.files,
             principal=p, options=body.options,client_tools=body.client_tools,client_environment=body.client_environment,
-            ephemeral=body.ephemeral,
+            ephemeral=body.ephemeral, queue=body.queue,
         )
 
     # image upload: the request body is the image itself (no multipart dependency); ?name= is an optional label
@@ -333,6 +341,10 @@ def create_bridge(
     @agent.post("/jobs/{job_id}/events")
     def a_job_events(job_id: int, body: JobEventsIn):
         return _svc(service.apply_events, job_id, body)
+
+    @agent.post("/jobs/{job_id}/inbox")
+    def a_job_inbox(job_id: int):
+        return _svc(service.claim_inbox, job_id)
 
     @agent.post("/jobs/{job_id}/finish")
     def a_job_finish(job_id: int, body: JobFinishIn):

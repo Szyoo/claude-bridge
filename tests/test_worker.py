@@ -185,6 +185,7 @@ class FakeClient:
         self.job_state = {"status": "running", "cancel_requested": False}
         self.get_job_calls = 0
         self.fail_posts = 0
+        self.inbox: list[dict] = []  # handed out once by claim_inbox
 
     def next_job(self, worker, kinds, wait=25):
         return self.jobs.pop(0) if self.jobs else None
@@ -199,6 +200,10 @@ class FakeClient:
             raise BridgeClientError("down")
         self.posts.append({"status": status, "deltas": deltas or [], "events": events or []})
         return {"ok": True, "cancel": bool(self.cancel_on_text) and self.cancel_on_text in self.text}
+
+    def claim_inbox(self, job_id):
+        items, self.inbox = self.inbox, []
+        return items
 
     def finish_job(self, job_id, **kw):
         self.finished.append({"id": job_id, **kw})
@@ -242,7 +247,8 @@ class RecordingHooks(Hooks):
 
 def make_worker(tmp_path, lines, client=None, hooks=None, handlers=None, exit_code=0, sleep_after=0, **cfg):
     client = client or FakeClient()
-    opts = {"flush_interval": 0.05, "cancel_poll_interval": 0.1, "kill_grace": 0.5, **cfg}
+    # accept_input off by default: these tests read the prompt from argv; the mid-turn tests turn it on
+    opts = {"flush_interval": 0.05, "cancel_poll_interval": 0.1, "kill_grace": 0.5, "accept_input": False, **cfg}
     config = WorkerConfig(
         claude_bin=make_fake_claude(tmp_path, lines, exit_code=exit_code, sleep_after=sleep_after), cwd=tmp_path, **opts
     )
@@ -714,3 +720,57 @@ def test_a_plain_outage_keeps_retrying(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "_sleep", lambda s: None)
     worker.run_forever()  # returns normally: files are readable, so no exit
     assert len(calls) == 5
+
+
+# ---------------- messages sent while a turn runs ----------------
+
+def replay(text):
+    return {"type": "user", "isReplay": True, "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+
+
+def test_mid_turn_message_is_written_to_claudes_input(tmp_path):
+    lines = [init_ev(), replay("我有几只股票"), msg_start(), cb_start(0, {"type": "text", "text": ""}),
+             cb_delta(0, {"type": "text_delta", "text": "先看看"}), {"__sleep__": 0.8}, replay("顺便看下 B 股"),
+             cb_stop(0), msg_delta(), result_ev()]
+    worker, client = make_worker(tmp_path, lines, accept_input=True)
+    client.inbox = [{"id": 42, "text": "顺便看下 B 股", "files": []}]
+    worker.run_chat(chat_job(auto_context=False))
+    args = json.loads((tmp_path / "args.json").read_text())
+    assert args[:2] == ["-p", "--input-format"] and "--replay-user-messages" in args and "我有几只股票" not in args
+    first = json.loads((tmp_path / "stdin.txt").read_text())
+    assert first["message"]["content"][-1]["text"] == "我有几只股票"
+    more = [json.loads(x) for x in (tmp_path / "stdin_more.jsonl").read_text().splitlines()]
+    assert more[0]["message"]["content"][-1]["text"] == "顺便看下 B 股"
+    assert [e["data"] for e in client.events("user_note")] == [{"queue_id": 42, "at": len("先看看")}]
+    assert client.finished[0]["ok"] is True
+
+
+def test_nothing_is_handed_over_before_claude_echoes_the_prompt(tmp_path):
+    lines = [init_ev(), msg_start(), cb_start(0, {"type": "text", "text": ""}), cb_delta(0, {"type": "text_delta", "text": "x"}),
+             {"__sleep__": 0.5}, cb_stop(0), msg_delta(), result_ev()]
+    worker, client = make_worker(tmp_path, lines, accept_input=True)
+    client.inbox = [{"id": 1, "text": "插话", "files": []}]
+    worker.run_chat(chat_job(auto_context=False))
+    assert client.inbox and not (tmp_path / "stdin_more.jsonl").exists()  # a CLI without the echo: left for the next turn
+
+
+def test_an_extra_turn_on_the_same_process_adds_up(tmp_path):
+    lines = [init_ev(), msg_start(), cb_start(0, {"type": "text", "text": ""}), cb_delta(0, {"type": "text_delta", "text": "第一段"}),
+             cb_stop(0), msg_delta(), result_ev(),
+             msg_start("m2"), cb_start(0, {"type": "text", "text": ""}), cb_delta(0, {"type": "text_delta", "text": "第二段"}),
+             cb_stop(0), msg_delta(), result_ev(total_cost_usd=0.021, num_turns=2)]
+    worker, client = make_worker(tmp_path, lines, accept_input=True)
+    worker.run_chat(chat_job(auto_context=False))
+    assert client.text == "第一段\n\n第二段\n\n"
+    usage = client.events("usage")[0]["data"]
+    assert usage["output_tokens"] == 82 and usage["input_tokens"] == 20 and usage["num_turns"] == 3
+    assert abs(usage["total_cost_usd"] - 0.1) < 1e-9
+
+
+def test_no_live_input_for_one_off_turns(tmp_path):
+    worker, client = make_worker(tmp_path, HAPPY, accept_input=True)
+    job = chat_job(auto_context=False)
+    job["payload"]["ephemeral"] = True
+    worker.run_chat(job)
+    args = json.loads((tmp_path / "args.json").read_text())
+    assert args[:2] == ["-p", "我有几只股票"] and "--input-format" not in args

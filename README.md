@@ -14,6 +14,7 @@
 ## 功能
 
 - 流式回复；工具调用折叠显示，并按真实顺序与正文交错
+- 回答进行中可以接着发：消息先排队，Claude 在下一步（工具调用之间）读到并插进当前回答；也可以「立即发送」打断当前回答马上回复
 - 发送图片（浏览器端按尺寸处理后上传，worker 以 stream-json 输入交给 Claude）
 - 模型列表由 worker 按本机 CLI 探测上报，CLI 更新后自动跟上
 - 会话上下文构成（`/context`）与压缩（`/compact`）
@@ -157,6 +158,8 @@ Worker(BridgeClient(url, token), WorkerConfig(cwd=REPO, model="sonnet"), hooks=M
 
 只用传输层时调用 `client.subscribe(threadId, handlers)`。
 
+回答进行中继续发送：`client.send(text, { thread, queue: true })` 在对话忙时不再返回 409，而是排队（返回 `{ queued, thread }`）。worker 把排队的消息写进正在运行的 `claude` 的输入，Claude 在下一步读到时，这条消息以 `user_note` 事件出现在当前回答里（组件渲染为「你插话」）；当前回答结束时还没读到的，自动作为下一轮发出。`client.removeQueued(thread, id)` 撤回还没交给 Claude 的一条，`client.sendQueueNow(thread)` 停止当前回答（已做的保留）并马上回复排队的消息。排队状态在快照的 `queue` 和 SSE 的 `queue` 帧（`onQueue` 回调）里。组件自带的输入框已接好：回答中输入内容时发送键变为「排队发送」，输入框为空时是「停止」。
+
 一次性调用（阅后即焚）：`client.send(text, { scope, ephemeral: true })` 每次新建一个隐藏对话，不续接会话，worker 端不保留 CLI 会话（`--no-session-persistence`），不出现在对话列表里，也不会变成当前对话。拿到结果后调用 `client.deleteThread(thread, scope)` 立即删除；没删的在最后一次活动 1 小时后（`BridgeConfig.ephemeral_seconds`）由服务端自动清掉。适合翻译、抽取、识图这类每次独立的任务。组件样式通过 `--bridge-*` CSS 变量覆盖；`bridge-widget.js` 还导出 `renderTurn`、`splitTurn` 等渲染函数，供宿主自行排版。
 
 ### 输入框（Prompt Bar）与语音输入（Voice Pill）
@@ -202,6 +205,7 @@ mountBridgeWidget(el, client, {
 | `GET /threads/{id}/messages` · `GET /threads/{id}/stream` | 消息 / SSE 推送 |
 | `POST /send` · `POST /threads/{id}/messages` | 发送消息（`/send` 带 `ephemeral: true` 为一次性调用，见上文） |
 | `POST /messages/{id}/cancel` | 取消回答 |
+| `DELETE /threads/{id}/queue/{qid}` · `POST /threads/{id}/queue/send-now` | 撤回排队的消息 / 打断当前回答并马上回复排队的消息（发送时带 `queue: true` 才会排队） |
 | `GET /threads/find?scope=&key=` · `POST /threads/{id}/select` | 按 scope + key 找对话 / 设为当前对话 |
 | `POST /threads/{id}/context` · `POST /threads/{id}/compact` | 上下文构成 / 压缩会话 |
 | `POST /files` · `GET /files/{id}` | 上传 / 读取图片 |
@@ -210,7 +214,7 @@ mountBridgeWidget(el, client, {
 | `GET /threads/{id}/client-tools` · `POST /messages/{id}/client-tools/{call_id}/result` | 调用方工具（启用时） |
 | `GET/PUT /settings` · `GET /status` | 设置 / 状态 |
 
-worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`GET /jobs/{id}`、`POST /jobs/{id}/events`、`POST /jobs/{id}/finish`、`POST /chat`（持令牌的后端直接发起对话）、`GET /status`、`GET /files/{id}`、`POST /limits`（额度上报）、`POST /local-usage`（本机用量的每分钟合计）、`GET/POST /models`（模型列表）。
+worker 路由使用 Bearer 令牌：`POST /jobs/next`（长轮询）、`GET /jobs/{id}`、`POST /jobs/{id}/events`、`POST /jobs/{id}/inbox`（取回答进行中排队的消息）、`POST /jobs/{id}/finish`、`POST /chat`（持令牌的后端直接发起对话）、`GET /status`、`GET /files/{id}`、`POST /limits`（额度上报）、`POST /local-usage`（本机用量的每分钟合计）、`GET/POST /models`（模型列表）。
 
 调用方路由（`/api/caller/*`）使用调用方令牌，见上文「调用方（服务端程序）」。
 

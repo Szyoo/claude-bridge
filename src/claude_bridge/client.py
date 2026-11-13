@@ -83,6 +83,10 @@ class BridgeClient:
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         return (self._call("GET", f"/jobs/{job_id}") or {}).get("job")
 
+    def claim_inbox(self, job_id: int) -> list[dict[str, Any]]:
+        """Messages the user sent while this turn runs; the caller hands them to Claude."""
+        return (self._call("POST", f"/jobs/{job_id}/inbox", json={}) or {}).get("items") or []
+
     def open_client_tools(self, job_id: int) -> dict[str, Any]:
         return self._call('POST',f'/jobs/{job_id}/client-tool-session',json={})
 
