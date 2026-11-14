@@ -2,6 +2,10 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.17.2 — 2026-11-15
+
+- 修复：helper 用 `claude setup-token` 的长期令牌（`CLAUDE_CODE_OAUTH_TOKEN`）时，`claude -p /usage` 只显示费用、没有额度，页面上的 5 小时 / 本周用量一直停在旧值。现在读不到额度时会去掉令牌、用本机的登录再读一次；仍读不到会在日志里提示一次
+
 ## v0.17.1 — 2026-11-13
 
 - 排队区抽成可单独使用的 `mountQueue(el, client, { thread, onRestore, onError, strings })`（返回 `{ update(items, busy), destroy() }`），自己写输入框的宿主也能用；`mountBridgeWidget` 改为基于它

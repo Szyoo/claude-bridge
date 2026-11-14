@@ -402,6 +402,29 @@ print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "r
     assert len(client.limits) == 1
 
 
+def test_usage_probe_retries_without_setup_token(tmp_path, monkeypatch):
+    """A setup-token is inference-only: /usage shows no limits with it, so retry on the machine's own login."""
+    import stat
+    import sys
+
+    from claude_bridge.worker import Worker, WorkerConfig
+    from test_worker import FakeClient
+
+    script = tmp_path / "claude"
+    script.write_text(f"""#!{sys.executable}
+import json, os
+has = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+open({str(tmp_path / 'calls.txt')!r}, 'a').write(str(has) + '\\n')
+text = "Total cost: $0.0000" if has else "Current session: 3% used\\nCurrent week (all models): 59% used"
+print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "result": text}}))
+""")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+    w = Worker(FakeClient(), WorkerConfig(claude_bin=str(script), cwd=tmp_path))
+    assert w.probe_usage() == {"five_hour_pct": 3.0, "seven_day_pct": 59.0}
+    assert (tmp_path / "calls.txt").read_text().split() == ["True", "False"]
+
+
 def next_job(agent, kind):
     return agent.post("/api/agent/jobs/next", json={"kinds": [kind], "wait": 0}).json()["job"]
 

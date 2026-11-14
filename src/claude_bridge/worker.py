@@ -37,6 +37,8 @@ from claude_bridge.stream_json import (
     parse_usage_report,
 )
 
+OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"  # `claude setup-token`
+
 log = logging.getLogger(__name__)
 
 VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
@@ -215,6 +217,7 @@ class Worker:
         self._next_version_check = 0.0
         self._probed_version: str | None = None
         self._next_usage_probe = 0.0
+        self._usage_warned = False
         self._scanner: TranscriptScanner | None = None
         self._scan_thread: threading.Thread | None = None
         self._next_scan = 0.0
@@ -549,13 +552,14 @@ class Worker:
         except (OSError, subprocess.SubprocessError):
             return ""
 
-    def _slash(self, command: str, model: str | None = None) -> str | None:
+    def _slash(self, command: str, model: str | None = None, drop_env: tuple[str, ...] = ()) -> str | None:
         """Run a local slash command in print mode (no model call, nothing saved) and return its text."""
         cmd = [self.config.claude_bin, "-p", command, "--output-format", "json", "--no-session-persistence"]
         if model:
             cmd += ["--model", model]
+        env = {k: v for k, v in self._session_env().items() if k not in drop_env}
         try:
-            proc = subprocess.run(cmd, cwd=str(self.config.cwd) if self.config.cwd else None, env=self._session_env(),
+            proc = subprocess.run(cmd, cwd=str(self.config.cwd) if self.config.cwd else None, env=env,
                                   capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as e:
             log.warning("claude %s failed: %s", command, e)
@@ -670,7 +674,17 @@ class Worker:
 
     def probe_usage(self) -> dict[str, float] | None:
         text = self._slash("/usage")
-        return parse_usage_report(text) if text else None
+        report = parse_usage_report(text) if text else None
+        if report is None and self._session_env().get(OAUTH_TOKEN_ENV):
+            # a `claude setup-token` token is inference-only: /usage then shows just costs, no limits.
+            # The machine's own login (keychain) can still read them.
+            text = self._slash("/usage", drop_env=(OAUTH_TOKEN_ENV,))
+            report = parse_usage_report(text) if text else None
+        if report is None and not self._usage_warned:
+            self._usage_warned = True
+            log.warning("claude /usage shows no subscription limits; the page's quota figures won't update"
+                        " (log in with `claude` on this machine, or set usage_probe_interval=0)")
+        return report
 
     def maybe_probe_usage(self) -> None:
         """Every `usage_probe_interval`: local command, no tokens, ~1 s. Servers without /limits just log a warning."""
