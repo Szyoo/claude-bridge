@@ -24,7 +24,12 @@
 .bp-users-tbl .meter { min-width: 140px; }
 .bp-users-tbl tr.is-off .who, .bp-users-tbl tr.is-off .meter { opacity: .55; }
 /* narrow screens: the reflowed card's title cell lays its lines out in a row; stack them so the name keeps its width */
-@media (max-width: 640px) { .bp-users-tbl td.who { flex-direction: column; align-items: stretch; gap: 2px; } }
+@media (max-width: 640px) {
+  .bp-users-tbl td.who { flex-direction: column; align-items: stretch; gap: 2px; }
+  /* a usage meter carries its own label: drop the card's, let the meter take the row */
+  .bp-users-tbl td.um::before { display: none; }
+  .bp-users-tbl td.um > * { flex: 1; min-width: 0; }
+}
 
 /* the one-time password in the admin's sheet */
 .bp-secret code { flex: 1 1 12rem; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); font-size: var(--fs-body); letter-spacing: .04em; user-select: all; overflow-wrap: anywhere; }
@@ -109,6 +114,22 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
   padding-top: calc(6px + env(safe-area-inset-top, 0px));
 }
 
+/* phones: the corner tools leave too little room for the switches, so the top bar takes two rows —
+   row 1: ☰ · title · ⋯ beside the corner tools; row 2 (below them, full width): Chat⟨⟩Code, Claude⟨⟩DeepSeek, project */
+@media (max-width: 720px) {
+  .bp-chat .bridge-top { flex-wrap: wrap; padding-right: 12px; row-gap: 0; }
+  /* the spacer under the corner tools: as wide as they are (less the bar's padding and gap) and as tall, so row 2 starts below them */
+  .bp-chat .bridge-top::before { content: ""; order: 1; flex: 0 0 max(0px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px) - 18px));
+    height: calc(min(var(--corner-rail-h, 36px), 40px) + 8px); }
+  .bp-chat .bridge-top::after { content: ""; order: 1; flex-basis: 100%; height: 0; }
+  .bp-chat .bridge-top > :is(.bp-mode, .bp-proj) { order: 2; margin: var(--sp-1) 0 2px; }
+  .bp-chat .bridge-top > .bp-mode:first-of-type { padding-left: 0; }
+  .bp-chat .bridge-top > .bp-backend { margin-left: var(--sp-3); }
+  /* row 1 must hold its items plus the spacer, or the spacer wraps: the title takes what is left, the helper status is just its dot */
+  .bp-chat .bridge-top > .bridge-title { flex: 1 1 0; }
+  .bp-chat .bridge-top > .bridge-agent .txt { display: none; }
+}
+
 /* ---------- chat page on the site's background theme: glass layers over .bg-layer ----------
    Scoped to body.bp-chat, so the embedded widget (bridge-widget.css alone) keeps its flat look. */
 body.bp-chat .bridge { background: transparent; }
@@ -134,7 +155,15 @@ body.bp-chat .bridge-form { background: color-mix(in srgb, var(--bg) 66%, var(--
 body.bp-chat .bp-home { background: transparent; }
 body.bp-chat #app { position: relative; z-index: 1; }
 /* the phone drawer overlaps the transcript: keep it opaque enough to read */
-@media (max-width: 720px) { body.bp-chat .bridge.side-open .bridge-side { background: var(--sheet-bg); } }
+@media (max-width: 720px) {
+  body.bp-chat .bridge.side-open .bridge-side { background: var(--sheet-bg); }
+  /* the drawer opens under the corner tools: start its contents below them */
+  body.bp-chat .bridge.side-open .bridge-side { padding-top: calc(min(var(--corner-rail-h, 36px), 40px) + 20px + env(safe-area-inset-top, 0px)); }
+}
 
 /* account page: API keys */
 #api pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); margin: var(--sp-2) 0 0; }
+
+/* account › a backend's API key: label, its state and 清除 on one line above the field */
+.bp-key-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.bp-key-head .btn-small { margin-left: auto; }

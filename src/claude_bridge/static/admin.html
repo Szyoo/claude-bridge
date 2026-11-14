@@ -173,7 +173,7 @@
       const rows = data.items.map(u => {
         const tags = [u.role === 'admin' ? '<span class="pill info">管理员</span>' : '', u.disabled ? '<span class="pill err">已停用</span>' : '',
           u.id === data.me ? '<span class="pill neutral">我</span>' : ''].join(' ');
-        const meters = WINDOWS.map(([k, l]) => `<td data-label="${l}">${u.role === 'admin'
+        const meters = WINDOWS.map(([k, l]) => `<td class="um" data-label="${l}">${u.role === 'admin'
           ? meterHtml({ label: l, used: u.usage[k].used_pct, sub: `${u.usage[k].turns} 次 · 不限` }) : userMeter(u.usage[k], l)}</td>`).join('');
         return `<tr class="${[u.usage.blocked ? 'warn' : '', u.disabled ? 'is-off' : ''].filter(Boolean).join(' ')}">
           <td class="who"><div class="n">${esc(u.display_name || u.username)} ${tags}</div>
@@ -181,8 +181,8 @@
             ${u.portal_sub || data.sso ? `<div class="d">门户 ID：${u.portal_sub ? esc(u.portal_sub) : '未映射'}${data.sso && u.id === data.me && data.sso.me_portal_user ? ` · 当前门户用户名 ${esc(data.sso.me_portal_user)}` : ''}</div>` : ''}
             ${u.usage.blocked ? `<div class="d err-text">${esc(u.usage.blocked)}</div>` : ''}</td>
           ${meters}
-          <td class="seen" data-label="最近">${esc(fmtSeen(u.last_seen_at))}${u.last_access ? `<div class="d" title="${esc(u.last_access.user_agent)}">${esc(u.last_access.ip)} · ${esc(fmtDevice(u.last_access.user_agent))}</div>`
-            + (u.last_access.geo ? `<div class="d geo" title="${esc(fmtGeo(u.last_access.geo))}">${esc(fmtGeo(u.last_access.geo))}</div>` : '') : ''}</td>
+          <td class="seen" data-label="最近"><div>${esc(fmtSeen(u.last_seen_at))}${u.last_access ? `<div class="d" title="${esc(u.last_access.user_agent)}">${esc(u.last_access.ip)} · ${esc(fmtDevice(u.last_access.user_agent))}</div>`
+            + (u.last_access.geo ? `<div class="d geo" title="${esc(fmtGeo(u.last_access.geo))}">${esc(fmtGeo(u.last_access.geo))}</div>` : '') : ''}</div></td>
           <td class="col-actions"><a class="btn-ghost btn-small" href="/admin/users/${u.id}">查看</a> <button type="button" class="btn-ghost btn-small" data-edit="${u.id}">编辑</button></td>
         </tr>`;
       });
