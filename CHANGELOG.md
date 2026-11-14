@@ -2,6 +2,13 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.18.0 — 2026-11-15
+
+- **其他后端（如 DeepSeek）**：worker 新增 `CLAUDE_BRIDGE_BACKENDS`（`--backends`）。`owners` 里的管理员在页面顶栏多一个「Claude ⟨开关⟩ DeepSeek」切换：切过去后对话列表、模型菜单、设置都是这个后端自己的（scope 为 `<原 scope>@<后端名>`，Code 模式共用项目目录），与 Claude 互不混用。普通用户、非 owners 的管理员、API 令牌和调用方都不能用
+- 后端用量单独记账（新表 `bridge_backend_usage`），按对方 API 价格估算：区分缓存命中 / 未命中 / 输出与高峰时段；页面右上角显示近 24 小时费用与账户余额，「我的账户」显示 24 小时 / 7 天 / 30 天明细。不计入 Claude 额度，额度检查与本机用量标定都跳过它
+- worker 每 10 分钟上报后端（不含 env）与账户余额（`POST /api/agent/backends`）；后端回合不带 worker 的 Claude 凭据（`CLAUDE_CODE_OAUTH_TOKEN` 等）
+- `GET/PUT /api/settings` 接受 `scope` 查询参数（后端 scope 的独立设置）；`BridgeClient.settings(scope)` / `saveSettings(patch, scope)`
+
 ## v0.17.2 — 2026-11-15
 
 - 修复：helper 用 `claude setup-token` 的长期令牌（`CLAUDE_CODE_OAUTH_TOKEN`）时，`claude -p /usage` 只显示费用、没有额度，页面上的 5 小时 / 本周用量一直停在旧值。现在读不到额度时会去掉令牌、用本机的登录再读一次；仍读不到会在日志里提示一次

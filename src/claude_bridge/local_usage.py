@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_bridge.pricing import price_key, usage_cost
+from claude_bridge.pricing import is_external, price_key, usage_cost
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +124,8 @@ class TranscriptScanner:
         model = msg.get("model")
         if not isinstance(model, str) or model.startswith("<"):  # "<synthetic>": local, no API call
             return
+        if is_external(model):  # another provider (worker backends): not part of the Claude subscription
+            return
         ts = _parse_ts(ev.get("timestamp"))
         mid = msg.get("id") or ev.get("requestId") or ev.get("uuid")
         if ts is None or ts < cutoff or not isinstance(mid, str):
@@ -203,7 +205,7 @@ def session_usage(session_id: str, since: float, root: Path | None = None) -> li
                 seen[mid] = (model, msg["usage"])
     by_model: dict[str, dict[str, Any]] = {}
     for model, u in seen.values():
-        key = price_key(model)
+        key = model if is_external(model) else price_key(model)  # an external model must not be priced as Claude
         m = by_model.setdefault(key, {"model": key, **{k: 0 for k in TOKEN_FIELDS}, "cache_creation": {"ephemeral_1h_input_tokens": 0}, "requests": 0})
         for k in TOKEN_FIELDS:
             m[k] += int(u.get(k) or 0)

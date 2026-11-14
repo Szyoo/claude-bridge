@@ -108,8 +108,9 @@ export class BridgeClient {
   compact(threadId) { return this.request('POST', `/threads/${encodeURIComponent(threadId)}/compact`); }
 
   // ---- misc ----
-  settings() { return this.request('GET', '/settings'); }
-  saveSettings(patch) { return this.request('PUT', '/settings', patch); }
+  // a backend scope ("…@deepseek") has its own settings and model menu
+  settings(scope = '') { return this.request('GET', `/settings${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`); }
+  saveSettings(patch, scope = '') { return this.request('PUT', `/settings${scope ? `?scope=${encodeURIComponent(scope)}` : ''}`, patch); }
   jobs(limit = 20) { return this.request('GET', `/jobs?limit=${limit}`); }
   job(id) { return this.request('GET', `/jobs/${id}`); }
   status() { return this.request('GET', '/status'); }

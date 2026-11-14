@@ -32,6 +32,7 @@
         <div class="bp-grid" id="usage"></div>
         <div id="blocked"></div>
       </section>
+      <section class="glass panel" id="backends" hidden></section>
 
       <form class="glass panel" id="profile">
         <h2 class="panel-title">资料</h2>
@@ -79,7 +80,7 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS, fmtUsd, fmtTok, fmtBalance } from '/static/bridge/bridge-pages.js';
     import { enhanceIcons } from '@szyyw/design/icons.js';
     import { mountCopy } from '@szyyw/design/copy.js';
     enhanceIcons();
@@ -105,6 +106,20 @@
             + `${reset ? `<div class="tiny muted">重置：${esc(reset)}</div>` : ''}</div>`;
         }).join('');
       $('#blocked').innerHTML = us.blocked ? `<div class="callout err bp-gap">${esc(us.blocked)}</div>` : '';
+      // other backends (admins only): billed per API call, booked at the provider's prices, apart from Claude's quota
+      const bk = d.backends || [];
+      $('#backends').hidden = !bk.length;
+      $('#backends').innerHTML = bk.map(b => {
+        const bal = fmtBalance(b.balance);
+        const rows = ['day', 'week', 'month'].map(k => {
+          const u = b.usage[k];
+          return `<div class="list-row"><span class="row-main"><span class="row-title">${esc(u.label)}：${esc(fmtUsd(u.cost_usd))}</span>`
+            + `<span class="row-sub">${u.turns} 次 · 输入 ${fmtTok(u.input_tokens)} · 缓存命中 ${fmtTok(u.cache_read_tokens)} · 输出 ${fmtTok(u.output_tokens)}</span></span></div>`;
+        }).join('');
+        return `<h2 class="panel-title">${esc(b.label)} 用量</h2>`
+          + `<p class="muted small bp-lead">按 ${esc(b.label)} 的 API 价格估算（区分缓存命中与高峰时段），不计入 Claude 额度。${bal ? `账户余额：<b>${esc(bal)}</b>${b.balance?.is_available === false ? '（不足）' : ''}` : ''}</p>`
+          + `<div class="list divided">${rows}</div>`;
+      }).join('');
     }
 
     profile.addEventListener('submit', async (e) => {

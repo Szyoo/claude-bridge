@@ -56,6 +56,16 @@ def price_key(model: str | None) -> str:
     return DEFAULT_MODEL
 
 
+def is_external(model: str | None) -> bool:
+    """A model served by another provider through an Anthropic-compatible endpoint (worker `backends`, e.g.
+    "deepseek-flash"): it never touches the Claude subscription, so it costs nothing in the ledger and quotas."""
+    m = (model or "").strip().lower()
+    if not m or m.startswith("<"):
+        return False
+    m = m.rsplit(".", 1)[-1] if m.startswith(("anthropic.", "us.anthropic.", "eu.anthropic.")) else m
+    return not m.startswith("claude") and not any(fam in m for fam in FAMILY_DEFAULT) and m not in ("default", "best")
+
+
 def _int(v: Any) -> int:
     return int(v) if isinstance(v, int | float) and v > 0 else 0
 
@@ -70,6 +80,8 @@ def token_cost(
     cache_write_1h: Any = 0,
 ) -> float:
     """USD at list price. `cache_write` is the total written; `cache_write_1h` the part of it with the 1-hour TTL."""
+    if is_external(model):
+        return 0.0
     pin, pout, pread = PRICES[price_key(model)]
     write, write_1h = _int(cache_write), min(_int(cache_write_1h), _int(cache_write))
     return (

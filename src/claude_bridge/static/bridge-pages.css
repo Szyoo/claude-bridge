@@ -64,6 +64,7 @@
 .bp-chat .bridge-side-head { view-transition-name: bp-side-head; }
 .bp-chat .bridge-new { view-transition-name: bp-new; }
 .bp-chat .bp-mode { view-transition-name: bp-mode; }
+.bp-chat .bp-backend { view-transition-name: bp-backend; }
 .bp-chat .bridge-list, .bp-chat .bp-home { view-transition-name: bp-body; }
 ::view-transition-group(*) { animation-duration: var(--dur-base); animation-timing-function: var(--ease-out); }
 html[data-vt="fwd"]::view-transition-old(bp-list), html[data-vt="fwd"]::view-transition-old(bp-body) { animation: bp-vt-out-l var(--dur-fast) ease-in both; }

@@ -25,7 +25,7 @@
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';
-    import { api, esc, fmtPct, fmtSeen, toast } from '/static/bridge/bridge-pages.js';
+    import { api, esc, fmtPct, fmtSeen, toast, fmtUsd, fmtBalance } from '/static/bridge/bridge-pages.js';
     import { enhanceSwitches } from '@szyyw/design/switch.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { iconSvg } from '@szyyw/design/icons.js';
@@ -42,6 +42,19 @@
     let mode = store.get('bridge_mode', '') === 'code' ? 'code' : '';
     let project = store.get('bridge_project', '') || null;
     let widget = null, projects = [], agentOnline = true, poll = null, openWhenReady = null;
+    // Claude ⟨switch⟩ another backend (e.g. DeepSeek, admins the worker allows): its threads live in scopes
+    // "<scope>@<name>", so each side has its own thread list, model menu and settings. Shown only when offered.
+    let backends = [], backend = store.get('bridge_backend', '') || '';
+    const sfx = () => backend ? `@${backend}` : '';
+    const backendLabel = () => backends.find(b => b.name === backend)?.label || backend;
+    const backendToggle = () => {
+      const b = backends[0];
+      if (!b) return '';
+      return `<span class="bp-mode bp-backend" role="group" aria-label="后端">`
+        + `<button type="button" class="l${backend ? '' : ' on'}" data-backend="" aria-pressed="${!backend}">Claude</button>`
+        + `<input type="checkbox" class="switch" data-backend-switch data-width="34" data-height="18" aria-label="${esc(b.label)}"${backend ? ' checked' : ''} />`
+        + `<button type="button" class="l${backend ? ' on' : ''}" data-backend="${esc(b.name)}" aria-pressed="${!!backend}">${esc(b.label)}</button></span>`;
+    };
 
     // Chat ⟨switch⟩ Code (@szyyw/design Squish Switch); both words are clickable too
     const toggle = () => `<span class="bp-mode" role="group" aria-label="模式">`
@@ -82,6 +95,15 @@
       if (mode === next) transition(() => show(), next === 'code' ? 'fwd' : 'back');
     }
 
+    async function setBackend(next) {
+      if (next === backend) return;
+      const sw = app.querySelector('[data-backend-switch]');
+      if (sw && sw.checked !== !!next) sw.checked = !!next;
+      for (const b of app.querySelectorAll('.bp-backend [data-backend]')) { const on = b.dataset.backend === next; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+      backend = next; store.set('bridge_backend', backend || null);
+      if (!reduced()) await new Promise(r => setTimeout(r, 300));
+      if (backend === next) transition(() => show(), next ? 'fwd' : 'back');
+    }
     function unmount() { widget?.destroy(); widget = null; clearTimeout(poll); poll = null; }
 
     function mountChat(scope, extra = '', proj = null) {
@@ -95,8 +117,8 @@
           empty: `在 ${proj.name} 里开始：描述你想让 Claude 做的事` },
       } : {};
       widget = mountBridgeWidget(app, client, {
-        scope, title: 'claude-bridge', fill: true, topStart: toggle() + extra, topEnd: ME, sideFoot: '<div class="bp-me bp-me-side"></div>',
-        placeholder: scope ? '让 Claude 读代码、改文件、跑命令' : '输入消息', ...code,
+        scope, title: 'claude-bridge', fill: true, topStart: toggle() + backendToggle() + extra, topEnd: ME, sideFoot: '<div class="bp-me bp-me-side"></div>',
+        placeholder: scope.startsWith('code:') ? `让 ${backend ? backendLabel() : 'Claude'} 读代码、改文件、跑命令` : (backend ? `输入消息（${backendLabel()}）` : '输入消息'), ...code,
         openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
       });
       wireSwitch();
@@ -105,13 +127,14 @@
     }
 
     async function show() {
-      if (mode === '') { document.title = 'claude-bridge · Chat'; return mountChat(''); }
+      const tag = backend ? ` · ${backendLabel()}` : '';
+      if (mode === '') { document.title = `claude-bridge · Chat${tag}`; return mountChat(sfx()); }
       if (project) {
         await loadProjects();
         const p = projects.find(x => x.name === project && x.status === 'ready');
         if (p) {
-          document.title = `claude-bridge · ${p.name}`;
-          return mountChat(`code:${p.name}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>${iconSvg('chevron-down')}</i></button>`, p);
+          document.title = `claude-bridge · ${p.name}${tag}`;
+          return mountChat(`code:${p.name}${sfx()}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>${iconSvg('chevron-down')}</i></button>`, p);
         }
         project = null; store.set('bridge_project', null);
       }
@@ -160,7 +183,7 @@
           <div class="bridge-threads">${side}</div><div class="bridge-side-foot"><div class="bp-me bp-me-side"></div></div></aside>
         <div class="bridge-side-scrim" data-act="side-close"></div>
         <div class="bridge-main">
-          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button>${toggle()}<span class="bridge-title">选择项目</span>${ME}</div>
+          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button>${toggle()}${backendToggle()}<span class="bridge-title">选择项目</span>${ME}</div>
           <div class="bp-home"><main class="bp-wrap narrow">
           <p class="page-sub">每个项目是你专属空间里的一个目录（通常是 git 仓库）。Claude 在项目里读写文件、跑命令，每个项目有自己的对话记录。</p>
           ${agentOnline ? '' : '<div class="callout warn">helper 现在离线：新建 / 克隆会排队，等它上线后执行。</div>'}
@@ -190,6 +213,8 @@
     app.addEventListener('click', async (e) => {
       const m = e.target.closest('.bp-mode [data-mode]');
       if (m) return setMode(m.dataset.mode);
+      const bk = e.target.closest('.bp-backend [data-backend]');
+      if (bk) return setBackend(bk.dataset.backend);
       if (e.target.closest('[data-home]')) { project = null; store.set('bridge_project', null); return transition(() => show(), 'back'); }
       // the project picker's own sidebar (the chat widget handles these itself)
       const act = e.target.closest('.bp-homeview [data-act]')?.dataset.act;
@@ -213,7 +238,10 @@
       const open = e.target.closest('[data-open]');
       if (open) { project = open.dataset.open; store.set('bridge_project', project); return transition(() => show(), 'fwd'); }
     });
-    app.addEventListener('change', (e) => { if (e.target.matches('[data-mode-switch]')) setMode(e.target.checked ? 'code' : ''); });
+    app.addEventListener('change', (e) => {
+      if (e.target.matches('[data-mode-switch]')) setMode(e.target.checked ? 'code' : '');
+      if (e.target.matches('[data-backend-switch]')) setBackend(e.target.checked ? (backends[0]?.name || '') : '');
+    });
     app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches?.('[data-open]')) e.target.click(); });
     app.addEventListener('submit', async (e) => {
       const f = e.target.closest('[data-form]');
@@ -240,7 +268,12 @@
       const parts = [['five_hour', '5h'], ['seven_day', '周']]
         .filter(([k]) => us[k].used_pct != null)
         .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}${us[k].limit_pct != null ? `/${fmtPct(us[k].limit_pct)}` : ''}`);
-      const sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
+      let sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
+      const bk = backend && (d.backends || []).find(b => b.name === backend);
+      if (bk) {  // the backend side: its own API-priced use in the last 24 h and the provider's balance
+        const bal = fmtBalance(bk.balance);
+        sub = `${bk.label} 24h ${fmtUsd(bk.usage.day.cost_usd)}${bal ? ` · 余额 ${bal}` : ''}`;
+      }
       const html = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
         + `<span class="n">${esc((d.sso && d.sso.portal_user) || u.display_name || u.username)}</span><span class="u${us.blocked ? ' full' : ''}">${esc(sub)}</span></a>`
         + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin">管理</a>' : '')
@@ -248,6 +281,9 @@
         + (d.sso ? '' : '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>');
       for (const b of boxes) b.innerHTML = html;
     }
+    // which backends this account may switch to (none for most accounts); a stale saved choice falls back to Claude
+    try { backends = ((await api('GET', '/api/me')).backends || []).map(b => ({ name: b.name, label: b.label })); } catch {}
+    if (backend && !backends.some(b => b.name === backend)) { backend = ''; store.set('bridge_backend', null); }
     show();
     setInterval(renderMe, 120000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) renderMe(); });

@@ -421,6 +421,9 @@ def create_multiuser_app(
     @app.get("/api/me")
     def me(user: dict[str, Any] = Depends(api_user)):
         out = {"user": public_user(user), "usage": accounts.usage_for(user)}
+        backends = bridge.service.backend_usage(str(user["id"])) if user["role"] == "admin" else []
+        if backends:
+            out["backends"] = backends
         if sso:
             out["sso"] = {"portal": portal, "portal_user": user.get("portal_user"), "portal_sub": user.get("portal_sub")}
         return out

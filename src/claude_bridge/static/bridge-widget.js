@@ -1703,7 +1703,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   async function loadSettings() {
     if (!o.showSettings) return;
     try {
-      const s = await client.settings();
+      const s = await client.settings(o.scope);
       state.settings = s;
       cp.effort = s.chat.effort || '';
       renderPickers();
@@ -1715,7 +1715,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     } catch (e) { toast(e.message, true); }
   }
   async function saveSetting(patch) {
-    try { const d = await client.saveSettings(patch); if (state.settings) state.settings.chat = d.chat; toast('设置已保存，下一条消息生效'); loadSettings(); }
+    try { const d = await client.saveSettings(patch, o.scope); if (state.settings) state.settings.chat = d.chat; toast('设置已保存，下一条消息生效'); loadSettings(); }
     catch (e) { toast(e.message, true); }
   }
 

@@ -138,3 +138,13 @@ export function shareLine(w) {
   if (w.outside_pct != null) bits.push(`bridge 之外 ${fmtPct(w.outside_pct)}`);
   return `整个账户已用 ${fmtPct(w.account_pct)}：${bits.join(' · ')}`;
 }
+
+// ---- worker backends (e.g. DeepSeek): their own API-priced use and the provider's account balance ----
+export const fmtUsd = (v) => v == null ? '—' : v > 0 && v < 0.01 ? '<$0.01' : `$${Number(v).toFixed(2)}`;
+export const fmtTok = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n || 0);
+// DeepSeek's /user/balance: {is_available, balance_infos: [{currency, total_balance, …}]}
+export function fmtBalance(b) {
+  const infos = b?.balance_infos;
+  if (!Array.isArray(infos) || !infos.length) return '';
+  return infos.map(i => `${i.currency === 'CNY' ? '¥' : i.currency === 'USD' ? '$' : `${i.currency} `}${i.total_balance}`).join(' + ');
+}

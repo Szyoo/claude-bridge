@@ -124,6 +124,8 @@ class Callers:
             raise BridgeError(f"已有调用方 {name}", status=409)
         if not scopes:
             raise BridgeError("至少要给一个 scope")
+        if any("@" in s for s in scopes):
+            raise BridgeError("调用方不能用其他后端的 scope（只限网页端）")
         if not 1 <= max_inflight <= 20:
             raise BridgeError("max_inflight 需在 1..20")
         token = new_token()
@@ -304,7 +306,7 @@ def create_caller_router(
     @router.post("/tasks", status_code=201)
     def submit(body: CallerTaskIn, c: dict[str, Any] = Depends(caller)):
         cleanup()
-        if body.scope not in c["scopes"]:
+        if body.scope not in c["scopes"] or "@" in body.scope:
             return _fail(403, "scope", f"这个调用方不能用 scope {body.scope!r}")
         principal = principal_for(c)
         if principal is None:

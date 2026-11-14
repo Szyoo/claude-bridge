@@ -26,7 +26,11 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from claude_bridge._version import __version__
+from claude_bridge.backends import NAME_RE as BACKEND_NAME_RE
+from claude_bridge.backends import split_backend
 from claude_bridge.client import BridgeClient, BridgeClientError
 from claude_bridge.local_usage import TranscriptScanner, session_usage
 from claude_bridge.stream_json import (
@@ -86,6 +90,63 @@ def load_profiles(path: str | Path) -> dict[str, WorkerProfile]:
     """JSON `{scope: {profile keys}}`; the scope "" is the default chat."""
     raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
     return {str(k): WorkerProfile.from_dict(v) for k, v in raw.items() if not str(k).startswith("_")}
+
+
+@dataclass
+class Backend:
+    """Another provider behind an Anthropic-compatible endpoint (e.g. DeepSeek), for chosen admin accounts.
+
+    Its threads live in their own scopes ("<scope>@<name>": a separate thread list on the page). `env` goes into
+    claude's environment for those turns (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, …); `models` fill that
+    page's model menu (`id` = the name passed to `--model`); `owners` are the account ids allowed to use it.
+    `pricing` (USD per million tokens, by model) and `peak` let the server book the turns at the provider's API
+    rates; `balance_url` (GET with the token) is polled for the account balance. None of `env` leaves this machine.
+    """
+
+    env: dict[str, str] = field(default_factory=dict)
+    models: list[dict[str, str]] = field(default_factory=list)
+    owners: list[str] = field(default_factory=list)
+    label: str = ""
+    pricing: dict[str, dict[str, float]] = field(default_factory=dict)
+    peak: dict[str, Any] = field(default_factory=dict)
+    balance_url: str = ""
+
+    @classmethod
+    def from_dict(cls, name: str, d: dict[str, Any]) -> Backend:
+        unknown = set(d) - {f.name for f in fields(cls)}
+        if unknown:
+            raise ValueError(f"backend {name!r}: unknown keys {sorted(unknown)}")
+        env = {str(k): str(v) for k, v in (d.get("env") or {}).items()}
+        models = [{"id": str(m["id"]), "name": str(m.get("name") or m["id"])} for m in d.get("models") or [] if m.get("id")]
+        owners = [str(o) for o in d.get("owners") or [] if str(o)]
+        if not env.get("ANTHROPIC_BASE_URL") or not models or not owners:
+            raise ValueError(f"backend {name!r} needs env.ANTHROPIC_BASE_URL, models and owners")
+        pricing = {str(k): {f: float(v[f]) for f in ("input", "cache_read", "output") if f in v}
+                   for k, v in (d.get("pricing") or {}).items() if isinstance(v, dict)}
+        return cls(env=env, models=models, owners=owners, label=str(d.get("label") or name), pricing=pricing,
+                   peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""))
+
+    def public(self, name: str) -> dict[str, Any]:
+        """What the server may know: no env (the API key)."""
+        return {"name": name, "label": self.label, "owners": list(self.owners), "models": list(self.models),
+                "pricing": self.pricing, "peak": self.peak}
+
+
+# Claude credentials a backend turn must not carry: they would be sent to the other provider's endpoint
+CLAUDE_CREDENTIAL_ENV = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL")
+
+
+def load_backends(path: str | Path) -> dict[str, Backend]:
+    """JSON `{name: {env, models, owners, label}}` — keep the file private (it holds the provider's API key)."""
+    raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    out = {}
+    for name, d in raw.items():
+        if str(name).startswith("_"):
+            continue
+        if not BACKEND_NAME_RE.match(str(name)):
+            raise ValueError(f"bad backend name {name!r}")
+        out[str(name)] = Backend.from_dict(str(name), d)
+    return out
 
 
 def _owner_dir(owner: Any) -> str:
@@ -156,6 +217,10 @@ class WorkerConfig:
     kill_grace: float = 3.0
     # scope → overrides; jobs carry their thread's scope and owner. Built-in knobs below are the fallback.
     profiles: dict[str, WorkerProfile] = field(default_factory=dict)
+    # other providers for chosen accounts (see Backend); a job uses one when its scope ends in "@<name>"
+    backends: dict[str, Backend] = field(default_factory=dict)
+    drop_env: tuple[str, ...] = ()  # removed from claude's environment (set for backend turns)
+    backend_report_interval: float = 600  # backends + their balances to the server
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
     settings: dict[str, Any] | str | None = None
@@ -218,6 +283,7 @@ class Worker:
         self._probed_version: str | None = None
         self._next_usage_probe = 0.0
         self._usage_warned = False
+        self._next_backend_report = 0.0
         self._scanner: TranscriptScanner | None = None
         self._scan_thread: threading.Thread | None = None
         self._next_scan = 0.0
@@ -243,6 +309,7 @@ class Worker:
             try:
                 self.maybe_probe_models()
                 self.maybe_probe_usage()
+                self.maybe_report_backends()
                 self.maybe_scan_local_usage()
                 try:
                     self.hooks.tick()
@@ -443,17 +510,61 @@ class Worker:
     def config_for(self, payload: dict[str, Any] | None) -> WorkerConfig:
         """The worker config with the job's scope profile applied (cwd resolved per owner and created)."""
         payload = payload or {}
-        scope = str(payload.get("scope") or "")
+        scope, scope_backend = split_backend(str(payload.get("scope") or ""))
         base, _, project = scope.partition(":")
         prof = self.config.profiles.get(scope) or (self.config.profiles.get(base) if project else None)
-        if prof is None:
-            return self.config
-        over = {f.name: getattr(prof, f.name) for f in fields(prof) if getattr(prof, f.name) is not None}
-        if "cwd" in over:
-            cwd = self.profile_dir(str(over["cwd"]), payload.get("owner"), project)
-            cwd.mkdir(parents=True, exist_ok=True)
-            over["cwd"] = cwd
-        return replace(self.config, **over)
+        cfg = self.config
+        if prof is not None:
+            over = {f.name: getattr(prof, f.name) for f in fields(prof) if getattr(prof, f.name) is not None}
+            if "cwd" in over:
+                cwd = self.profile_dir(str(over["cwd"]), payload.get("owner"), project)
+                cwd.mkdir(parents=True, exist_ok=True)
+                over["cwd"] = cwd
+            cfg = replace(cfg, **over)
+        name = scope_backend  # only the scope decides: the server books the turn by its scope
+        if name:
+            backend = self.config.backends.get(name)
+            if backend is None:
+                raise RuntimeError(f"worker 没有配置后端 {name}")
+            if str(payload.get("owner") or "") not in backend.owners:
+                raise RuntimeError(f"这个账户不能使用后端 {name}")
+            cfg = replace(cfg, extra_env={**cfg.extra_env, **backend.env},
+                          drop_env=tuple(k for k in CLAUDE_CREDENTIAL_ENV if k not in backend.env))
+        return cfg
+
+    def backend_report(self) -> dict[str, Any]:
+        """The backends (without their env) and each one's account balance, for the server."""
+        return {"backends": [b.public(name) for name, b in self.config.backends.items()],
+                "balances": {name: bal for name, b in self.config.backends.items()
+                             if b.balance_url and (bal := self._backend_balance(b)) is not None}}
+
+    @staticmethod
+    def _backend_balance(b: Backend) -> dict[str, Any] | None:
+        token = b.env.get("ANTHROPIC_AUTH_TOKEN") or b.env.get("ANTHROPIC_API_KEY") or ""
+        try:
+            r = requests.get(b.balance_url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                             timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, dict) else None
+        except (requests.RequestException, ValueError) as e:
+            log.warning("backend balance failed: %s", e)
+            return None
+
+    def maybe_report_backends(self) -> None:
+        """At start and every `backend_report_interval`: what the server needs to offer and book the backends."""
+        if not self.config.backends:
+            return
+        now = time.monotonic()
+        if now < self._next_backend_report:
+            return
+        self._next_backend_report = now + self.config.backend_report_interval
+        try:
+            self.client.report_backends(self.backend_report())
+        except BridgeClientError as e:
+            log.warning("backend report failed: %s", e)
+        except Exception:
+            log.exception("backend report failed")
 
     @staticmethod
     def profile_dir(template: str, owner: Any, project: str = "") -> Path:
@@ -539,8 +650,12 @@ class Worker:
 
     # ---------------- session commands (/context, /compact) ----------------
 
-    def _session_env(self) -> dict[str, str]:
-        return {**os.environ, **self.config.extra_env}
+    def _session_env(self, cfg: WorkerConfig | None = None) -> dict[str, str]:
+        cfg = cfg or self.config
+        env = {**os.environ, **cfg.extra_env}
+        for key in cfg.drop_env:
+            env.pop(key, None)
+        return env
 
     # ---------------- models the local CLI supports ----------------
 
@@ -713,7 +828,7 @@ class Worker:
             cmd += ["--model", model]
         try:
             proc = subprocess.run(
-                cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(), capture_output=True, text=True,
+                cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(cfg), capture_output=True, text=True,
                 timeout=60, stdin=subprocess.DEVNULL,
             )
             envelope = next((ev for ev in reversed(list(iter_stream(iter(proc.stdout.splitlines())))) if ev.get("type") == "result"), None)
@@ -741,7 +856,7 @@ class Worker:
         if model:
             cmd += ["--model", model]
         proc = subprocess.Popen(
-            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(), stdout=subprocess.PIPE,
+            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(cfg), stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
         )
         out: dict[str, str] = {}
@@ -1049,7 +1164,7 @@ class ChatRunner:
         if p.get('client_tools'):
             cmd += ['--mcp-config',self.mcp_config]
         stdin_data = stream_json_user_message(prompt, images) if input_json else prompt
-        env = {**os.environ, **self.cfg.extra_env, **self.worker.hooks.env(p)}
+        env = {**self.worker._session_env(self.cfg), **self.worker.hooks.env(p)}
         # The model's shell and MCP children must not inherit control-plane credentials.
         for key in ('CLAUDE_BRIDGE_AGENT_TOKEN','CLAUDE_BRIDGE_SECRET','CLAUDE_BRIDGE_PASSWORD'):
             env.pop(key,None)

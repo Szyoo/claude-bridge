@@ -67,6 +67,9 @@ class BridgeClient:
     def report_models(self, report: dict[str, Any]) -> None:
         self._call("POST", "/models", json=report)
 
+    def report_backends(self, report: dict[str, Any]) -> None:
+        self._call("POST", "/backends", json=report)
+
     def report_limits(self, report: dict[str, Any]) -> None:
         self._call("POST", "/limits", json=report)
 

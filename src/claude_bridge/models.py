@@ -143,6 +143,24 @@ class AgentModelsIn(BaseModel):
     pinned: list[ModelEntry] = Field(default_factory=list, max_length=100)
 
 
+class BackendInfo(BaseModel):
+    """A worker backend as the server sees it (no env / API key)."""
+
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,31}$")
+    label: str = Field("", max_length=60)
+    owners: list[str] = Field(default_factory=list, max_length=50)
+    models: list[ModelEntry] = Field(default_factory=list, max_length=20)
+    pricing: dict[str, dict[str, float]] = Field(default_factory=dict)  # model → {input, cache_read, output} USD/1M
+    peak: dict[str, Any] = Field(default_factory=dict)  # {"utc_hours": [[1, 4], …], "weekdays_only", "multiplier"}
+
+
+class AgentBackendsIn(BaseModel):
+    """The worker's backends and each one's account balance (the provider's own JSON), every few minutes."""
+
+    backends: list[BackendInfo] = Field(default_factory=list, max_length=10)
+    balances: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
 class AgentLimitsIn(BaseModel):
     """Whole percentages from `claude -p "/usage"`; None when the CLI did not show that window."""
 

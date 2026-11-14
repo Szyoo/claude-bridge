@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_bridge._version import REPO, __version__
+from claude_bridge.backends import BackendLedger, split_backend
 from claude_bridge.broker import Broker
 from claude_bridge.calibration import estimate_capacity
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
@@ -28,6 +29,7 @@ from claude_bridge.store import EPHEMERAL_KEY_PREFIX, INFLIGHT, BridgeStore, aut
 
 log = logging.getLogger(__name__)
 
+BACKEND_DENIED = "这个后端只对指定的管理员开放"
 DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
 DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
 SESSION_JOB_KINDS = ("context", "compact")  # jobs that act on a thread's Claude session; the page shows their progress
@@ -123,6 +125,7 @@ class BridgeService:
         self.broker = broker
         self.config = config or BridgeConfig()
         self.store.init_client_tools()
+        self.backend_ledger = BackendLedger(store)
         self.reprice_ledger()
         self.backfill_util_samples()
         self._capacity_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
@@ -144,6 +147,10 @@ class BridgeService:
     # ---------------- threads ----------------
 
     def _check_scope(self, scope: str, owner: str = "") -> None:
+        base, backend = split_backend(scope)
+        if backend:
+            self.check_backend(backend, owner)
+        scope = base
         allowed = self.config.scopes
         if allowed is None:
             return
@@ -254,9 +261,13 @@ class BridgeService:
         existing = next((j for j in self.store.active_jobs(thread_id, (kind,))), None)
         if existing:  # a second click while one is queued / running just reports the same job
             return {"job_id": existing["id"], "thread": thread_id, "agent_online": self.agent_online(), "job": job_frame(existing)}
-        if kind == "compact" and self.config.check_quota:  # /context is local and free; /compact asks the model
+        backend = split_backend(th.get("scope") or "")[1]
+        if backend:
+            self.check_backend(backend, principal.owner, principal)
+        elif kind == "compact" and self.config.check_quota:  # /context is local and free; /compact asks the model
             self.config.check_quota(principal)
-        payload = {"thread": thread_id, "session_id": th["session_id"], "settings": self.settings(principal.owner),
+        payload = {"thread": thread_id, "session_id": th["session_id"],
+                   "settings": self.settings(principal.owner, th.get("scope") or ""),
                    "scope": th.get("scope") or "", "owner": principal.owner}
         jid = self.store.enqueue_job(kind, payload)
         job = self.store.get_job(jid) or {"id": jid, "kind": kind, "status": "queued"}
@@ -294,7 +305,12 @@ class BridgeService:
             validate_tools([tool.model_dump() for tool in client_tools])
             if len(json.dumps(client_environment or {},ensure_ascii=False).encode()) > 16000:
                 raise BadRequest('client environment is too large')
-        turn_settings = self.settings(owner)
+        # a backend thread ("…@deepseek") has its own settings and model menu
+        turn_scope = ((self.store.get_thread(thread_id) or {}).get("scope") or "") if thread_id else scope
+        backend = split_backend(turn_scope)[1]
+        if backend:
+            self.check_backend(backend, owner, principal)
+        turn_settings = self.settings(owner, turn_scope)
         if options is not None:
             patch = options.model_dump(exclude_none=True)
             if 'effort' in patch:
@@ -302,7 +318,8 @@ class BridgeService:
                 if patch['effort'] and patch['effort'] not in self.config.effort_choices:
                     raise BadRequest('unsupported effort')
             if 'model' in patch:
-                patch['model'] = self.config.model_aliases.get(patch['model'].strip(),patch['model'].strip())
+                patch['model'] = self._backend_model(backend, patch['model']) if backend else \
+                    self.config.model_aliases.get(patch['model'].strip(),patch['model'].strip())
             turn_settings.update(patch)
         text = (text or "").strip()
         file_ids = list(dict.fromkeys(files or []))
@@ -313,7 +330,7 @@ class BridgeService:
         self._check_files(file_ids, owner)
         if thread_id:
             self.own_thread(thread_id, owner)
-        if self.config.check_quota:
+        if self.config.check_quota and not backend:  # a backend is paid per API call, not from the Claude quota
             self.config.check_quota(principal)
         self.purge_ephemeral()
         if thread_id:
@@ -418,7 +435,8 @@ class BridgeService:
                 return None
             owner = th.get("owner") or ""
             user_msgs, asst_msg, payload = self._open_turn(
-                thread, th, owner, [(q["text"], [f["id"] for f in q["files"]]) for q in items], self.settings(owner),
+                thread, th, owner, [(q["text"], [f["id"] for f in q["files"]]) for q in items],
+                self.settings(owner, th.get("scope") or ""),
                 strict=False)
         for m in user_msgs:
             self._pub(thread, "message", m)
@@ -599,21 +617,33 @@ class BridgeService:
 
     # ---------------- settings / status ----------------
 
-    def settings(self, owner: str = "") -> dict[str, Any]:
+    def settings(self, owner: str = "", scope: str = "") -> dict[str, Any]:
+        """Claude's settings, or a backend's own ones for a backend scope ("…@name"): its model is always one of
+        the backend's models (the first by default)."""
+        backend = split_backend(scope)[1]
         try:
-            saved = json.loads(self.store.get_meta(self.meta_key(owner, "settings")) or "{}")
+            saved = json.loads(self.store.get_meta(self.meta_key(owner, self._settings_key(backend))) or "{}")
         except json.JSONDecodeError:
             saved = {}
         defaults = self.config.default_settings
         cur = {**defaults, **{k: v for k, v in saved.items() if k in defaults}}
         model = cur.get("model") or ""
-        cur["model"] = self.config.model_aliases.get(model, model)
+        cur["model"] = self._backend_model(backend, model, strict=False) if backend else self.config.model_aliases.get(model, model)
         return cur
 
-    def save_settings(self, patch: dict[str, Any], owner: str = "") -> dict[str, Any]:
-        cur = self.settings(owner)
+    @staticmethod
+    def _settings_key(backend: str) -> str:
+        return f"settings@{backend}" if backend else "settings"
+
+    def save_settings(self, patch: dict[str, Any], owner: str = "", scope: str = "",
+                      principal: Principal | None = None) -> dict[str, Any]:
+        backend = split_backend(scope)[1]
+        if backend:
+            self.check_backend(backend, owner, principal)
+        cur = self.settings(owner, scope)
         if "model" in patch and patch["model"] is not None:
-            cur["model"] = str(patch["model"]).strip()
+            model = str(patch["model"]).strip()
+            cur["model"] = self._backend_model(backend, model) if backend else model
         if "effort" in patch and patch["effort"] is not None:
             eff = str(patch["effort"]).strip().lower()
             if eff and eff not in self.config.effort_choices:
@@ -626,8 +656,8 @@ class BridgeService:
             cur["max_turns"] = n
         if "auto_context" in patch and patch["auto_context"] is not None:
             cur["auto_context"] = bool(patch["auto_context"])
-        self.store.set_meta(self.meta_key(owner, "settings"), json.dumps(cur, ensure_ascii=False))
-        return self.settings(owner)
+        self.store.set_meta(self.meta_key(owner, self._settings_key(backend)), json.dumps(cur, ensure_ascii=False))
+        return self.settings(owner, scope)
 
     # ---------------- models (reported by the worker's CLI) ----------------
 
@@ -653,9 +683,12 @@ class BridgeService:
             return None
         return data if isinstance(data, dict) and (data.get("aliases") or data.get("pinned")) else None
 
-    def model_choices(self) -> list[dict[str, str]]:
+    def model_choices(self, scope: str = "") -> list[dict[str, str]]:
         """The worker's report when there is one (aliases that follow the CLI's newest + pinned ids it recognised),
-        else the host's static list."""
+        else the host's static list. A backend scope gets that backend's models instead."""
+        backend = split_backend(scope)[1]
+        if backend:
+            return [{"id": m["id"], "label": m.get("name") or m["id"]} for m in (self.backend_info(backend) or {}).get("models") or []]
         rep = self.agent_models()
         if not rep:
             return [dict(m) for m in self.config.model_choices]
@@ -664,6 +697,55 @@ class BridgeService:
         out += [{"id": a["id"], "label": latest_label(a["name"]), "group": "跟随 CLI 最新"} for a in rep["aliases"]]
         out += [{"id": p["id"], "label": p["name"], "group": "固定版本"} for p in rep["pinned"]]
         return out
+
+    # ---------------- worker backends (other providers for chosen admins) ----------------
+
+    def save_backends(self, report: dict[str, Any]) -> None:
+        data = {"backends": report.get("backends") or [], "balances": report.get("balances") or {},
+                "reported_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
+        self.store.set_meta("agent_backends", json.dumps(data, ensure_ascii=False))
+
+    def _backends_meta(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.store.get_meta("agent_backends") or "null")
+        except json.JSONDecodeError:
+            data = None
+        return data if isinstance(data, dict) else {}
+
+    def backend_info(self, name: str) -> dict[str, Any] | None:
+        return next((b for b in self._backends_meta().get("backends") or [] if b.get("name") == name), None)
+
+    def backend_allowed(self, name: str, owner: str) -> bool:
+        info = self.backend_info(name)
+        return bool(info and owner and owner in [str(o) for o in info.get("owners") or []])
+
+    def check_backend(self, name: str, owner: str, principal: Principal | None = None) -> None:
+        if not self.backend_allowed(name, owner) or (principal is not None and not principal.admin):
+            raise BadRequest(BACKEND_DENIED)
+
+    def _backend_model(self, backend: str, model: str, *, strict: bool = True) -> str:
+        """A model of the backend: "" = its first; an unknown one is refused (`strict`) or replaced by the first."""
+        ids = [m["id"] for m in (self.backend_info(backend) or {}).get("models") or []]
+        model = (model or "").strip()
+        if model in ids:
+            return model
+        if model and strict:
+            raise BadRequest(f"这个后端没有模型 {model}")
+        return ids[0] if ids else ""
+
+    def backends_for(self, owner: str, admin: bool = True) -> list[dict[str, str]]:
+        """The backends this account may switch to on the page (admins only)."""
+        if not admin:
+            return []
+        return [{"name": b["name"], "label": b.get("label") or b["name"]}
+                for b in self._backends_meta().get("backends") or [] if self.backend_allowed(b.get("name") or "", owner)]
+
+    def backend_usage(self, owner: str) -> list[dict[str, Any]]:
+        """Per allowed backend: its own API-priced use (24 h / 7 d / 30 d) and the provider's account balance."""
+        meta = self._backends_meta()
+        return [{**b, "usage": self.backend_ledger.totals(owner, b["name"]),
+                 "balance": (meta.get("balances") or {}).get(b["name"]), "reported_at": meta.get("reported_at")}
+                for b in self.backends_for(owner)]
 
     def versions(self) -> dict[str, Any]:
         """claude-bridge on the server, and on the worker as of its last model report (None until it reports)."""
@@ -769,7 +851,7 @@ class BridgeService:
             owner = str(job["payload"].get("owner") or "")
             for e in body.events or []:
                 if e.type in USAGE_EVENTS:
-                    self._record_usage(owner, e.data, job_id=job_id, kind=job["kind"])
+                    self._record_usage(owner, e.data, job_id=job_id, kind=job["kind"], scope=job["payload"].get("scope") or "")
             return {"ok": True, "cancel": stop}
         mid, thread = msg["id"], msg["thread"]
         owner = ((self.store.get_thread(thread) or {}).get("owner") or "")
@@ -806,8 +888,10 @@ class BridgeService:
                 ev = self.store.add_event(mid, etype, data)
                 frames.append(("event", ev, ev["id"]))
                 if etype in USAGE_EVENTS:
-                    self._record_usage(owner, data, thread=thread, message_id=mid, job_id=job_id, kind=job["kind"])
-                elif etype == "rate_limit":
+                    self._record_usage(owner, data, thread=thread, message_id=mid, job_id=job_id, kind=job["kind"],
+                                       scope=job["payload"].get("scope") or "")
+                elif etype == "rate_limit" and not split_backend(job["payload"].get("scope") or "")[1]:
+                    # another provider's limits are not the Claude subscription's
                     self.note_rate_limit(data)
         for ftype, data, fid in frames:
             self._pub(thread, ftype, data, id=fid)
@@ -970,10 +1054,14 @@ class BridgeService:
                 "cache_read_tokens": usage.get("cache_read_input_tokens"),
                 "cache_write_tokens": usage.get("cache_creation_input_tokens")}
 
-    def _record_usage(self, owner: str, data: dict[str, Any], **kw: Any) -> None:
+    def _record_usage(self, owner: str, data: dict[str, Any], *, scope: str = "", **kw: Any) -> None:
         # priced from this invocation's tokens; the CLI's total_cost_usd is cumulative on resumed sessions.
         # `by_model` (turns read back from the transcript) prices each model's share at its own rate.
         if not has_tokens(data):
+            return
+        backend = split_backend(scope)[1]
+        if backend:  # the provider's own ledger at its API rates; never the Claude quota
+            self.backend_ledger.add(owner, backend, self.backend_info(backend) or {}, data, **kw)
             return
         parts = [m for m in data.get("by_model") or [] if isinstance(m, dict) and has_tokens(m)]
         cost = sum(usage_cost(m.get("model"), m) for m in parts) if parts else usage_cost(data.get("model"), data)
@@ -995,9 +1083,16 @@ class BridgeService:
             return
         if not isinstance(meta, dict):
             return
+        th = self.store.get_thread(thread) or {}
+        backend = split_backend(th.get("scope") or "")[1]
+        if backend:
+            usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
+            self.backend_ledger.add(th.get("owner") or "", backend, self.backend_info(backend) or {},
+                                    {**usage, "model": meta.get("model")}, thread=thread, job_id=job_id, kind="compact")
+            return
         cost, usage = self._compact_cost(meta)
         if cost > 0:
-            owner = (self.store.get_thread(thread) or {}).get("owner") or ""
+            owner = th.get("owner") or ""
             self.store.add_usage(owner, cost_usd=cost, thread=thread, job_id=job_id, kind="compact",
                                  model=meta.get("model"), **self._ledger_tokens(usage))
 

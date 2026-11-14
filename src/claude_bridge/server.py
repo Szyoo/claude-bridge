@@ -13,10 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from claude_bridge.auth import bearer_auth
+from claude_bridge.backends import split_backend
 from claude_bridge.broker import Broker
 from claude_bridge.client_tools import ClientToolService
 from claude_bridge.errors import BridgeError
 from claude_bridge.models import (
+    AgentBackendsIn,
     AgentChatIn,
     AgentConfigIn,
     AgentLimitsIn,
@@ -281,11 +283,15 @@ def create_bridge(
     def delete_project(name: str, p: Principal = Depends(who)):
         return _svc(service.delete_project, p.owner, name)
 
+    # `scope` matters for a backend scope ("…@deepseek"): its own settings and model menu
     @browser.get("/settings")
-    def get_settings(p: Principal = Depends(who)):
+    def get_settings(scope: str = Query("", max_length=200), p: Principal = Depends(who)):
+        if split_backend(scope)[1]:
+            _svc(service.check_backend, split_backend(scope)[1], p.owner, p)
         return {
-            "chat": service.settings(p.owner),
-            "models": service.model_choices(),
+            "chat": service.settings(p.owner, scope),
+            "models": service.model_choices(scope),
+            "backends": service.backends_for(p.owner, p.admin),
             "models_info": service.models_info(),
             "bridge": service.versions(),
             "efforts": config.effort_choices,
@@ -295,8 +301,8 @@ def create_bridge(
         }
 
     @browser.put("/settings")
-    def put_settings(body: SettingsIn, p: Principal = Depends(who)):
-        return {"chat": _svc(service.save_settings, body.model_dump(exclude_unset=True), p.owner)}
+    def put_settings(body: SettingsIn, scope: str = Query("", max_length=200), p: Principal = Depends(who)):
+        return {"chat": _svc(service.save_settings, body.model_dump(exclude_unset=True), p.owner, scope, p)}
 
     # the shared namespace sees every job (host job kinds included); a user only the jobs on their own threads
     @browser.get("/jobs")
@@ -387,6 +393,11 @@ def create_bridge(
     @agent.post("/models")
     def a_report_models(body: AgentModelsIn):
         return service.save_agent_models(body.model_dump())
+
+    @agent.post("/backends")
+    def a_report_backends(body: AgentBackendsIn):
+        service.save_backends(body.model_dump())
+        return {"ok": True}
 
     return Bridge(
         store=store, config=config, broker=broker, service=service, browser_router=browser, agent_router=agent,

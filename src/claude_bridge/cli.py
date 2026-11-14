@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from claude_bridge.client import BridgeClient, BridgeClientError
-from claude_bridge.worker import Worker, WorkerConfig, load_profiles
+from claude_bridge.worker import Worker, WorkerConfig, load_backends, load_profiles
 
 
 def env(name: str, default: str = "") -> str:
@@ -95,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--worker-name", default=env("WORKER_NAME"))
     w.add_argument("--profiles", default=env("PROFILES"),
                    help='JSON {scope: overrides} — e.g. "" (chat) without tools, "code" with full permissions; cwd may use {owner}')
+    w.add_argument("--backends", default=env("BACKENDS"),
+                   help="private JSON {name: {env, models, owners}}: other providers (Anthropic-compatible) for chosen accounts")
     w.add_argument("--concurrency", type=int, default=int(env("CONCURRENCY", "1")),
                    help="jobs run at the same time (default 1); the Messages-compatible endpoint wants a few")
     w.add_argument("--scan-local-usage", action="store_true", default=env("SCAN_LOCAL_USAGE") == "1",
@@ -173,6 +175,8 @@ def worker_from_args(args: argparse.Namespace) -> Worker:
         cfg.worker_name = args.worker_name
     if args.profiles:
         cfg.profiles = load_profiles(args.profiles)
+    if args.backends:
+        cfg.backends = load_backends(args.backends)
     return Worker(BridgeClient(args.url, args.token), cfg)
 
 

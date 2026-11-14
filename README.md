@@ -58,11 +58,24 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 | `CLAUDE_BRIDGE_IDLE_TIMEOUT` / `_CHAT_TIMEOUT` | 一轮对话连续多少秒没有任何输出（文字、思考、工具调用或结果）就停止（缺省 1200）/ 一轮最长运行秒数（缺省 7200）；`0` = 不限。profile 里可用 `idle_timeout` / `chat_timeout` 按模式覆盖 |
 | `CLAUDE_BRIDGE_ALLOWED_TOOLS` / `_PERMISSION_MODE` / `_SYSTEM_PROMPT` / `_SYSTEM_PROMPT_FILE` | 对应的 `claude` 参数 |
 | `CLAUDE_BRIDGE_PROFILES` | 按模式（scope）覆盖工作目录、工具、权限的 JSON 文件 |
+| `CLAUDE_BRIDGE_BACKENDS` | 其他后端（Anthropic 兼容接口，如 DeepSeek）的私有 JSON 文件，只给指定管理员的网页端用，见下方「其他后端」 |
 | `CLAUDE_BRIDGE_SCAN_LOCAL_USAGE` | `1` = worker 上报本机所有 Claude Code 会话的用量（读 `~/.claude/projects` 的 transcript，只发送每分钟的 token 合计与 API 标价等价，不含内容），用于自动标定额度 |
 | `CLAUDE_BRIDGE_CONCURRENCY` | worker 同时执行的任务数（缺省 1）；多用户模式下管理员可在「管理 › helper」覆盖，约 30 秒生效 |
 | `CLAUDE_BRIDGE_CLIENT_TOOLS` / `_CONTENT_BLOCKS` | `1` = 启用调用方工具 / 完整内容流（见 [docs/caller-tools-and-content.md](docs/caller-tools-and-content.md)） |
 
 命令行参数优先于环境变量；`--env-file PATH` 可从文件读入变量。部署示例见 [deploy/](deploy/)。
+
+### 其他后端
+
+worker 可以给指定的管理员一个「Claude ⟨开关⟩ DeepSeek」切换（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`，里面有对方的 API key），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
+
+- `owners`：可以使用的账户 id；还要求该账户当前是 admin。普通用户、API 令牌和调用方（callers）都用不了
+- `models`：切到这个后端时模型菜单里的选项，`id` 即传给 `--model` 的模型名，第一个为默认
+- `env`：这些对话里 `claude` 的环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 等）；worker 自身的 Claude 凭据（`CLAUDE_CODE_OAUTH_TOKEN` 等）不会带进这些对话，API key 也不会上报服务端
+- `pricing` / `peak`：按对方 API 价格记账用（美元 / 百万 token，按模型名匹配；`peak` 为高峰时段与倍数）
+- `balance_url`：可选，worker 每 10 分钟用 key 查一次账户余额，显示在页面上
+
+切到这个后端后，对话列表、模型菜单和设置都是它自己的（对话的 scope 是 `<原 scope>@<后端名>`，Code 模式下用同一个项目目录）。它的用量单独记账，按对方的 API 价格估算（区分缓存命中、未命中和高峰时段；节假日不识别，按高峰价估，宁高勿低），显示在页面右上角和「我的账户」，不计入 Claude 额度，也不参与额度标定。
 
 ### Docker
 

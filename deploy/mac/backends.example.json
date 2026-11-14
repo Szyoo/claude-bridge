@@ -1,0 +1,26 @@
+{
+  "_comment": "复制到仓库外的私有位置（chmod 600），用 CLAUDE_BRIDGE_BACKENDS 指向它。owners 是可用的账户 id（还须是 admin）。价格为美元 / 百万 token，以 DeepSeek 官网当期价格为准。",
+  "deepseek": {
+    "label": "DeepSeek",
+    "owners": ["1"],
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+      "ANTHROPIC_AUTH_TOKEN": "<DeepSeek API key>",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-flash[1m]",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash[1m]",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-flash",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432"
+    },
+    "models": [
+      {"id": "deepseek-flash[1m]", "name": "DeepSeek Flash（1M）"},
+      {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro"}
+    ],
+    "pricing": {
+      "flash": {"input": 0.15, "cache_read": 0.003, "output": 0.6},
+      "pro": {"input": 0.66, "cache_read": 0.022, "output": 1.98}
+    },
+    "peak": {"utc_hours": [[1, 4], [6, 10]], "weekdays_only": true, "multiplier": 2},
+    "balance_url": "https://api.deepseek.com/user/balance"
+  }
+}
