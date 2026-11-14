@@ -67,11 +67,12 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 
 ### 其他后端
 
-worker 可以给指定的管理员一个「Claude ⟨开关⟩ DeepSeek」切换（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`，里面有对方的 API key），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
+worker 可以给指定的管理员一个「Claude ⟨开关⟩ DeepSeek」切换（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
 
 - `owners`：可以使用的账户 id；还要求该账户当前是 admin。普通用户、API 令牌和调用方（callers）都用不了
 - `models`：切到这个后端时模型菜单里的选项，`id` 即传给 `--model` 的模型名，第一个为默认
-- `env`：这些对话里 `claude` 的环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 等）；worker 自身的 Claude 凭据（`CLAUDE_CODE_OAUTH_TOKEN` 等）不会带进这些对话，API key 也不会上报服务端
+- `env`：这些对话里 `claude` 的环境变量（`ANTHROPIC_BASE_URL` 等）；worker 自身的 Claude 凭据（`CLAUDE_CODE_OAUTH_TOKEN` 等）不会带进这些对话
+- API key：两种放法。一是 owners 在网页「我的账户」里填写：保存在服务端，worker 每 30 秒同步配置时取走，页面上只显示末 4 位；二是写在 `env` 的 `ANTHROPIC_AUTH_TOKEN` 里：只留在 worker 机器上，不上报服务端，此时以它为准、网页不显示填写框。两处都没有 key 时，发送会提示先去填写
 - `pricing` / `peak`：按对方 API 价格记账用（美元 / 百万 token，按模型名匹配；`peak` 为高峰时段与倍数）
 - `balance_url`：可选，worker 每 10 分钟用 key 查一次账户余额，显示在页面上
 

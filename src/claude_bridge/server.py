@@ -24,6 +24,7 @@ from claude_bridge.models import (
     AgentLimitsIn,
     AgentLocalUsageIn,
     AgentModelsIn,
+    BackendKeyIn,
     ClientToolCallIn,
     ClientToolResultIn,
     JobEventsIn,
@@ -303,6 +304,11 @@ def create_bridge(
     @browser.put("/settings")
     def put_settings(body: SettingsIn, scope: str = Query("", max_length=200), p: Principal = Depends(who)):
         return {"chat": _svc(service.save_settings, body.model_dump(exclude_unset=True), p.owner, scope, p)}
+
+    # a backend's API key, entered by one of its owners (admins); {"key": null} clears it
+    @browser.put("/backends/{name}/key")
+    def put_backend_key(name: str, body: BackendKeyIn, p: Principal = Depends(who)):
+        return _svc(service.set_backend_key, name, p.owner, p, body.key)
 
     # the shared namespace sees every job (host job kinds included); a user only the jobs on their own threads
     @browser.get("/jobs")

@@ -264,6 +264,8 @@ class BridgeService:
         backend = split_backend(th.get("scope") or "")[1]
         if backend:
             self.check_backend(backend, principal.owner, principal)
+            if kind == "compact":
+                self.check_backend_ready(backend)
         elif kind == "compact" and self.config.check_quota:  # /context is local and free; /compact asks the model
             self.config.check_quota(principal)
         payload = {"thread": thread_id, "session_id": th["session_id"],
@@ -310,6 +312,7 @@ class BridgeService:
         backend = split_backend(turn_scope)[1]
         if backend:
             self.check_backend(backend, owner, principal)
+            self.check_backend_ready(backend)
         turn_settings = self.settings(owner, turn_scope)
         if options is not None:
             patch = options.model_dump(exclude_none=True)
@@ -712,6 +715,35 @@ class BridgeService:
             data = None
         return data if isinstance(data, dict) else {}
 
+    # a backend's API key entered on the page (owners only): kept server-side, handed to the worker on its config
+    # sync, never sent back to a browser. A key in the worker's own backends file wins over it.
+    def _backend_keys(self) -> dict[str, str]:
+        try:
+            data = json.loads(self.store.get_meta("backend_keys") or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        return {str(k): str(v) for k, v in data.items() if v} if isinstance(data, dict) else {}
+
+    def set_backend_key(self, name: str, owner: str, principal: Principal | None, key: str | None) -> dict[str, Any]:
+        self.check_backend(name, owner, principal)
+        key = (key or "").strip()
+        if key and (len(key) > 300 or any(c.isspace() for c in key)):
+            raise BadRequest("API key 格式不对")
+        keys = self._backend_keys()
+        if key:
+            keys[name] = key
+        else:
+            keys.pop(name, None)
+        self.store.set_meta("backend_keys", json.dumps(keys))
+        return self.backend_key_status(name)
+
+    def backend_key_status(self, name: str) -> dict[str, Any]:
+        """{"source": "page" | "worker" | None, "hint": last 4 chars of a page key}; the key itself never leaves."""
+        key = self._backend_keys().get(name)
+        if key:
+            return {"source": "page", "hint": key[-4:]}
+        return {"source": "worker" if (self.backend_info(name) or {}).get("has_key") else None, "hint": ""}
+
     def backend_info(self, name: str) -> dict[str, Any] | None:
         return next((b for b in self._backends_meta().get("backends") or [] if b.get("name") == name), None)
 
@@ -722,6 +754,11 @@ class BridgeService:
     def check_backend(self, name: str, owner: str, principal: Principal | None = None) -> None:
         if not self.backend_allowed(name, owner) or (principal is not None and not principal.admin):
             raise BadRequest(BACKEND_DENIED)
+
+    def check_backend_ready(self, name: str) -> None:
+        if not self.backend_key_status(name)["source"]:
+            label = (self.backend_info(name) or {}).get("label") or name
+            raise BadRequest(f"还没有填写 {label} 的 API key：到「我的账户 › {label}」里填写")
 
     def _backend_model(self, backend: str, model: str, *, strict: bool = True) -> str:
         """A model of the backend: "" = its first; an unknown one is refused (`strict`) or replaced by the first."""
@@ -743,7 +780,7 @@ class BridgeService:
     def backend_usage(self, owner: str) -> list[dict[str, Any]]:
         """Per allowed backend: its own API-priced use (24 h / 7 d / 30 d) and the provider's account balance."""
         meta = self._backends_meta()
-        return [{**b, "usage": self.backend_ledger.totals(owner, b["name"]),
+        return [{**b, "usage": self.backend_ledger.totals(owner, b["name"]), "key": self.backend_key_status(b["name"]),
                  "balance": (meta.get("balances") or {}).get(b["name"]), "reported_at": meta.get("reported_at")}
                 for b in self.backends_for(owner)]
 
@@ -804,7 +841,8 @@ class BridgeService:
         """The worker's periodic check-in: it says what it runs with, gets back what the admin set."""
         self.note_agent_alive()
         self.store.set_meta("agent_config", json.dumps({**report, "at": time.time()}))
-        return self.worker_settings()
+        keys = self._backend_keys()
+        return {**self.worker_settings(), **({"backend_keys": keys} if keys else {})}
 
     def worker_state(self) -> dict[str, Any]:
         try:

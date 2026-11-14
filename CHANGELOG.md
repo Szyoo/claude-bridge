@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.19.0 — 2026-11-15
+
+- 其他后端的 API key 可以在网页「我的账户」里填写（owners 才能填）：保存在服务端，worker 同步配置时取走，页面上只显示末 4 位，可替换、可清除。worker 的后端文件里写了 key 时以文件为准，网页不显示填写框；两处都没有 key 时发送会提示先去填写。接口：`PUT /api/backends/{name}/key`（`{"key": null}` 清除）
+- 修复：管理页「用户」表在手机上，名字一格被挤成竖排
+
 ## v0.18.0 — 2026-11-15
 
 - **其他后端（如 DeepSeek）**：worker 新增 `CLAUDE_BRIDGE_BACKENDS`（`--backends`）。`owners` 里的管理员在页面顶栏多一个「Claude ⟨开关⟩ DeepSeek」切换：切过去后对话列表、模型菜单、设置都是这个后端自己的（scope 为 `<原 scope>@<后端名>`，Code 模式共用项目目录），与 Claude 互不混用。普通用户、非 owners 的管理员、API 令牌和调用方都不能用

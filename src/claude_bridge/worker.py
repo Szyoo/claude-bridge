@@ -101,6 +101,8 @@ class Backend:
     page's model menu (`id` = the name passed to `--model`); `owners` are the account ids allowed to use it.
     `pricing` (USD per million tokens, by model) and `peak` let the server book the turns at the provider's API
     rates; `balance_url` (GET with the token) is polled for the account balance. None of `env` leaves this machine.
+    Without ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY in `env`, the key an owner entered on the page is used
+    (the server hands it over on the config sync).
     """
 
     env: dict[str, str] = field(default_factory=dict)
@@ -126,10 +128,18 @@ class Backend:
         return cls(env=env, models=models, owners=owners, label=str(d.get("label") or name), pricing=pricing,
                    peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""))
 
+    @property
+    def has_key(self) -> bool:
+        return bool(self.env.get("ANTHROPIC_AUTH_TOKEN") or self.env.get("ANTHROPIC_API_KEY"))
+
+    def with_key(self, key: str | None) -> dict[str, str]:
+        """`env`, plus the page's key when the file has none."""
+        return self.env if self.has_key or not key else {**self.env, "ANTHROPIC_AUTH_TOKEN": key}
+
     def public(self, name: str) -> dict[str, Any]:
         """What the server may know: no env (the API key)."""
         return {"name": name, "label": self.label, "owners": list(self.owners), "models": list(self.models),
-                "pricing": self.pricing, "peak": self.peak}
+                "pricing": self.pricing, "peak": self.peak, "has_key": self.has_key}
 
 
 # Claude credentials a backend turn must not carry: they would be sent to the other provider's endpoint
@@ -284,6 +294,7 @@ class Worker:
         self._next_usage_probe = 0.0
         self._usage_warned = False
         self._next_backend_report = 0.0
+        self._backend_keys: dict[str, str] = {}  # entered on the page; from the config sync
         self._scanner: TranscriptScanner | None = None
         self._scan_thread: threading.Thread | None = None
         self._next_scan = 0.0
@@ -397,6 +408,11 @@ class Worker:
         except Exception:
             log.exception("config sync failed")
             return
+        keys = got.get("backend_keys")
+        keys = {str(k): str(v) for k, v in keys.items() if v} if isinstance(keys, dict) else {}
+        if keys != self._backend_keys:
+            self._backend_keys = keys
+            self._next_backend_report = 0.0  # the balance can be read now
         n = got.get("concurrency")
         n = n if isinstance(n, int) and n >= 1 else None
         if n != self._remote_concurrency:
@@ -528,19 +544,25 @@ class Worker:
                 raise RuntimeError(f"worker 没有配置后端 {name}")
             if str(payload.get("owner") or "") not in backend.owners:
                 raise RuntimeError(f"这个账户不能使用后端 {name}")
-            cfg = replace(cfg, extra_env={**cfg.extra_env, **backend.env},
-                          drop_env=tuple(k for k in CLAUDE_CREDENTIAL_ENV if k not in backend.env))
+            env = backend.with_key(self._backend_keys.get(name))
+            if not (env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")):
+                raise RuntimeError(f"后端 {backend.label} 还没有 API key")
+            cfg = replace(cfg, extra_env={**cfg.extra_env, **env},
+                          drop_env=tuple(k for k in CLAUDE_CREDENTIAL_ENV if k not in env))
         return cfg
 
     def backend_report(self) -> dict[str, Any]:
         """The backends (without their env) and each one's account balance, for the server."""
         return {"backends": [b.public(name) for name, b in self.config.backends.items()],
                 "balances": {name: bal for name, b in self.config.backends.items()
-                             if b.balance_url and (bal := self._backend_balance(b)) is not None}}
+                             if b.balance_url and (bal := self._backend_balance(b, self._backend_keys.get(name))) is not None}}
 
     @staticmethod
-    def _backend_balance(b: Backend) -> dict[str, Any] | None:
-        token = b.env.get("ANTHROPIC_AUTH_TOKEN") or b.env.get("ANTHROPIC_API_KEY") or ""
+    def _backend_balance(b: Backend, key: str | None = None) -> dict[str, Any] | None:
+        env = b.with_key(key)
+        token = env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or ""
+        if not token:
+            return None
         try:
             r = requests.get(b.balance_url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
                              timeout=15)

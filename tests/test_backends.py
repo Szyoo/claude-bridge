@@ -22,7 +22,7 @@ from claude_bridge.worker import Backend, Worker, WorkerConfig, WorkerProfile, l
 PEAK = {"utc_hours": [[1, 4], [6, 10]], "weekdays_only": True, "multiplier": 2}
 PRICING = {"flash": {"input": 0.15, "cache_read": 0.003, "output": 0.6}}
 INFO = {"name": "ds", "label": "DeepSeek", "owners": ["1"], "models": [{"id": "deepseek-flash[1m]", "name": "Flash (1M)"},
-        {"id": "deepseek-v4-pro", "name": "Pro"}], "pricing": PRICING, "peak": PEAK}
+        {"id": "deepseek-v4-pro", "name": "Pro"}], "pricing": PRICING, "peak": PEAK, "has_key": True}
 BALANCE = {"is_available": True, "balance_infos": [{"currency": "CNY", "total_balance": "42.00",
                                                     "granted_balance": "0", "topped_up_balance": "42.00"}]}
 
@@ -138,6 +138,26 @@ def test_backend_usage_goes_to_its_own_ledger(env):
     assert "utilization" not in (b.service.account_limits()["five_hour"])  # not the Claude subscription's
 
 
+def test_key_entered_on_the_page(env):
+    b, client, agent = env
+    no_key = {**INFO, "has_key": False}
+    assert agent.post("/api/agent/backends", json={"backends": [no_key]}).status_code == 200
+    me = client()
+    r = me.post("/api/send", json={"text": "hi", "scope": "@ds", "new_thread": True})
+    assert r.status_code == 400 and "API key" in r.json()["detail"]
+    assert client("user").put("/api/backends/ds/key", json={"key": "sk-x"}).status_code == 400
+    assert client("other-admin").put("/api/backends/ds/key", json={"key": "sk-x"}).status_code == 400
+    assert client("me-demoted").put("/api/backends/ds/key", json={"key": "sk-x"}).status_code == 400
+    assert me.put("/api/backends/ds/key", json={"key": "has space"}).status_code == 400
+    r = me.put("/api/backends/ds/key", json={"key": "sk-secret-abcd"})
+    assert r.status_code == 200 and r.json() == {"source": "page", "hint": "abcd"}
+    assert "sk-secret" not in json.dumps(b.service.backend_usage("1"))  # never back to a browser
+    synced = agent.post("/api/agent/config", json={"worker": "w", "concurrency": 1, "local_concurrency": 1, "running": 0}).json()
+    assert synced["backend_keys"] == {"ds": "sk-secret-abcd"}
+    assert me.post("/api/send", json={"text": "hi", "scope": "@ds", "new_thread": True}).status_code in (200, 201)
+    assert me.put("/api/backends/ds/key", json={"key": None}).json() == {"source": None, "hint": ""}
+
+
 def test_peak_hours_and_prices():
     mon = datetime(2026, 11, 16, 2, 30, tzinfo=UTC)
     assert is_peak(mon, PEAK) and not is_peak(mon.replace(hour=5), PEAK) and is_peak(mon.replace(hour=9, minute=59), PEAK)
@@ -214,3 +234,24 @@ def test_worker_backend_scope_env_and_report(tmp_path, monkeypatch):
     assert rep["balances"] == {"ds": BALANCE} and seen == {"url": "https://api.example.com/user/balance", "auth": "Bearer sk-secret-123"}
     assert rep["backends"][0]["pricing"] == PRICING and rep["backends"][0]["owners"] == ["1"]
     assert "sk-secret-123" not in json.dumps(rep)  # the API key never leaves the worker
+
+
+def test_worker_uses_the_page_key_when_its_file_has_none(tmp_path):
+    backends = {"ds": Backend.from_dict("ds", {"owners": ["1"], "models": [{"id": "deepseek-flash"}],
+                                               "env": {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic"}})}
+    assert backends["ds"].public("ds")["has_key"] is False
+
+    class Client:
+        keys: dict = {}
+
+        def sync_config(self, report):
+            return {"concurrency": None, "backend_keys": self.keys}
+
+    client = Client()
+    w = Worker(client=client, config=WorkerConfig(backends=backends))  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="API key"):
+        w.config_for({"scope": "@ds", "owner": "1"})
+    client.keys = {"ds": "sk-page-1"}
+    w.maybe_sync_config(force=True)
+    assert w.config_for({"scope": "@ds", "owner": "1"}).extra_env["ANTHROPIC_AUTH_TOKEN"] == "sk-page-1"
+    assert "sk-page-1" not in json.dumps(w.backend_report()["backends"])

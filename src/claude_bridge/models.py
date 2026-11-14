@@ -152,6 +152,11 @@ class BackendInfo(BaseModel):
     models: list[ModelEntry] = Field(default_factory=list, max_length=20)
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)  # model → {input, cache_read, output} USD/1M
     peak: dict[str, Any] = Field(default_factory=dict)  # {"utc_hours": [[1, 4], …], "weekdays_only", "multiplier"}
+    has_key: bool = False  # the worker's backends file carries the key itself
+
+
+class BackendKeyIn(BaseModel):
+    key: str | None = Field(None, max_length=300)
 
 
 class AgentBackendsIn(BaseModel):
