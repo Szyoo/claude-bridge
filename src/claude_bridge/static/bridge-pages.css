@@ -71,7 +71,10 @@
 .bp-chat .bridge-side-head { view-transition-name: bp-side-head; }
 .bp-chat .bridge-new { view-transition-name: bp-new; }
 .bp-chat .bp-mode { view-transition-name: bp-mode; }
-.bp-chat .bp-backend { view-transition-name: bp-backend; }
+/* Claude | DeepSeek: a full-width segmented control heading the sidebar (@szyyw/design .seg) */
+.bp-backend { display: flex; width: 100%; }
+.bp-backend > button { flex: 1; }
+.bridge-side-head:has(.bp-backend) { display: flex; flex-direction: column; gap: var(--sp-2); }
 .bp-chat .bridge-list, .bp-chat .bp-home { view-transition-name: bp-body; }
 ::view-transition-group(*) { animation-duration: var(--dur-base); animation-timing-function: var(--ease-out); }
 html[data-vt="fwd"]::view-transition-old(bp-list), html[data-vt="fwd"]::view-transition-old(bp-body) { animation: bp-vt-out-l var(--dur-fast) ease-in both; }
@@ -115,7 +118,7 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 }
 
 /* phones: the corner tools leave too little room for the switches, so the top bar takes two rows —
-   row 1: ☰ · title · ⋯ beside the corner tools; row 2 (below them, full width): Chat⟨⟩Code, Claude⟨⟩DeepSeek, project */
+   row 1: ☰ · title · ⋯ beside the corner tools; row 2 (below them, full width): Chat⟨⟩Code and the project */
 @media (max-width: 720px) {
   .bp-chat .bridge-top { flex-wrap: wrap; padding-right: 12px; row-gap: 0; }
   /* the spacer under the corner tools: as wide as they are (less the bar's padding and gap) and as tall, so row 2 starts below them */
@@ -123,8 +126,8 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
     height: calc(min(var(--corner-rail-h, 36px), 40px) + 8px); }
   .bp-chat .bridge-top::after { content: ""; order: 1; flex-basis: 100%; height: 0; }
   .bp-chat .bridge-top > :is(.bp-mode, .bp-proj) { order: 2; margin: var(--sp-1) 0 2px; }
+  .bp-chat .bridge-top > .bp-proj { margin-left: var(--sp-3); }
   .bp-chat .bridge-top > .bp-mode:first-of-type { padding-left: 0; }
-  .bp-chat .bridge-top > .bp-backend { margin-left: var(--sp-3); }
   /* row 1 must hold its items plus the spacer, or the spacer wraps: the title takes what is left, the helper status is just its dot */
   .bp-chat .bridge-top > .bridge-title { flex: 1 1 0; }
   .bp-chat .bridge-top > .bridge-agent .txt { display: none; }

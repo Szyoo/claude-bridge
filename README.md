@@ -67,7 +67,7 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 
 ### 其他后端
 
-worker 可以给指定的管理员一个「Claude ⟨开关⟩ DeepSeek」切换（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
+worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏对话列表上方）（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
 
 - `owners`：可以使用的账户 id；还要求该账户当前是 admin。普通用户、API 令牌和调用方（callers）都用不了
 - `models`：切到这个后端时模型菜单里的选项，`id` 即传给 `--model` 的模型名，第一个为默认
