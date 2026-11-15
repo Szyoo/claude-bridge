@@ -1697,7 +1697,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const opt = (v, t, cur) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(t)}</option>`;
     return `<div class="bridge-prefs bridge-prefs-chat"><div class="bridge-pref-row"><span class="bridge-pref-label">模型</span><select class="bridge-pick" data-set="model">${modelOptionsHtml(s.models, s.chat.model)}</select></div>`
       + `<div class="bridge-pref-row"><span class="bridge-pref-label">思考深度</span><select class="bridge-pick" data-set="effort">${s.efforts.map(e => opt(e, e || '默认', s.chat.effort)).join('')}</select></div>`
-      + `<div class="bridge-pref-row"><span class="bridge-pref-label">单次最多工具轮数</span><input type="number" class="bridge-num" data-set="max_turns" min="1" max="200" value="${Number(s.chat.max_turns) || 40}" /></div>`
+      + `<div class="bridge-pref-row"><span class="bridge-pref-label">单次最多工具轮数</span><input type="number" class="bridge-num" data-set="max_turns" min="1" max="300" value="${Number(s.chat.max_turns) || 40}" /></div>`
       + `<label class="bridge-pref-row"><span class="bridge-pref-label">${esc(S.ctx)}<span class="bridge-pref-hint">新对话第一条自动附上宿主提供的背景</span></span><input type="checkbox" class="bridge-switch" data-set="auto_context"${s.chat.auto_context ? ' checked' : ''} /></label></div>`;
   }
   async function loadSettings() {

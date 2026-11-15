@@ -654,8 +654,8 @@ class BridgeService:
             cur["effort"] = eff
         if "max_turns" in patch and patch["max_turns"] is not None:
             n = int(patch["max_turns"])
-            if not 1 <= n <= 100:
-                raise BadRequest("max_turns 需在 1..100")
+            if not 1 <= n <= 300:
+                raise BadRequest("max_turns 需在 1..300")
             cur["max_turns"] = n
         if "auto_context" in patch and patch["auto_context"] is not None:
             cur["auto_context"] = bool(patch["auto_context"])

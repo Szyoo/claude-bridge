@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 
 VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 SESSION_KINDS = ("context", "compact")  # built-in jobs that act on an existing Claude session
+MAX_TURNS_CAP = 300  # the page allows up to this many tool rounds per message
 PROJECT_KIND = "project"  # create (git init / git clone) or delete a Code-mode project directory
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -112,6 +113,9 @@ class Backend:
     pricing: dict[str, dict[str, float]] = field(default_factory=dict)
     peak: dict[str, Any] = field(default_factory=dict)
     balance_url: str = ""
+    # run-time overrides for this provider's turns (WorkerProfile keys except cwd), e.g. longer limits or its own
+    # system prompt; applied on top of the scope's profile
+    profile: WorkerProfile | None = None
 
     @classmethod
     def from_dict(cls, name: str, d: dict[str, Any]) -> Backend:
@@ -125,8 +129,12 @@ class Backend:
             raise ValueError(f"backend {name!r} needs env.ANTHROPIC_BASE_URL, models and owners")
         pricing = {str(k): {f: float(v[f]) for f in ("input", "cache_read", "output") if f in v}
                    for k, v in (d.get("pricing") or {}).items() if isinstance(v, dict)}
+        prof = d.get("profile") or {}
+        if "cwd" in prof:
+            raise ValueError(f"backend {name!r}: profile.cwd is not allowed (the scope decides the directory)")
         return cls(env=env, models=models, owners=owners, label=str(d.get("label") or name), pricing=pricing,
-                   peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""))
+                   peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""),
+                   profile=WorkerProfile.from_dict(prof) if prof else None)
 
     @property
     def has_key(self) -> bool:
@@ -544,6 +552,9 @@ class Worker:
                 raise RuntimeError(f"worker 没有配置后端 {name}")
             if str(payload.get("owner") or "") not in backend.owners:
                 raise RuntimeError(f"这个账户不能使用后端 {name}")
+            if backend.profile is not None:
+                cfg = replace(cfg, **{f.name: getattr(backend.profile, f.name) for f in fields(backend.profile)
+                                      if getattr(backend.profile, f.name) is not None})
             env = backend.with_key(self._backend_keys.get(name))
             if not (env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY")):
                 raise RuntimeError(f"后端 {backend.label} 还没有 API key")
@@ -971,7 +982,7 @@ class Worker:
             # Newer models otherwise default to an empty thinking block with
             # only a signature. Ask for the public summary, never invent text.
             cmd += ["--thinking-display", "summarized"]
-        cmd += ["--max-turns", str(max(1, min(max_turns, 100)))]
+        cmd += ["--max-turns", str(max(1, min(max_turns, MAX_TURNS_CAP)))]
         if cfg.tools is not None:  # [] → `--tools ""`: no built-in tools at all
             cmd += ["--tools", ",".join(cfg.tools)]
         if cfg.allowed_tools:

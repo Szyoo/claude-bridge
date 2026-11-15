@@ -255,3 +255,20 @@ def test_worker_uses_the_page_key_when_its_file_has_none(tmp_path):
     w.maybe_sync_config(force=True)
     assert w.config_for({"scope": "@ds", "owner": "1"}).extra_env["ANTHROPIC_AUTH_TOKEN"] == "sk-page-1"
     assert "sk-page-1" not in json.dumps(w.backend_report()["backends"])
+
+
+def test_backend_profile_overrides_the_scope_profile(tmp_path):
+    base = {"owners": ["1"], "models": [{"id": "deepseek-v4-pro[1m]"}],
+            "env": {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "sk-x"}}
+    ds = Backend.from_dict("ds", {**base, "profile": {"chat_timeout": 21600, "idle_timeout": 2400, "system_prompt": "逆向"}})
+    profiles = {"code": WorkerProfile(cwd=str(tmp_path / "{owner}" / "{project}"), system_prompt="编程", chat_timeout=60)}
+    w = Worker(client=None, config=WorkerConfig(backends={"ds": ds}, profiles=profiles))  # type: ignore[arg-type]
+    cfg = w.config_for({"scope": "code:app@ds", "owner": "1"})
+    assert (cfg.chat_timeout, cfg.idle_timeout, cfg.system_prompt) == (21600, 2400, "逆向")
+    assert str(cfg.cwd).endswith("1/app")  # the directory still comes from the scope
+    claude = w.config_for({"scope": "code:app", "owner": "1"})
+    assert (claude.chat_timeout, claude.system_prompt) == (60, "编程")
+    with pytest.raises(ValueError, match="cwd"):
+        Backend.from_dict("ds", {**base, "profile": {"cwd": "/tmp"}})
+    with pytest.raises(ValueError, match="unknown"):
+        Backend.from_dict("ds", {**base, "profile": {"nope": 1}})

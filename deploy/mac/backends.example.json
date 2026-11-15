@@ -1,5 +1,5 @@
 {
-  "_comment": "复制到仓库外的私有位置（chmod 600），用 CLAUDE_BRIDGE_BACKENDS 指向它。owners 是可用的账户 id（还须是 admin）。API key 可以在网页「我的账户」里填写（保存在服务器上）；也可以在 env 里写 ANTHROPIC_AUTH_TOKEN，此时以这里为准、网页不再显示填写框。价格为美元 / 百万 token，以 DeepSeek 官网当期价格为准。",
+  "_comment": "复制到仓库外的私有位置（chmod 600），用 CLAUDE_BRIDGE_BACKENDS 指向它。owners 是可用的账户 id（还须是 admin）。API key 可以在网页「我的账户」里填写（保存在服务器上）；也可以在 env 里写 ANTHROPIC_AUTH_TOKEN，此时以这里为准、网页不再显示填写框。价格为美元 / 百万 token，以 DeepSeek 官网当期价格为准。 profile 是这个后端的对话专用的运行参数（键同 CLAUDE_BRIDGE_PROFILES，不含 cwd）；idle_timeout 应不小于 BASH_MAX_TIMEOUT_MS，否则长命令会被当作无响应停掉。",
   "deepseek": {
     "label": "DeepSeek",
     "owners": [
@@ -7,20 +7,23 @@
     ],
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-      "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-flash[1m]",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
       "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash[1m]",
       "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash",
       "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-flash",
-      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432"
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432",
+      "CLAUDE_CODE_EFFORT_LEVEL": "max",
+      "BASH_DEFAULT_TIMEOUT_MS": "600000",
+      "BASH_MAX_TIMEOUT_MS": "1800000"
     },
     "models": [
       {
-        "id": "deepseek-flash[1m]",
-        "name": "DeepSeek Flash（1M）"
+        "id": "deepseek-v4-pro[1m]",
+        "name": "DeepSeek V4 Pro（1M）"
       },
       {
-        "id": "deepseek-v4-pro",
-        "name": "DeepSeek V4 Pro"
+        "id": "deepseek-flash[1m]",
+        "name": "DeepSeek Flash（1M）"
       }
     ],
     "pricing": {
@@ -49,6 +52,11 @@
       "weekdays_only": true,
       "multiplier": 2
     },
-    "balance_url": "https://api.deepseek.com/user/balance"
+    "balance_url": "https://api.deepseek.com/user/balance",
+    "profile": {
+      "chat_timeout": 21600,
+      "idle_timeout": 2100,
+      "system_prompt": "这是网页上的编程会话：当前目录是用户选中的项目，在这里读写文件、跑命令。"
+    }
   }
 }

@@ -302,7 +302,7 @@ def test_run_chat_resume_and_settings_flags(tmp_path):
     assert args[i + 1 : i + 3] == ["Read", "Bash(git log *)"]
     assert args[args.index("--append-system-prompt") + 1] == "SP"
     assert args[args.index("--model") + 1] == "sonnet" and args[args.index("--effort") + 1] == "high"
-    assert args[args.index("--max-turns") + 1] == "100" and args[args.index("--permission-mode") + 1] == "plan"
+    assert args[args.index("--max-turns") + 1] == "300" and args[args.index("--permission-mode") + 1] == "plan"
     assert client.events("init")[0]["data"]["resumed"] is True
 
 

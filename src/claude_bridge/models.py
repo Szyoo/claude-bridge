@@ -13,7 +13,7 @@ class TurnOptions(BaseModel):
 
     model: str | None = Field(None, max_length=100)
     effort: str | None = Field(None, max_length=20)
-    max_turns: int | None = Field(None, ge=1, le=100)
+    max_turns: int | None = Field(None, ge=1, le=300)
     auto_context: bool | None = None
     max_output_tokens: int | None = Field(None, ge=1, le=128000)
     thinking: bool | None = None
@@ -89,7 +89,7 @@ class ProjectIn(BaseModel):
 class SettingsIn(BaseModel):
     model: str | None = None
     effort: str | None = None
-    max_turns: int | None = Field(None, ge=1, le=100)
+    max_turns: int | None = Field(None, ge=1, le=300)
     auto_context: bool | None = None
 
 
