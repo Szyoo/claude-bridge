@@ -15,13 +15,34 @@
   <link rel="stylesheet" href="/static/bridge/bridge-pages.css" />
   <script type="module" src="/static/bridge/corner-boot.js"></script>
   <style>
-    #app { height: 100vh; height: 100dvh; }
+    #app { height: 100vh; height: var(--app-h, 100dvh); }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.12/marked.min.js" defer></script>
 </head>
 <body class="bp-chat">
   <div class="bg-layer"></div>
   <div id="app"></div>
+  <script>
+    // Phones: the on-screen keyboard covers the page without shrinking it, and iOS slides the page up under it. Size the
+    // app to what is visible (visualViewport) and keep the page at the top, so the composer sits right on the keyboard;
+    // with the keyboard up, the home-indicator inset below the composer is not needed (body.kb-open).
+    (() => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      let raf = 0;
+      const fit = () => {
+        raf = 0;
+        const full = document.documentElement.clientHeight, h = Math.round(vv.height);
+        document.documentElement.style.setProperty('--app-h', `${h}px`);
+        document.body.classList.toggle('kb-open', full - h > 120);
+        if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0);
+      };
+      const later = () => { if (!raf) raf = requestAnimationFrame(fit); };
+      vv.addEventListener('resize', later);
+      vv.addEventListener('scroll', later);
+      fit();
+    })();
+  </script>
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';

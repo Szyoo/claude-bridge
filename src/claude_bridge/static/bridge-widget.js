@@ -1559,7 +1559,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   const queue = mountQueue(el.querySelector('.bridge-queue'), client, {
     thread: () => state.thread, strings: S, onError: (m) => toast(m, true),
     onRestore: (text, files) => {
-      if (text) { input.value = input.value.trim() ? `${text}\n${input.value}` : text; autoGrow(); syncSend(); input.focus({ preventScroll: true }); }
+      if (text) { input.value = input.value.trim() ? `${text}\n${input.value}` : text; autoGrow(); syncSend(); refocus(); }
       if (files.length) toast('图片没法放回输入框，需要的话重新添加');
     },
   });
@@ -1761,6 +1761,12 @@ export function mountBridgeWidget(el, client, opts = {}) {
     syncSend();
   }
   // grows with the text up to maxRows lines (and never past 40% of the viewport), then scrolls
+  // Back to the input after a composer button or menu pick — on a touch screen only when the keyboard was already up,
+  // so tapping the model / ＋ / settings buttons does not pop the keyboard open
+  const coarse = matchMedia('(pointer: coarse)');
+  let hadFocus = false;
+  form.addEventListener('pointerdown', () => { hadFocus = document.activeElement === input; }, true);
+  function refocus() { if (!coarse.matches || hadFocus || document.activeElement === input) input.focus({ preventScroll: true }); }
   function autoGrow() {
     const cs = getComputedStyle(input);
     const line = parseFloat(cs.lineHeight) || 20, pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
@@ -1929,7 +1935,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const r = optionRows()[i]; if (!r || r.disabled) return;
     const kind = cp.menu;
     if (kind === 'model') {
-      closeMenu(); input.focus({ preventScroll: true });
+      closeMenu(); refocus();
       if (state.settings && r.key !== (state.settings.chat.model || '')) { state.settings.chat.model = r.key; renderPickers(); saveSetting({ model: r.key }); }
       return;
     }
@@ -1938,7 +1944,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       closeMenu(); cp.dismissed = false;
       if (r.attach) { fileInput.click(); return; }
       replaceToken(r.insert ?? `@${r.name} `);
-      input.focus({ preventScroll: true });
+      refocus();
       try { await (r.onPick?.(r) ?? o.onSource?.(r)); } catch (e) { toast(e.message, true); }
       return;
     }
@@ -1957,7 +1963,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       else if (r.key === 'effort') openEffort();
       else if (r.host) { await r.host.run?.({ widget: api, thread: state.thread, input, toast }); autoGrow(); syncSend(); }
     } catch (e) { toast(e.message, true); }
-    if (r.key !== 'effort' && r.key !== 'context') input.focus({ preventScroll: true });
+    if (r.key !== 'effort' && r.key !== 'context') refocus();
   }
   function openModel() {
     if (!state.settings) return;
@@ -2011,14 +2017,14 @@ export function mountBridgeWidget(el, client, opts = {}) {
   });
   pbMenu.addEventListener('pointermove', (e) => { const track = e.target.closest('.bridge-pb-track'); if (track && (e.buttons & 1)) effortFromPointer(e, track); });
   pbMenu.addEventListener('keydown', (e) => {
-    if (!e.target.closest('.bridge-pb-track')) { if (e.key === 'Escape') { closeMenu(); input.focus(); } return; }
+    if (!e.target.closest('.bridge-pb-track')) { if (e.key === 'Escape') { closeMenu(); refocus(); } return; }
     const { steps, index } = effortSteps(); const last = steps.length - 1;
     const go = (i) => { e.preventDefault(); setEffort(steps[Math.max(0, Math.min(last, i))]); };
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') go(index + 1);
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') go(index < 0 ? 0 : index - 1);
     else if (e.key === 'Home') go(0);
     else if (e.key === 'End') go(last);
-    else if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); closeMenu(); input.focus({ preventScroll: true }); }
+    else if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); closeMenu(); refocus(); }
   });
   pbMenu.addEventListener('mousedown', (e) => { if (e.target.closest('.bridge-pb-row')) e.preventDefault(); });   // keep the caret in the textarea
   pbMenu.addEventListener('pointerover', (e) => { const r = e.target.closest('.bridge-pb-row'); if (r && Number(r.dataset.i) !== cp.cursor) { cp.cursor = Number(r.dataset.i); placeGlow(); } });
@@ -2029,12 +2035,12 @@ export function mountBridgeWidget(el, client, opts = {}) {
   form.addEventListener('click', (e) => {
     const b = e.target.closest('[data-pb]'); if (!b) return;
     const kind = b.dataset.pb;
-    if (cp.menu === kind) { closeMenu(); input.focus({ preventScroll: true }); return; }
+    if (cp.menu === kind) { closeMenu(); refocus(); return; }
     closeMenu(); closePops();
     if (kind === 'model') openModel();
     else if (kind === 'effort') openEffort();
     else if (kind === 'plus') { if (hasSources()) openPlus(); else if (cp.uploads) fileInput.click(); }
-    if (kind !== 'effort') input.focus({ preventScroll: true });
+    if (kind !== 'effort') refocus();
   });
   for (const b of form.querySelectorAll('[data-pb], .bridge-send')) b.addEventListener('mousedown', (e) => e.preventDefault());
 
@@ -2097,7 +2103,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       input.placeholder = state.inflight ? `${S.assistant} 正在回答，稍等…` : placeholder();
       autoGrow(); syncSend();
       if (voice.listening) voice.stop('ended');
-      if (!cancelled) { input.focus({ preventScroll: true }); const n = input.value.length; input.setSelectionRange(n, n); }
+      if (!cancelled) { refocus(); const n = input.value.length; input.setSelectionRange(n, n); }
       vc.onResult?.({ text: cancelled ? '' : text, cancelled });
     };
     voice = mountVoicePill($('.bridge-pb-voice'), {
