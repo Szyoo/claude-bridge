@@ -147,6 +147,16 @@ body.bp-chat #app { position: relative; z-index: 1; }
   body.bp-chat .bridge.side-open .bridge-side { padding-top: calc(min(var(--corner-rail-h, 36px), 40px) + 20px + env(safe-area-inset-top, 0px)); }
 }
 
+/* the page runs edge to edge (viewport-fit=cover): keep the composer, the sidebar's foot and the drawer clear of the
+   phone's rounded corners and home indicator, and of the notch / side insets in landscape */
+body.bp-chat .bridge-form {
+  margin-bottom: calc(var(--chat-item-gap, 10px) + env(safe-area-inset-bottom, 0px));
+  margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px));
+  margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px));
+}
+body.bp-chat .bridge-side { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
+body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px)); }
+
 /* account page: API keys */
 #api pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); margin: var(--sp-2) 0 0; }
 
