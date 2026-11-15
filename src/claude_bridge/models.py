@@ -153,6 +153,7 @@ class BackendInfo(BaseModel):
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)  # model → {input, cache_read, output} USD/1M
     peak: dict[str, Any] = Field(default_factory=dict)  # {"utc_hours": [[1, 4], …], "weekdays_only", "multiplier"}
     has_key: bool = False  # the worker's backends file carries the key itself
+    local_projects: bool = False  # its Code projects are the folders of a directory on the worker's machine
 
 
 class BackendKeyIn(BaseModel):
@@ -198,6 +199,8 @@ class AgentConfigIn(BaseModel):
     concurrency: int = Field(1, ge=1, le=64)
     local_concurrency: int = Field(1, ge=1, le=64)
     running: int = Field(0, ge=0, le=64)
+    # {backend: [{name, path, git, branch, mtime}]}: the folders of backends with local projects
+    backend_projects: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
 
 
 class AgentChatIn(BaseModel):

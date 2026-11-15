@@ -116,6 +116,10 @@ class Backend:
     # run-time overrides for this provider's turns (WorkerProfile keys except cwd), e.g. longer limits or its own
     # system prompt; applied on top of the scope's profile
     profile: WorkerProfile | None = None
+    # Code-mode projects of this backend are the folders here (e.g. "~/Documents/GitHub"): its project list is
+    # this directory's listing, new / cloned projects land here, and the page never deletes them. Empty = the
+    # per-owner project directories shared with Claude.
+    projects_root: str = ""
 
     @classmethod
     def from_dict(cls, name: str, d: dict[str, Any]) -> Backend:
@@ -134,7 +138,8 @@ class Backend:
             raise ValueError(f"backend {name!r}: profile.cwd is not allowed (the scope decides the directory)")
         return cls(env=env, models=models, owners=owners, label=str(d.get("label") or name), pricing=pricing,
                    peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""),
-                   profile=WorkerProfile.from_dict(prof) if prof else None)
+                   profile=WorkerProfile.from_dict(prof) if prof else None,
+                   projects_root=str(d.get("projects_root") or ""))
 
     @property
     def has_key(self) -> bool:
@@ -147,7 +152,41 @@ class Backend:
     def public(self, name: str) -> dict[str, Any]:
         """What the server may know: no env (the API key)."""
         return {"name": name, "label": self.label, "owners": list(self.owners), "models": list(self.models),
-                "pricing": self.pricing, "peak": self.peak, "has_key": self.has_key}
+                "pricing": self.pricing, "peak": self.peak, "has_key": self.has_key,
+                "local_projects": bool(self.projects_root)}
+
+    def project_dir(self, project: str) -> Path:
+        """`projects_root/<project>`, refusing names that would leave the root."""
+        if not PROJECT_NAME_RE.match(project or ""):
+            raise ValueError(f"bad or missing project name {project!r}")
+        return Path(os.path.expanduser(self.projects_root)) / project
+
+    def list_projects(self, limit: int = 300) -> list[dict[str, Any]]:
+        """The root's folders (no hidden ones), most recently changed first, with their git branch."""
+        root = Path(os.path.expanduser(self.projects_root))
+        try:
+            dirs = [d for d in root.iterdir() if PROJECT_NAME_RE.match(d.name) and d.is_dir()]
+        except OSError:
+            return []
+        out = []
+        for d in dirs:
+            try:
+                mtime = d.stat().st_mtime
+            except OSError:
+                continue
+            out.append({"name": d.name, "path": str(d), "git": (d / ".git").exists(), "branch": _git_branch(d),
+                        "mtime": int(mtime)})
+        out.sort(key=lambda x: -x["mtime"])
+        return out[:limit]
+
+
+def _git_branch(path: Path) -> str:
+    """The checked-out branch from .git/HEAD (no git process); "" for a detached head, a worktree or no repo."""
+    try:
+        head = (path / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return head.removeprefix("ref: refs/heads/") if head.startswith("ref: refs/heads/") else ""
 
 
 # Claude credentials a backend turn must not carry: they would be sent to the other provider's endpoint
@@ -406,7 +445,9 @@ class Worker:
         try:
             got = self.client.sync_config({"worker": self.config.worker_name, "concurrency": self.concurrency,
                                            "local_concurrency": max(1, self.config.max_concurrent),
-                                           "running": self.running_jobs()})
+                                           "running": self.running_jobs(),
+                                           "backend_projects": {n: b.list_projects() for n, b in self.config.backends.items()
+                                                                if b.projects_root}})
         except BridgeClientError as e:
             if e.status == 404:  # an older server: keep our own value, ask again much later
                 self._next_config_sync = now + 3600
@@ -538,9 +579,17 @@ class Worker:
         base, _, project = scope.partition(":")
         prof = self.config.profiles.get(scope) or (self.config.profiles.get(base) if project else None)
         cfg = self.config
+        local = self.config.backends.get(scope_backend) if scope_backend else None
+        local = local if local is not None and local.projects_root and project else None
         if prof is not None:
             over = {f.name: getattr(prof, f.name) for f in fields(prof) if getattr(prof, f.name) is not None}
-            if "cwd" in over:
+            if local is not None:  # the project is a folder of the backend's own root, not a per-owner directory
+                over.pop("cwd", None)
+                path = local.project_dir(project)
+                if not path.is_dir():
+                    raise RuntimeError(f"本机没有项目文件夹 {path}")
+                over["cwd"] = path
+            elif "cwd" in over:
                 cwd = self.profile_dir(str(over["cwd"]), payload.get("owner"), project)
                 cwd.mkdir(parents=True, exist_ok=True)
                 over["cwd"] = cwd
@@ -608,7 +657,20 @@ class Worker:
     # ---------------- Code-mode projects ----------------
 
     def _project_path(self, payload: dict[str, Any]) -> Path:
-        base, _, project = str(payload.get("scope") or "").partition(":")
+        scope, backend_name = split_backend(str(payload.get("scope") or ""))
+        base, _, project = scope.partition(":")
+        if backend_name:
+            b = self.config.backends.get(backend_name)
+            if b is None or not b.projects_root or project != payload.get("name"):
+                raise RuntimeError(f"worker 没有给后端 {backend_name} 配置项目目录")
+            if str(payload.get("owner") or "") not in b.owners:
+                raise RuntimeError(f"这个账户不能使用后端 {backend_name}")
+            if payload.get("action") == "delete":
+                raise RuntimeError("不会删除本机的项目文件夹")
+            path = b.project_dir(project)
+            if path.is_symlink() or path.parent.resolve() != Path(os.path.expanduser(b.projects_root)).resolve():
+                raise RuntimeError("项目路径不安全")
+            return path
         prof = self.config.profiles.get(base)
         if not prof or not prof.cwd or "{project}" not in prof.cwd or project != payload.get("name"):
             raise RuntimeError("worker 没有配置项目目录（profile 的 cwd 里需要 {project}）")
@@ -675,6 +737,7 @@ class Worker:
             branch = self._run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"], job["id"], cwd=path) if url else "main"
             info = {"path": str(path), "branch": branch, "cloned": bool(url)}
             self._safe_finish(job["id"], ok=True, result=json.dumps(info, ensure_ascii=False))
+            self._next_config_sync = 0.0  # a backend's folder list goes out with the next config sync
         except Exception as e:
             log.warning("project job #%s failed: %s", job["id"], e)
             if created and path is not None and path.exists():  # leave no half-made directory behind

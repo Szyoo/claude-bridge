@@ -272,3 +272,61 @@ def test_backend_profile_overrides_the_scope_profile(tmp_path):
         Backend.from_dict("ds", {**base, "profile": {"cwd": "/tmp"}})
     with pytest.raises(ValueError, match="unknown"):
         Backend.from_dict("ds", {**base, "profile": {"nope": 1}})
+
+
+def test_local_projects_are_the_backends_own_folders(tmp_path):
+    def auth(x_who: str = Header("me")) -> Principal:
+        return WHO[x_who]
+
+    store = BridgeStore(tmp_path / "b.db")
+    holder = {}
+    cfg = BridgeConfig(projects=True, scopes=lambda scope, owner: scope == "" or (
+        scope.startswith("code:") and holder["b"].service.project_ready(owner, scope[5:])))
+    b = holder["b"] = create_bridge(store=store, config=cfg, browser_auth=auth, agent_token="tok")
+    app = FastAPI()
+    b.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix=None)
+    agent = TestClient(app, headers={"Authorization": "Bearer tok"})
+    me, other = TestClient(app, headers={"X-Who": "me"}), TestClient(app, headers={"X-Who": "other-admin"})
+    agent.post("/api/agent/backends", json={"backends": [{**INFO, "local_projects": True}], "balances": {}})
+    agent.post("/api/agent/config", json={"worker": "w", "concurrency": 1, "local_concurrency": 1, "running": 0,
+                                          "backend_projects": {"ds": [{"name": "teardown", "path": "/x/GitHub/teardown",
+                                                                       "git": True, "branch": "main", "mtime": 1}]}})
+    d = me.get("/api/projects", params={"backend": "ds"}).json()
+    assert d["local"] is True and [(p["name"], p["local"], p["info"]["branch"]) for p in d["items"]] == [("teardown", True, "main")]
+    assert me.get("/api/projects").json()["items"] == []  # Claude's own (per-owner) projects stay apart
+    assert other.get("/api/projects", params={"backend": "ds"}).status_code == 400  # not an owner of the backend
+
+    assert me.post("/api/send", json={"text": "hi", "scope": "code:teardown@ds", "new_thread": True}).status_code in (200, 201)
+    assert me.post("/api/send", json={"text": "hi", "scope": "code:nope@ds", "new_thread": True}).status_code == 400
+    assert me.get("/api/projects", params={"backend": "ds"}).json()["items"][0]["threads"] == 1
+
+    assert me.delete("/api/projects/teardown", params={"backend": "ds"}).status_code == 400
+    assert me.post("/api/projects", params={"backend": "ds"}, json={"name": "teardown"}).status_code == 400
+    r = me.post("/api/projects", params={"backend": "ds"}, json={"clone_url": "https://github.com/a/new-repo.git"})
+    assert r.status_code == 202 and r.json()["project"]["status"] == "creating"
+    job = last_payload(b)
+    assert job["scope"] == "code:new-repo@ds" and job["owner"] == "1" and job["row_owner"] == "1@ds"
+    names = [p["name"] for p in me.get("/api/projects", params={"backend": "ds"}).json()["items"]]
+    assert names == ["new-repo", "teardown"]
+
+
+def test_worker_runs_local_projects_in_the_backends_folder(tmp_path):
+    root = tmp_path / "GitHub"
+    (root / "teardown" / ".git").mkdir(parents=True)
+    (root / "teardown" / ".git" / "HEAD").write_text("ref: refs/heads/dev\n")
+    (root / ".hidden").mkdir()
+    ds = Backend.from_dict("ds", {"owners": ["1"], "models": [{"id": "m"}], "projects_root": str(root),
+                                  "env": {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "k"}})
+    assert [(p["name"], p["branch"], p["git"]) for p in ds.list_projects()] == [("teardown", "dev", True)]
+    assert ds.public("ds")["local_projects"] is True
+    profiles = {"code": WorkerProfile(cwd=str(tmp_path / "iso" / "{owner}" / "{project}"))}
+    w = Worker(client=None, config=WorkerConfig(backends={"ds": ds}, profiles=profiles))  # type: ignore[arg-type]
+    assert w.config_for({"scope": "code:teardown@ds", "owner": "1"}).cwd == root / "teardown"
+    assert not (tmp_path / "iso").exists()  # no isolated directory made for it
+    with pytest.raises(RuntimeError, match="没有项目文件夹"):
+        w.config_for({"scope": "code:gone@ds", "owner": "1"})
+    assert w._project_path({"scope": "code:new@ds", "name": "new", "owner": "1", "action": "create"}) == root / "new"
+    with pytest.raises(RuntimeError, match="不会删除"):
+        w._project_path({"scope": "code:teardown@ds", "name": "teardown", "owner": "1", "action": "delete"})
+    with pytest.raises(RuntimeError, match="不能使用"):
+        w._project_path({"scope": "code:new@ds", "name": "new", "owner": "2", "action": "create"})

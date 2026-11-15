@@ -96,6 +96,7 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 .bp-home > .bp-wrap { max-width: 560px; margin: 0 auto; padding: var(--sp-5) var(--sp-4) 48px; }  /* inside the chat frame (has a sidebar): no .app-main */
 .bridge-thread:disabled { cursor: default; opacity: .6; }
 .bp-projects { margin: var(--sp-3) 0 var(--sp-4); }
+.bp-proj-filter { margin-top: var(--sp-3); }
 .bp-projects .list-row[data-open] { cursor: pointer; }
 /* Code mode: the open project at the top of the session list */
 .bp-side-proj { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--bridge-border); }

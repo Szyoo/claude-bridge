@@ -1,5 +1,5 @@
 {
-  "_comment": "复制到仓库外的私有位置（chmod 600），用 CLAUDE_BRIDGE_BACKENDS 指向它。owners 是可用的账户 id（还须是 admin）。API key 可以在网页「我的账户」里填写（保存在服务器上）；也可以在 env 里写 ANTHROPIC_AUTH_TOKEN，此时以这里为准、网页不再显示填写框。价格为美元 / 百万 token，以 DeepSeek 官网当期价格为准。 profile 是这个后端的对话专用的运行参数（键同 CLAUDE_BRIDGE_PROFILES，不含 cwd）；idle_timeout 应不小于 BASH_MAX_TIMEOUT_MS，否则长命令会被当作无响应停掉。",
+  "_comment": "复制到仓库外的私有位置（chmod 600），用 CLAUDE_BRIDGE_BACKENDS 指向它。owners 是可用的账户 id（还须是 admin）。API key 可以在网页「我的账户」里填写（保存在服务器上）；也可以在 env 里写 ANTHROPIC_AUTH_TOKEN，此时以这里为准、网页不再显示填写框。价格为美元 / 百万 token，以 DeepSeek 官网当期价格为准。 profile 是这个后端的对话专用的运行参数（键同 CLAUDE_BRIDGE_PROFILES，不含 cwd）；idle_timeout 应不小于 BASH_MAX_TIMEOUT_MS，否则长命令会被当作无响应停掉。 projects_root：这个后端的项目直接用该目录下的文件夹（适合只给自己用的后端）；profile 里 tools 设为 [\"default\"]、strict_mcp 设为 false 时，和在本机直接运行客户端一样用全部内置工具与本机的 MCP 配置。",
   "deepseek": {
     "label": "DeepSeek",
     "owners": [
@@ -56,7 +56,13 @@
     "profile": {
       "chat_timeout": 21600,
       "idle_timeout": 2100,
-      "system_prompt": "这是网页上的编程会话：当前目录是用户选中的项目，在这里读写文件、跑命令。"
-    }
+      "system_prompt": "这是网页上的编程会话：当前目录是用户选中的项目，在这里读写文件、跑命令。",
+      "tools": [
+        "default"
+      ],
+      "strict_mcp": false,
+      "permission_mode": "bypassPermissions"
+    },
+    "projects_root": "~/Documents/GitHub"
   }
 }

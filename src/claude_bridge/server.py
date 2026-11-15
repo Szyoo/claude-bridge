@@ -271,18 +271,20 @@ def create_bridge(
         return _svc(service.request_session_job, thread_id, "compact", p)
 
     # Code-mode projects (BridgeConfig.projects): each is a directory on the worker's machine
+    # `backend`: that backend's own projects when it has local ones (the worker's folder), else the shared ones
     @browser.get("/projects")
-    def list_projects(p: Principal = Depends(who)):
+    def list_projects(backend: str = Query("", max_length=40), p: Principal = Depends(who)):
         service.requeue_stale()
-        return {"items": _svc(service.projects, p.owner), "agent": service.agent_status()}
+        items = _svc(service.projects, p.owner, backend, p)
+        return {"items": items, "agent": service.agent_status(), "local": service.backend_local(backend)}
 
     @browser.post("/projects", status_code=202)
-    def create_project(body: ProjectIn, p: Principal = Depends(who)):
-        return _svc(service.create_project, p.owner, body.name, body.clone_url)
+    def create_project(body: ProjectIn, backend: str = Query("", max_length=40), p: Principal = Depends(who)):
+        return _svc(service.create_project, p.owner, body.name, body.clone_url, backend, p)
 
     @browser.delete("/projects/{name}")
-    def delete_project(name: str, p: Principal = Depends(who)):
-        return _svc(service.delete_project, p.owner, name)
+    def delete_project(name: str, backend: str = Query("", max_length=40), p: Principal = Depends(who)):
+        return _svc(service.delete_project, p.owner, name, backend)
 
     # `scope` matters for a backend scope ("…@deepseek"): its own settings and model menu
     @browser.get("/settings")

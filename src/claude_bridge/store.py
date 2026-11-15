@@ -267,6 +267,10 @@ def compact_stream_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _event(row: dict[str, Any]) -> dict[str, Any]:
     row = dict(row)
     try:
@@ -953,6 +957,20 @@ class BridgeStore:
             (owner,),
         )
         return [self._project(r) for r in rows]
+
+    def scope_activity(self, owner: str, prefix: str, suffix: str = "") -> dict[str, dict[str, Any]]:
+        """{the part between prefix and suffix: {threads, last_used}} for the owner's scopes `prefix…suffix`."""
+        rows = self._q(
+            "SELECT scope, COUNT(*) AS threads, MAX(updated_at) AS last_used FROM bridge_threads "
+            "WHERE owner=? AND scope LIKE ? ESCAPE '\\' GROUP BY scope",
+            (owner, _like(prefix) + "%" + _like(suffix)),
+        )
+        out = {}
+        for r in rows:
+            sc = r["scope"]
+            if sc.startswith(prefix) and sc.endswith(suffix) and len(sc) > len(prefix) + len(suffix):
+                out[sc[len(prefix):len(sc) - len(suffix)]] = {"threads": r["threads"], "last_used": r["last_used"]}
+        return out
 
     def get_project(self, owner: str, name: str) -> dict[str, Any] | None:
         row = self._one("SELECT * FROM bridge_projects WHERE owner=? AND name=?", (owner, name))

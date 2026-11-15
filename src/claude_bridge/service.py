@@ -150,6 +150,10 @@ class BridgeService:
         base, backend = split_backend(scope)
         if backend:
             self.check_backend(backend, owner)
+            if base.startswith(PROJECT_SCOPE_PREFIX) and self.backend_local(backend):
+                if not self.project_ready(owner, base[len(PROJECT_SCOPE_PREFIX):], backend):
+                    raise BadRequest("项目不存在或还没准备好")
+                return
         scope = base
         allowed = self.config.scopes
         if allowed is None:
@@ -1012,37 +1016,84 @@ class BridgeService:
         if not self.config.projects:
             raise NotFound("未开启项目")
 
-    def project_ready(self, owner: str, name: str) -> bool:
+    # A backend with `local_projects` (the worker's backends file sets projects_root) has its own projects: the
+    # folders of that root on the worker's machine, reported on each config sync. Rows under "<owner>@<backend>"
+    # only track the ones being created here until they show up in that listing.
+    def backend_local(self, backend: str) -> bool:
+        return bool(backend and (self.backend_info(backend) or {}).get("local_projects"))
+
+    def _local_folders(self, backend: str) -> list[dict[str, Any]]:
+        try:
+            rep = json.loads(self.store.get_meta("agent_config") or "{}")
+        except json.JSONDecodeError:
+            rep = {}
+        items = ((rep.get("backend_projects") or {}) if isinstance(rep, dict) else {}).get(backend) or []
+        return [i for i in items if isinstance(i, dict) and PROJECT_NAME_RE.match(str(i.get("name") or ""))]
+
+    def project_ready(self, owner: str, name: str, backend: str = "") -> bool:
+        if self.backend_local(backend):
+            if any(f["name"] == name for f in self._local_folders(backend)):
+                return True
+            p = self.store.get_project(f"{owner}@{backend}", name)
+            return bool(p and p["status"] == "ready")
         p = self.store.get_project(owner, name)
         return bool(p and p["status"] == "ready")
 
-    def projects(self, owner: str) -> list[dict[str, Any]]:
+    def projects(self, owner: str, backend: str = "", principal: Principal | None = None) -> list[dict[str, Any]]:
         self._projects_on()
-        return self.store.projects(owner)
+        if backend:
+            self.check_backend(backend, owner, principal)
+        if not self.backend_local(backend):
+            return self.store.projects(owner)
+        use = self.store.scope_activity(owner, PROJECT_SCOPE_PREFIX, f"@{backend}")
+        folders = self._local_folders(backend)
+        names = {f["name"] for f in folders}
+        out = [{"name": f["name"], "source": "", "status": "ready", "error": None, "local": True,
+                "info": {"path": f.get("path"), "branch": f.get("branch") or "", "git": bool(f.get("git"))},
+                "mtime": f.get("mtime"), **use.get(f["name"], {"threads": 0, "last_used": None})} for f in folders]
+        pending = []
+        for row in self.store.projects(f"{owner}@{backend}"):
+            if row["name"] in names:
+                self.store.delete_project_row(row["owner"], row["name"])  # the listing has it now
+            else:
+                pending.append({**row, "local": True})
+        used = sorted((p for p in out if p["last_used"]), key=lambda p: p["last_used"], reverse=True)
+        return pending + used + [p for p in out if not p["last_used"]]
 
-    def create_project(self, owner: str, name: str = "", clone_url: str = "") -> dict[str, Any]:
-        """Queue `git init` (empty) or `git clone <url>` into the owner's space; the page polls the row's status."""
+    def create_project(self, owner: str, name: str = "", clone_url: str = "", backend: str = "",
+                       principal: Principal | None = None) -> dict[str, Any]:
+        """Queue `git init` (empty) or `git clone <url>` into the owner's space (or the backend's own folder);
+        the page polls the row's status."""
         self._projects_on()
+        if backend:
+            self.check_backend(backend, owner, principal)
+        local = self.backend_local(backend)
         url = (clone_url or "").strip()
         if url and not CLONE_URL_RE.match(url):
             raise BadRequest("只支持 https:// 、ssh:// 或 git@ 开头的仓库地址")
         name = (name or "").strip() or (re.sub(r"\.git$", "", url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]) if url else "")
         if not PROJECT_NAME_RE.match(name):
             raise BadRequest("项目名 1–64 位：字母、数字、. _ -，不能以符号开头")
-        old = self.store.get_project(owner, name)
+        row_owner = f"{owner}@{backend}" if local else owner
+        if local and any(f["name"] == name for f in self._local_folders(backend)):
+            raise BadRequest("本机已有同名文件夹")
+        old = self.store.get_project(row_owner, name)
         if old and old["status"] != "failed":
             raise BadRequest("已有同名项目")
         if old:
-            self.store.delete_project_row(owner, name)
-        self.store.add_project(owner, name, url)
+            self.store.delete_project_row(row_owner, name)
+        self.store.add_project(row_owner, name, url)
+        scope = PROJECT_SCOPE_PREFIX + name + (f"@{backend}" if local else "")
         jid = self.store.enqueue_job(PROJECT_JOB_KIND, {"action": "create", "owner": owner, "name": name, "clone_url": url,
-                                                        "scope": PROJECT_SCOPE_PREFIX + name})
-        self.store.update_project(owner, name, job_id=jid)
-        return {"project": self.store.get_project(owner, name), "agent_online": self.agent_online()}
+                                                        "scope": scope, **({"row_owner": row_owner} if local else {})})
+        self.store.update_project(row_owner, name, job_id=jid)
+        return {"project": self.store.get_project(row_owner, name), "agent_online": self.agent_online()}
 
-    def delete_project(self, owner: str, name: str) -> dict[str, Any]:
+    def delete_project(self, owner: str, name: str, backend: str = "") -> dict[str, Any]:
         """Removes the project's conversations now and asks the worker to delete the directory."""
         self._projects_on()
+        if self.backend_local(backend):
+            raise BadRequest("这是你本机的文件夹，不在网页上删除")
         p = self.store.get_project(owner, name)
         if not p:
             raise NotFound("没有这个项目")
@@ -1065,7 +1116,7 @@ class BridgeService:
 
     def _finish_project_job(self, job: dict[str, Any], status: str, body: JobFinishIn) -> None:
         p = job.get("payload") or {}
-        owner, name = str(p.get("owner") or ""), str(p.get("name") or "")
+        owner, name = str(p.get("row_owner") or p.get("owner") or ""), str(p.get("name") or "")
         row = self.store.get_project(owner, name)
         if not row or row.get("job_id") != job["id"]:
             return  # superseded (deleted and re-created meanwhile)

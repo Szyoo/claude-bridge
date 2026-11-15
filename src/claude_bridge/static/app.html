@@ -41,7 +41,8 @@
     // Chat = scope ""; Code = scope "code:<project>", one directory per project in the user's own space
     let mode = store.get('bridge_mode', '') === 'code' ? 'code' : '';
     let project = store.get('bridge_project', '') || null;
-    let widget = null, projects = [], agentOnline = true, poll = null, openWhenReady = null;
+    let widget = null, projects = [], agentOnline = true, poll = null, openWhenReady = null, localProjects = false;
+    const bq = () => backend ? `?backend=${encodeURIComponent(backend)}` : '';
     // Claude ⟨switch⟩ another backend (e.g. DeepSeek, admins the worker allows): its threads live in scopes
     // "<scope>@<name>", so each side has its own thread list, model menu and settings. Shown only when offered.
     let backends = [], backend = store.get('bridge_backend', '') || '';
@@ -99,7 +100,7 @@
       unmount();
       // Code: the list is this project's sessions, headed by the project itself
       const projHead = proj ? `<div class="bp-side-proj"><span class="ic">${FOLDER}</span><div class="who"><div class="n">${esc(proj.name)}</div>`
-          + `<div class="d">${esc([proj.info?.branch, proj.source ? proj.source.replace(/^https?:\/\//, '').replace(/\.git$/, '') : '本地项目'].filter(Boolean).join(' · '))}</div></div>`
+          + `<div class="d">${esc([proj.info?.branch, proj.local ? '本机仓库' : (proj.source ? proj.source.replace(/^https?:\/\//, '').replace(/\.git$/, '') : '本地项目')].filter(Boolean).join(' · '))}</div></div>`
           + `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-home title="切换 / 新建项目">切换</button></div>` : '';
       const who = backend ? backendLabel() : 'Claude';
       widget = mountBridgeWidget(app, client, {
@@ -133,7 +134,10 @@
     const STATUS = { creating: ['准备中…', 'warn'], deleting: ['删除中…', 'err'], failed: ['失败', 'err'] };
 
     async function loadProjects() {
-      try { const d = await api('GET', '/api/projects'); projects = d.items; agentOnline = !!d.agent?.online; } catch (e) { toast(e.message, true); }
+      try {
+        const d = await api('GET', `/api/projects${bq()}`);
+        projects = d.items; agentOnline = !!d.agent?.online; localProjects = !!d.local;
+      } catch (e) { toast(e.message, true); }
     }
 
     // ---------- the project picker (Code mode without an open project) ----------
@@ -147,14 +151,14 @@
       const busy = projects.some(p => p.status === 'creating' || p.status === 'deleting');
       const rows = projects.map(p => {
         const [st, cls] = STATUS[p.status] || ['', ''];
-        const src = p.source ? esc(p.source.replace(/^https?:\/\//, '')) : '空项目';
+        const src = p.source ? esc(p.source.replace(/^https?:\/\//, '')) : (p.local ? (p.info?.git === false ? '文件夹（不是 git 仓库）' : '本机仓库') : '空项目');
         const meta = [p.info?.branch ? `分支 ${esc(p.info.branch)}` : '', p.threads ? `${p.threads} 段对话` : '', p.last_used ? esc(fmtSeen(p.last_used)) : ''].filter(Boolean).join(' · ');
         return `<div class="list-row"${p.status === 'ready' ? ` data-open="${esc(p.name)}" tabindex="0" role="button"` : ''}>
           <span class="row-lead">${FOLDER}</span>
           <span class="row-main"><span class="row-title">${esc(p.name)} ${st ? `<span class="pill ${cls}">${st}</span>` : ''}</span>
             <span class="row-sub">${src}${meta ? ` · ${meta}` : ''}</span>
             ${p.status === 'failed' && p.error ? `<span class="row-sub err-text">${esc(p.error)}</span>` : ''}</span>
-          ${p.status === 'deleting' ? '' : `<span class="row-end"><button type="button" class="btn-ghost btn-small danger" data-del="${esc(p.name)}" title="删除项目">删除</button></span>`}
+          ${p.status === 'deleting' || p.local ? '' : `<span class="row-end"><button type="button" class="btn-ghost btn-small danger" data-del="${esc(p.name)}" title="删除项目">删除</button></span>`}
         </div>`;
       }).join('');
       // same frame as the chat: sidebar (the projects, like the thread list) + top bar + the picker in the main area
@@ -163,7 +167,7 @@
         const ready = p.status === 'ready';
         const meta = [st, p.info?.branch, p.threads ? `${p.threads} 段对话` : '', p.last_used ? fmtSeen(p.last_used) : ''].filter(Boolean).join(' · ');
         return `<button type="button" class="bridge-thread"${ready ? ` data-open="${esc(p.name)}"` : ' disabled'}>`
-          + `<span class="t">${esc(p.name)}</span><span class="p">${esc(p.source ? p.source.replace(/^https?:\/\//, '') : '空项目')}</span>`
+          + `<span class="t">${esc(p.name)}</span><span class="p">${esc(p.source ? p.source.replace(/^https?:\/\//, '') : (p.local ? '本机仓库' : '空项目'))}</span>`
           + `<span class="m">${esc(meta)}</span></button>`;
       }).join('');
       app.innerHTML = `<div class="bridge fill bp-homeview">
@@ -174,7 +178,10 @@
         <div class="bridge-main">
           <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button><span class="bridge-title">项目</span></div>
           <div class="bp-home"><main class="bp-wrap narrow">
-          <p class="page-sub">每个项目是你专属空间里的一个目录（通常是 git 仓库）。${backend ? esc(backendLabel()) : 'Claude'} 在项目里读写文件、跑命令，每个项目有自己的对话记录${backends.length ? '（Claude 和其他服务共用同一批项目目录，对话各自分开）' : ''}。</p>
+          <p class="page-sub">${localProjects
+            ? `项目就是你电脑上${esc(projectRoot())}里的文件夹，${esc(backendLabel())} 直接在里面读写文件、跑命令，和在本机用客户端一样；新建和克隆也放到那里。网页上不删除这些文件夹。`
+            : `每个项目是你专属空间里的一个目录（通常是 git 仓库）。${backend ? esc(backendLabel()) : 'Claude'} 在项目里读写文件、跑命令，每个项目有自己的对话记录。`}</p>
+          ${localProjects && projects.length > 8 ? '<input type="search" class="field bp-proj-filter" placeholder="筛选项目" aria-label="筛选项目" autocomplete="off" />' : ''}
           ${agentOnline ? '' : '<div class="callout warn">helper 现在离线：新建 / 克隆会排队，等它上线后执行。</div>'}
           <div class="list gap bp-projects">${rows || '<p class="muted small">还没有项目，先克隆一个仓库或新建一个空项目。</p>'}</div>
           <div class="bp-grid">
@@ -187,7 +194,7 @@
             <form class="glass panel" data-form="new">
               <h2 class="panel-title bp-lead">新建空项目</h2>
               <div class="form-row"><label for="pj-name">项目名（字母、数字、. _ -）</label><input id="pj-name" class="field" name="name" required maxlength="64" placeholder="my-app" autocapitalize="none" spellcheck="false" />
-                <p class="hint">会建一个带 git 的空目录，之后让 ${backend ? esc(backendLabel()) : 'Claude'} 从零开始写。</p></div>
+                <p class="hint">会${localProjects ? `在${esc(projectRoot())}里` : ''}建一个带 git 的空目录，之后让 ${backend ? esc(backendLabel()) : 'Claude'} 从零开始写。</p></div>
               <div class="actions"><button class="btn">创建</button></div>
             </form>
           </div>
@@ -197,6 +204,20 @@
       if (busy || openWhenReady) poll = setTimeout(showHomeIfStill, 2000);
     }
     const showHomeIfStill = () => { if (mode === 'code' && !project) showHome(); };
+    // the folder that holds the local projects, from any listed project's path ("~/Documents/GitHub")
+    function projectRoot() {
+      const path = projects.find(p => p.info?.path)?.info.path || '';
+      const dir = path.replace(/\/[^/]+$/, '');
+      return dir ? ` ${dir.replace(/^\/(Users|home)\/[^/]+/, '~')} ` : '的项目文件夹';
+    }
+    app.addEventListener('input', (e) => {
+      if (!e.target.matches?.('.bp-proj-filter')) return;
+      const q = e.target.value.trim().toLowerCase();
+      for (const row of app.querySelectorAll('.bp-projects > .list-row, .bp-homeview .bridge-threads > .bridge-thread')) {
+        const name = (row.dataset.open || row.querySelector('.row-title, .t')?.textContent || '').toLowerCase();
+        row.hidden = !!q && !name.includes(q);
+      }
+    });
 
     app.addEventListener('click', async (e) => {
       const m = e.target.closest('.bp-nav [data-mode]');
@@ -220,7 +241,7 @@
         const typed = await confirm({ title: `删除项目「${name}」`, message: '无法恢复。目录里的文件和这个项目的对话都会删掉。', danger: true, confirmLabel: '删除项目',
           input: { label: `输入「${name}」确认`, placeholder: name, required: true, validate: (v) => v === name ? '' : '输入的名字不一致' } });
         if (typed === null) return;
-        try { await api('DELETE', `/api/projects/${encodeURIComponent(name)}`); } catch (err) { toast(err.message, true); }
+        try { await api('DELETE', `/api/projects/${encodeURIComponent(name)}${bq()}`); } catch (err) { toast(err.message, true); }
         return showHome();
       }
       const open = e.target.closest('[data-open]');
@@ -234,7 +255,7 @@
       const body = f.dataset.form === 'clone' ? { clone_url: f.url.value.trim(), name: f.name.value.trim() } : { name: f.name.value.trim() };
       f.querySelector('button').disabled = true;
       try {
-        const r = await api('POST', '/api/projects', body);
+        const r = await api('POST', `/api/projects${bq()}`, body);
         openWhenReady = r.project.name;
         toast(f.dataset.form === 'clone' ? '开始克隆，完成后自动打开' : '正在创建…');
       } catch (err) { toast(err.message, true); f.querySelector('button').disabled = false; return; }
