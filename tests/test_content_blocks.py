@@ -97,3 +97,49 @@ def test_raw_text_contains_no_legacy_display_separators():
         and d["type"] == "content_stream"
         and d["data"]["event"]["type"] == "content_block_delta"
     ] == ["answer"]
+
+
+def test_page_reads_only_thinking_streams_and_collapses_finished_ones(tmp_path):
+    from claude_bridge.store import BridgeStore
+
+    store = BridgeStore(tmp_path / "b.db")
+    th = store.create_thread("t1", owner="1")
+    msg = store.add_message(th["id"], "assistant", "", status="streaming")
+    ev = lambda e: store.add_event(msg["id"], "content_stream", {"native_message_id": "m1", "at": 0, "event": e})
+    ev({"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 9}}})
+    ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
+    for part in ("想", "一下"):
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": part}})
+    ev({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "secret"}})
+    ev({"type": "content_block_stop", "index": 0})
+    ev({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}})
+    for part in ("答", "案"):
+        ev({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": part}})
+    ev({"type": "content_block_stop", "index": 1})
+
+    live = store.messages(th["id"])[0]["events"]
+    assert [e["data"]["event"]["type"] for e in live] == [
+        "content_block_start", "content_block_delta", "content_block_delta", "content_block_delta",
+        "content_block_stop", "content_block_stop"]
+
+    store.set_status(msg["id"], "done")
+    done = [e["data"]["event"] for e in store.messages(th["id"])[0]["events"]]
+    assert done[0] == {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "想一下"}}
+    assert done[1]["delta"] == {"type": "signature_delta", "signature": "1"}
+    assert [e["type"] for e in done[2:]] == ["content_block_stop"]
+    assert "secret" not in str(done)
+
+
+def test_chat_scopes_relay_only_thinking_stream_rows():
+    from claude_bridge.stream_json import StreamState
+
+    st = StreamState(emit_content_blocks=True, full_stream=False)
+    feed = lambda e: [x for x in st.feed({"type": "stream_event", "event": e}) if x[0] == "event" and x[1]["type"] == "content_stream"]
+    assert not feed({"type": "message_start", "message": {"id": "m1"}})
+    assert feed({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
+    assert feed({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "x"}})
+    assert feed({"type": "content_block_stop", "index": 0})
+    assert not feed({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}})
+    assert not feed({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "y"}})
+    assert not feed({"type": "content_block_stop", "index": 1})
+    assert "y" in st.text

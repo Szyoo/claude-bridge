@@ -1201,6 +1201,7 @@ class ChatRunner:
             thinking_max=self.cfg.thinking_max_chars,
             tool_result_max=self.cfg.tool_result_max_chars,
             emit_content_blocks=self.cfg.emit_content_blocks,
+            full_stream=bool(self.cfg.allow_client_tools),
         )
         label = f"model={settings.get('model') or self.cfg.model or 'default'} effort={settings.get('effort') or 'default'}"
         self.emitter.set_status("streaming")
@@ -1434,6 +1435,13 @@ class ChatRunner:
         if st.result is None:
             self.worker._safe_finish(
                 jid, ok=False, error=f"claude 未返回 result（exit {returncode}）：{stderr or '无 stderr'}", error_kind="claude"
+            )
+            return
+        if st.result.get("is_error") and st.result.get("subtype") == "error_max_turns":
+            n = int(settings.get("max_turns") or self.cfg.max_turns)
+            self.worker._safe_finish(
+                jid, ok=False, error=f"这次已用满单次最多 {n} 轮工具调用，先停在这里（发「继续」接着做，"
+                                     "或在设置里调高「单次最多工具轮数」）", error_kind="max_turns", session_id=st.session_id,
             )
             return
         if st.result.get("is_error"):

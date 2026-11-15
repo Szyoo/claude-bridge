@@ -223,6 +223,50 @@ def public_file(row: dict[str, Any]) -> dict[str, Any]:
     return {"id": row["id"], "name": row.get("name") or "", "mime": row["mime"], "size": row.get("size") or 0}
 
 
+# Raw `content_stream` rows (the CLI's partial messages) are only rendered for thinking blocks; text and tool
+# deltas are already in the message content. Reading every one made a long thread's snapshot tens of MB.
+_EVENTS_FOR_PAGE = (
+    "(type != 'content_stream' OR data LIKE '%thinking%' OR data LIKE '%signature_delta%' "
+    "OR data LIKE '%content_block_stop%')"
+)
+_THINKING_BLOCKS = ("thinking", "redacted_thinking")
+
+
+def compact_stream_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A finished message's `content_stream` rows → one start (with the whole thinking text) and one stop per
+    thinking block; other blocks' stream rows are dropped. A signature becomes a presence marker."""
+    out: list[dict[str, Any]] = []
+    open_: dict[tuple[str, int], dict[str, Any]] = {}
+    for ev in events:
+        if ev.get("type") != "content_stream":
+            out.append(ev)
+            continue
+        d = ev.get("data") or {}
+        e = d.get("event") or {}
+        key = (d.get("native_message_id") or "", int(e.get("index", 0) or 0))
+        kind = e.get("type")
+        if kind == "content_block_start" and (e.get("content_block") or {}).get("type") in _THINKING_BLOCKS:
+            block = dict(e["content_block"])
+            block.pop("signature", None)
+            start = {**ev, "data": {**d, "event": {**e, "content_block": block}}}
+            open_[key] = start
+            out.append(start)
+        elif kind == "content_block_delta" and key in open_:
+            delta = e.get("delta") or {}
+            block = open_[key]["data"]["event"]["content_block"]
+            if delta.get("type") == "thinking_delta":
+                block["thinking"] = (block.get("thinking") or "") + (delta.get("thinking") or "")
+            elif delta.get("type") == "signature_delta" and delta.get("signature"):
+                block["signed"] = True
+        elif kind == "content_block_stop" and key in open_:
+            start = open_.pop(key)
+            if start["data"]["event"]["content_block"].pop("signed", False):
+                out.append({**ev, "data": {**d, "event": {"type": "content_block_delta", "index": key[1],
+                                                         "delta": {"type": "signature_delta", "signature": "1"}}}})
+            out.append(ev)
+    return out
+
+
 def _event(row: dict[str, Any]) -> dict[str, Any]:
     row = dict(row)
     try:
@@ -489,14 +533,16 @@ class BridgeStore:
         if with_events and rows:
             ids = [r["id"] for r in rows]
             evs = self._q(
-                f"SELECT * FROM bridge_events WHERE message_id IN ({','.join('?' * len(ids))}) ORDER BY id",
+                f"SELECT * FROM bridge_events WHERE message_id IN ({','.join('?' * len(ids))}) "
+                f"AND {_EVENTS_FOR_PAGE} ORDER BY id",
                 tuple(ids),
             )
             by_msg: dict[int, list[dict[str, Any]]] = {i: [] for i in ids}
             for e in evs:
                 by_msg[e["message_id"]].append(_event(e))
             for r in rows:
-                r["events"] = by_msg[r["id"]]
+                live = r["status"] in ("pending", "streaming")
+                r["events"] = by_msg[r["id"]] if live else compact_stream_events(by_msg[r["id"]])
         if rows:
             files = self.files_for_messages([r["id"] for r in rows])
             for r in rows:
@@ -661,7 +707,8 @@ class BridgeStore:
         return [
             _event(r)
             for r in self._q(
-                "SELECT * FROM bridge_events WHERE message_id=? AND id>? ORDER BY id", (message_id, after_id)
+                f"SELECT * FROM bridge_events WHERE message_id=? AND id>? AND {_EVENTS_FOR_PAGE} ORDER BY id",
+                (message_id, after_id),
             )
         ]
 

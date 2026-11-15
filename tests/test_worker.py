@@ -407,6 +407,15 @@ def test_bad_session_resets_and_claude_error_kind(tmp_path):
     assert client.finished[0]["reset_session"] is False and client.finished[0]["error_kind"] == "claude"
 
 
+def test_max_turns_says_so_instead_of_stderr_noise(tmp_path):
+    ev = result_ev(is_error=True, text=None, subtype="error_max_turns")
+    worker, client = make_worker(tmp_path, [init_ev(), ev, {"__stderr__": "⚠ connectors are disabled"}])
+    worker.run_chat(chat_job())
+    fin = client.finished[0]
+    assert fin["ok"] is False and fin["error_kind"] == "max_turns" and "40" in fin["error"] and "继续" in fin["error"]
+    assert "connectors" not in fin["error"] and fin["session_id"] == SID
+
+
 def test_no_result_reports_exit_code_and_stderr(tmp_path):
     worker, client = make_worker(tmp_path, [init_ev(), {"__stderr__": "Not logged in · run claude login"}], exit_code=3)
     worker.run_chat(chat_job())

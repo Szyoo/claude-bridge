@@ -6,7 +6,7 @@
 /* page column (account / admin / user): used together with .app-main */
 .bp-wrap { --page-max-w: 960px; padding-block: var(--sp-1) 48px; }
 .bp-wrap.narrow { --page-max-w: 560px; }
-.bp-wrap > .glass { margin-bottom: var(--sp-4); }
+.bp-wrap > .glass, .bp-wrap > #backends > .glass { margin-bottom: var(--sp-4); }
 .bp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-3) var(--sp-4); }
 .bp-grid.tight { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); row-gap: 0; }
 .bp-lead { margin: var(--sp-1) 0 var(--sp-3); }
@@ -154,6 +154,11 @@ body.bp-chat .bridge-form {
   margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px));
   margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px));
 }
+/* "comfortable" width: the composer lines up with the centred message column, like claude.ai */
+body.bp-chat .bridge[data-width="cozy"] .bridge-form {
+  margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px), calc((100% - 72ch) / 2));
+  margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px), calc((100% - 72ch) / 2));
+}
 body.bp-chat .bridge-side { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
 body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px)); }
 
@@ -161,8 +166,9 @@ body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px
 #api pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--sp-3); border-radius: var(--r-md); background: var(--field-bg); border: 1px solid var(--glass-border); margin: var(--sp-2) 0 0; }
 
 /* account › a backend's API key: label, its state and 清除 on one line above the field */
-.bp-key-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.bp-key-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-3); }
+.bp-key-head .panel-title { margin: 0; }
 .bp-key-head .btn-small { margin-left: auto; }
+#backends:not([hidden]) { display: contents; }  /* its panels are the page's own panels */
+.bp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }  /* balance + 3 windows: 2 × 2 at any width */
 .bp-acct .menu-item svg { width: 1.05em; height: 1.05em; flex: none; color: var(--text-dim); }
-.bp-balance { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-4); }
-.bp-balance b { font-size: var(--fs-title); font-variant-numeric: tabular-nums; }

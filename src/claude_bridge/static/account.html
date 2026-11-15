@@ -32,7 +32,7 @@
         <div class="bp-grid" id="usage"></div>
         <div id="blocked"></div>
       </section>
-      <section class="glass panel" id="backends" hidden></section>
+      <div id="backends" hidden></div>
 
       <form class="glass panel" id="profile">
         <h2 class="panel-title">资料</h2>
@@ -119,26 +119,31 @@
       }
       $('#backends').hidden = !bk.length;
       $('#backends').innerHTML = bk.map(b => {
-        const bal = fmtBalance(b.balance);
-        const rows = ['day', 'week', 'month'].map(k => {
-          const u = b.usage[k];
-          return `<div class="list-row"><span class="row-main"><span class="row-title">${esc(u.label)}：${esc(fmtUsd(u.cost_usd))}</span>`
-            + `<span class="row-sub">${u.turns} 次 · 输入 ${fmtTok(u.input_tokens)} · 缓存命中 ${fmtTok(u.cache_read_tokens)} · 输出 ${fmtTok(u.output_tokens)}</span></span></div>`;
-        }).join('');
-        const key = b.key || {};
-        const keyLine = key.source === 'worker' ? '<p class="muted small">API key 已在 helper 的配置文件里设置。</p>'
-          : `<form class="bp-gap" data-backend-key="${esc(b.name)}">`
-            + `<div class="form-row"><div class="bp-key-head"><label for="bk-${esc(b.name)}">API key</label>`
-            + (key.source === 'page' ? `<span class="muted small">已设置（…${esc(key.hint)}）</span><button type="button" class="btn-ghost btn-small" data-clear-key>清除</button>` : '')
-            + `</div><div class="field-row"><input id="bk-${esc(b.name)}" class="field mono" type="password" name="key" autocomplete="off" spellcheck="false" maxlength="300" required`
-            + ` placeholder="${key.source === 'page' ? '输入新的 key 替换' : `粘贴 ${esc(b.label)} 的 API key`}" />`
-            + `<button type="submit" class="btn">保存</button>`
-            + `</div></div><p class="tiny muted">保存在服务器上，只交给运行 helper 的电脑使用，页面上不会再显示。</p></form>`;
-        return (bal ? `<div class="bp-balance"><span class="muted small">账户余额</span><b>${esc(bal)}</b>${b.balance?.is_available === false ? '<span class="pill err">不足</span>' : ''}</div>` : '')
-          + `<h2 class="panel-title">用量</h2>`
+        const bal = fmtBalance(b.balance), key = b.key || {};
+        const tile = (label, value, ...subs) => `<div class="stat inner"><div class="stat-label">${esc(label)}</div>`
+          + `<div class="stat-value">${value}</div>${subs.map(t => `<div class="stat-sub">${t}</div>`).join('')}</div>`;
+        const tiles = (bal ? [tile('账户余额', esc(bal), b.balance?.is_available === false ? '<span class="pill err">不足</span>' : '在 DeepSeek 平台充值')] : [])
+          .concat(['day', 'week', 'month'].map(k => {
+            const u = b.usage[k];
+            return tile(u.label, esc(fmtUsd(u.cost_usd)), `${u.turns} 次 · 输出 ${fmtTok(u.output_tokens)}`,
+              `输入 ${fmtTok(u.input_tokens)} · 缓存命中 ${fmtTok(u.cache_read_tokens)}`);
+          }));
+        const keyPanel = key.source === 'worker'
+          ? '<p class="muted small">API key 已在 helper 的配置文件里设置。</p>'
+          : `<form data-backend-key="${esc(b.name)}">`
+            + `<div class="field-row"><input id="bk-${esc(b.name)}" class="field mono" type="password" name="key" autocomplete="off" spellcheck="false" maxlength="300" required`
+            + ` aria-label="API key" placeholder="${key.source === 'page' ? '输入新的 key 替换' : `粘贴 ${esc(b.label)} 的 API key`}" />`
+            + `<button type="submit" class="btn">保存</button></div>`
+            + `<p class="tiny muted bp-gap">保存在服务器上，只交给运行 helper 的电脑使用，页面上不会再显示。</p></form>`;
+        return `<section class="glass panel"><h2 class="panel-title">用量</h2>`
           + `<p class="muted small bp-lead">按 ${esc(b.label)} 的 API 价格估算（区分缓存命中与高峰时段）。</p>`
-          + (key.source ? '' : `<div class="callout warn bp-gap">还没有 API key：在下面填写后才能和 ${esc(b.label)} 对话。</div>`)
-          + `<div class="list divided">${rows}</div>` + keyLine;
+          + `<div class="stat-grid bp-stats">${tiles.join('')}</div></section>`
+          + `<section class="glass panel"><div class="bp-key-head"><h2 class="panel-title">API key</h2>`
+          + (key.source === 'page' ? `<span class="pill">已设置 …${esc(key.hint)}</span><button type="button" class="btn-ghost btn-small" data-clear-key>清除</button>` : '')
+          + (key.source === 'worker' ? '<span class="pill">helper 配置</span>' : '')
+          + `</div>`
+          + (key.source ? '' : `<div class="callout warn bp-gap">还没有 API key：填写后才能和 ${esc(b.label)} 对话。</div>`)
+          + keyPanel + `</section>`;
       }).join('');
     }
 
@@ -157,7 +162,7 @@
       saveBackendKey(f.dataset.backendKey, f.key.value.trim());
     });
     $('#backends').addEventListener('click', (e) => {
-      const f = e.target.closest('[data-clear-key]')?.closest('[data-backend-key]');
+      const f = e.target.closest('[data-clear-key]')?.closest('section')?.querySelector('[data-backend-key]');
       if (f) saveBackendKey(f.dataset.backendKey, null);
     });
 

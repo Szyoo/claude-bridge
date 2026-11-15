@@ -1495,7 +1495,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
           <canvas class="bridge-pb-sparks" aria-hidden="true"></canvas>
           <div class="bridge-queue" hidden></div>
           <div class="bridge-tray" hidden></div>
-          <textarea class="bridge-input" rows="1" placeholder="${esc(o.placeholder)}" aria-label="${esc(o.placeholder)}" aria-controls="${menuId}" aria-autocomplete="list"></textarea>
+          <textarea class="bridge-input" rows="1" autocomplete="off" placeholder="${esc(o.placeholder)}" aria-label="${esc(o.placeholder)}" aria-controls="${menuId}" aria-autocomplete="list"></textarea>
           <div class="bridge-bar">
             <button type="button" class="bridge-icon" data-act="prefs" title="设置" aria-label="设置"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h7M13 4h1M2 8h2M8 8h6M2 12h8"/><circle cx="11" cy="4" r="1.7"/><circle cx="6" cy="8" r="1.7"/><circle cx="12" cy="12" r="1.7"/></svg></button>
             <button type="button" class="bridge-icon bridge-pb-tool" data-pb="plus" title="${esc(S.attach)}" aria-label="${esc(S.attach)}" aria-expanded="false" hidden>${hugeicon('plus', 16, 2)}</button>

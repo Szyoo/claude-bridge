@@ -124,7 +124,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-empty { color: var(--bridge-muted); font-size: .928em; text-align: center; margin-top: 40px; }
 .bridge-turn { min-width: 0; word-break: break-word; overflow-wrap: anywhere; }
 .bridge-turn + .bridge-turn { margin-top: var(--chat-turn-gap); }
-.bridge[data-width="cozy"] .bridge-turn, .bridge-root[data-width="cozy"] .bridge-turn { max-width: 72ch; }
+.bridge[data-width="cozy"] .bridge-turn, .bridge-root[data-width="cozy"] .bridge-turn { max-width: 72ch; margin-inline: auto; }
 /* a hairline above each user turn separates rounds */
 .bridge-turn.user:not(:first-child)::before { content: ""; display: block; height: 1px; background: var(--bridge-border); margin-bottom: var(--chat-turn-gap); }
 .bridge-turn-head { display: flex; align-items: baseline; gap: .6em; font-size: .857em; color: var(--bridge-muted); margin-bottom: calc(var(--chat-item-gap) * .5); }

@@ -156,11 +156,13 @@ def merge_results(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
 
 class StreamState:
     def __init__(self, *, resumed: bool = False, thinking_max: int = 4000, tool_result_max: int = 4000,
-                 emit_content_blocks: bool = False) -> None:
+                 emit_content_blocks: bool = False, full_stream: bool = True) -> None:
         self.resumed = resumed
         self.thinking_max = thinking_max
         self.tool_result_max = tool_result_max
         self.emit_content_blocks = emit_content_blocks
+        # False: relay only thinking blocks' stream rows (all the page renders); the Messages API needs them all
+        self.full_stream = full_stream
         self.session_id: str | None = None
         self.init: dict[str, Any] | None = None
         self.result: dict[str, Any] | None = None
@@ -189,8 +191,9 @@ class StreamState:
             return self._system(ev)
         if kind == "stream_event":
             event = ev.get("event") or {}
+            keep = self.full_stream or self._thinking_stream(event)
             out = self._stream_event(event)
-            if self.emit_content_blocks:
+            if self.emit_content_blocks and keep:
                 out.insert(0, ("event", {"type": "content_stream", "data": {
                     "native_message_id": self._cur_msg, "event": deepcopy(event), "at":self.text_total}}))
             return out
@@ -233,6 +236,17 @@ class StreamState:
             "resumed": self.resumed,
         }
         return [("event", {"type": "init", "data": data})]
+
+    def _thinking_stream(self, e: dict[str, Any]) -> bool:
+        t = e.get("type")
+        if t == "content_block_start":
+            return (e.get("content_block") or {}).get("type") in ("thinking", "redacted_thinking")
+        if t == "content_block_delta":
+            return (e.get("delta") or {}).get("type") in ("thinking_delta", "signature_delta")
+        if t == "content_block_stop":
+            b = self._open.get(int(e.get("index", 0)))
+            return bool(b) and b["type"] in ("thinking", "redacted_thinking")
+        return False
 
     def _stream_event(self, e: dict[str, Any]) -> list[Emission]:
         t = e.get("type")
