@@ -203,7 +203,7 @@ test('stepsHtml escapes tool output', () => {
 test('sanitizePrefs clamps and falls back; loadPrefs survives broken storage', () => {
   const p = sanitizePrefs({ scale: 9, height: 10, density: 'huge', width: 'x', sendKey: 'y', sideW: 10, inputH: 9999, timestamps: 0 });
   assert.equal(p.scale, 1.4); assert.equal(p.height, 50); assert.equal(p.density, 'cozy'); assert.equal(p.width, 'cozy');
-  assert.equal(p.sendKey, 'enter'); assert.equal(p.sideW, 180); assert.equal(p.inputH, 600); assert.equal(p.timestamps, false);
+  assert.equal(p.sendKey, 'enter'); assert.equal(p.sideW, 180); assert.equal(p.inputH, undefined); assert.equal(p.timestamps, false);
   assert.deepEqual(sanitizePrefs(null), DEFAULT_PREFS);
   globalThis.localStorage = { getItem() { throw new Error('blocked'); } };
   assert.deepEqual(loadPrefs('k'), DEFAULT_PREFS);

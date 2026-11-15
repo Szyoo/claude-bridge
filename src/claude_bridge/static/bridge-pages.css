@@ -119,6 +119,11 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 
 /* ---------- chat page on the site's background theme: glass layers over .bg-layer ----------
    Scoped to body.bp-chat, so the embedded widget (bridge-widget.css alone) keeps its flat look. */
+/* the chat page is one screen: only the transcript, the side list and the composer scroll inside it. The page itself
+   neither scrolls (the design tokens' body min-height: 100vh is taller than what a phone shows) nor bounces. */
+html:has(> body.bp-chat), body.bp-chat { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body.bp-chat { min-height: 0; }
+body.bp-chat .bridge-list, body.bp-chat .bridge-threads { overscroll-behavior: contain; }
 body.bp-chat .bridge { background: transparent; }
 body.bp-chat .bridge-side,
 body.bp-chat .bridge-top,

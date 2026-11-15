@@ -220,11 +220,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 /* ---------- composer ---------- */
 .bridge-form { position: relative; margin: 0 var(--chat-gutter) var(--chat-item-gap); padding: .45em .5em .4em; border: 1px solid var(--bridge-border); border-radius: var(--chat-radius-composer); background: var(--bridge-panel); box-shadow: var(--bridge-shadow-composer); display: grid; gap: 4px; }
 .bridge-form:focus-within { box-shadow: var(--bridge-shadow-composer-focus); border-color: color-mix(in srgb, var(--bridge-muted) 60%, var(--bridge-border)); }
-.bridge-grip { position: absolute; top: -6px; left: 0; right: 0; height: 12px; cursor: ns-resize; }
-.bridge-grip::after { content: ""; position: absolute; left: 50%; top: 4px; width: 36px; height: 3px; margin-left: -18px; border-radius: 2px; background: var(--bridge-border); opacity: 0; transition: opacity .15s; }
-.bridge-grip:hover::after, .bridge-dragging .bridge-grip::after { opacity: 1; }
 .bridge-input { width: 100%; box-sizing: border-box; resize: none; padding: .35em .5em; border: 0; background: transparent; color: var(--bridge-fg); font: inherit; font-size: 1.07em; line-height: 1.45; max-height: 40vh; outline: none; }
-.bridge-input.fixed { overflow-y: auto; max-height: none; }
 .bridge-bar { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .bridge-bar .grow { flex: 1; }
 .bridge-pick { appearance: none; -webkit-appearance: none; height: var(--chat-control); border: 0; background: transparent; color: var(--bridge-muted); font: inherit; font-size: .857em; cursor: pointer; padding: 0 18px 0 8px; border-radius: var(--chat-radius); max-width: 180px; text-overflow: ellipsis;
@@ -256,7 +252,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-pop { overflow: hidden; }
 .bridge-pop-body { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin-right: -8px; padding-right: 8px; }
 .bridge-scrim { display: none; }
-.bridge-side-grip, .bridge-grip { touch-action: none; }
+.bridge-side-grip { touch-action: none; }
 .bridge-pop-title { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--bridge-muted); margin: 2px 0 -4px; }
 .bridge-pop-title:not(:first-child) { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--bridge-border); }
 .bridge-prefs { display: flex; flex-direction: column; gap: 10px; }
@@ -545,4 +541,3 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
   .bridge-voice-glyph > * { filter: none !important; transform: none !important; transition: opacity .2s ease; }
   .bridge-voice-time, .bridge-voice-wave, .bridge-voice-glyph { filter: none !important; transition-property: opacity; }
 }
-.bridge-pb .bridge-input.fixed { overflow-y: auto; }

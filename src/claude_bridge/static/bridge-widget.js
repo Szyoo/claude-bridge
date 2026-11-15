@@ -641,7 +641,6 @@ export const DEFAULT_PREFS = {
   sidebar: true,      // 桌面端对话列表
   height: 72,         // 聊天区高度 vh
   sideW: null,        // 侧栏宽度 px（拖过才有）
-  inputH: null,       // 输入框高度 px（拖过才有；有值就不再自动长高）
 };
 export const DENSITY_PX = { compact: 13, cozy: 14, roomy: 16 };
 const clamp = (v, lo, hi, d) => { v = Number(v); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; };
@@ -654,8 +653,8 @@ export function sanitizePrefs(p, defaults = DEFAULT_PREFS) {
   if (!['cozy', 'full'].includes(o.width)) o.width = defaults.width;
   if (!['enter', 'mod'].includes(o.sendKey)) o.sendKey = defaults.sendKey;
   o.sideW = o.sideW == null ? null : clamp(o.sideW, 180, 480, null);
-  o.inputH = o.inputH == null ? null : clamp(o.inputH, 40, 600, null);
   for (const k of ['timestamps', 'toolsOpen', 'codeWrap', 'sidebar']) o[k] = !!o[k];
+  delete o.inputH;  // the composer's height is no longer set by hand: it follows its lines
   return o;
 }
 export function loadPrefs(key = 'bridge_ui', defaults = DEFAULT_PREFS) {
@@ -1497,7 +1496,6 @@ export function mountBridgeWidget(el, client, opts = {}) {
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
         <form class="bridge-form bridge-pb">
-          <div class="bridge-grip" title="拖动调整输入框高度，双击恢复自动"></div>
           <div class="bridge-pb-menu" id="${menuId}" hidden></div>
           <canvas class="bridge-pb-sparks" aria-hidden="true"></canvas>
           <div class="bridge-queue" hidden></div>
@@ -1572,7 +1570,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     savePrefs(prefs, o.prefsKey);
     if (key === 'sendKey' || !key) input.placeholder = state.inflight ? input.placeholder : placeholder();
     if (key === 'timestamps' || key === 'toolsOpen' || !key) for (const id of state.order) paint(id);
-    if (key === 'inputH' || !key) { if (prefs.inputH) { input.style.height = `${prefs.inputH}px`; input.style.overflowY = ''; input.classList.add('fixed'); } else { input.classList.remove('fixed'); autoGrow(); } }
+    if (!key) autoGrow();
   }
 
   // ---------- rendering ----------
@@ -1764,10 +1762,10 @@ export function mountBridgeWidget(el, client, opts = {}) {
   }
   // grows with the text up to maxRows lines (and never past 40% of the viewport), then scrolls
   function autoGrow() {
-    if (prefs.inputH) return;
     const cs = getComputedStyle(input);
     const line = parseFloat(cs.lineHeight) || 20, pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-    const cap = Math.min(line * Math.max(1, Number(o.maxRows) || 12) + pad, window.innerHeight * 0.4);
+    // grows with its lines up to `maxRows` (and 40% of what is visible: the keyboard shrinks that on phones), then scrolls
+    const cap = Math.min(line * Math.max(1, Number(o.maxRows) || 12) + pad, (window.visualViewport?.height || window.innerHeight) * 0.4);
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, cap)}px`;
     input.style.overflowY = input.scrollHeight > cap + 1 ? 'auto' : 'hidden';
@@ -2151,11 +2149,6 @@ export function mountBridgeWidget(el, client, opts = {}) {
   input.addEventListener('keyup', (e) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) syncToken(); });
   input.addEventListener('click', () => { if (cp.menu && !['slash', 'at'].includes(cp.menu)) closeMenu(); else syncToken(); });
   const offMenuOutside = onOutsidePointer('.bridge-form', () => closeMenu());
-  // drag the grip above the input to fix its height; double-click restores auto-grow
-  let h0 = 0;
-  attachDrag($('.bridge-grip'), (_, dy) => { prefs.inputH = Math.max(40, Math.min(600, h0 - dy)); input.style.height = `${prefs.inputH}px`; input.classList.add('fixed'); }, () => usePrefs('inputH'));
-  $('.bridge-grip').addEventListener('pointerdown', () => { h0 = input.offsetHeight; });
-  $('.bridge-grip').addEventListener('dblclick', () => { prefs.inputH = null; usePrefs('inputH'); });
   if (o.showThreads) {
     let w0 = 0; const side = $('.bridge-side');
     $('.bridge-side-grip').addEventListener('pointerdown', () => { w0 = side.offsetWidth; });
