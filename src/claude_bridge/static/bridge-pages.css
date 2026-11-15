@@ -37,44 +37,47 @@
 /* login error line: keeps its height so the card doesn't jump */
 .bp-err { min-height: 1.2em; }
 
-/* ---------- inside the chat (bridge-widget): these follow the widget's --bridge-* tokens ---------- */
+/* ---------- inside the chat (bridge-widget): these follow the widget's --bridge-* tokens ----------
+   Laid out like claude.ai: the sidebar carries everything about *where* you are — the model service on top
+   (Claude | DeepSeek, the biggest switch), ＋ new, the views (对话 / 项目), the recent list, your account at the foot;
+   the top bar only names the open conversation. */
 
-/* the user block at the bottom of the chat sidebar */
-.bp-me { display: flex; align-items: center; gap: var(--sp-2); }
-.bp-me a.me { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: var(--sp-2); border-radius: var(--chat-radius, var(--r-xs)); color: var(--bridge-fg); text-decoration: none; }
-.bp-me a.me:hover { background: var(--bridge-hover); }
-.bp-me .n { font-weight: 600; font-size: .928em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-me .u { font-size: .786em; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-me .u.full { color: var(--bridge-err); }
-.bp-me form { margin: 0; }
-.bp-me .grow { flex: 1; }
+/* the model service: a full-width segmented control heading the sidebar (@szyyw/design .seg) */
+.bp-backend { display: flex; width: 100%; }
+.bp-backend > button { flex: 1; }
 
-/* Chat ⟨switch⟩ Code in the top bar: @szyyw/design Squish Switch between two clickable words */
-.bp-mode { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-1); }
-.bp-mode .l { border: 0; background: none; padding: 2px 0; font: inherit; font-size: .857em; color: var(--bridge-muted); cursor: pointer; transition: color var(--dur-fast) var(--ease); }
-.bp-mode .l.on { color: var(--bridge-fg); font-weight: 600; }
-.bp-mode .l:hover { color: var(--bridge-fg); }
-.bp-mode .l:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); border-radius: var(--r-xs); }
+/* views: 对话 / 项目 */
+.bridge-side-nav { display: flex; flex-direction: column; gap: 2px; }
+.bp-nav-item { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 34px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--bridge-fg); font: inherit; font-size: .928em; text-align: left; cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+.bp-nav-item svg { width: 1.1em; height: 1.1em; flex: none; color: var(--bridge-muted); }
+.bp-nav-item:hover { background: var(--bridge-hover); }
+.bp-nav-item.on { background: var(--bridge-hover); font-weight: 600; }
+.bp-nav-item.on svg { color: var(--bridge-fg); }
+.bp-nav-item:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.bp-side-label { font-size: .786em; color: var(--bridge-muted); padding: var(--sp-3) var(--sp-2) 2px; }
 
-/* signed-in user + own usage: top right on desktop (like the project picker always had), sidebar foot on phones */
-.bp-me-top { flex: none; }
-.bp-me-top a.me { padding: 2px var(--sp-2); }
-.bridge-side-foot:has(.bp-me-side) { display: none; }
-@media (max-width: 720px) {
-  .bp-me-top { display: none; }
-  .bridge-side-foot:has(.bp-me-side) { display: block; }
-}
+/* your account at the sidebar's foot: avatar · name · one line of use; opens a menu (@szyyw/design .menu) */
+.bp-acct-btn { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: var(--sp-2); border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--bridge-fg); font: inherit; text-align: left; cursor: pointer; }
+.bp-acct-btn:hover, .bp-acct-btn[aria-expanded="true"] { background: var(--bridge-hover); }
+.bp-acct-btn:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.bp-acct-btn .av { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: .857em;
+  background: color-mix(in srgb, var(--accent) 24%, transparent); color: var(--text); }
+.bp-acct-btn .who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.bp-acct-btn .n { font-weight: 600; font-size: .928em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-acct-btn .u { font-size: .786em; color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-acct-btn .u.full { color: var(--bridge-err); }
+.bp-acct-btn > svg { flex: none; width: 1em; height: 1em; color: var(--bridge-muted); }
+.bp-acct .menu { min-width: 220px; }
+.bp-acct form { margin: 0; }
+.bp-acct-menu-head { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); color: var(--text-dim); }
 
 /* switching Chat / Code / a project: a View Transition. The sidebar box and the top bar stay put; the list,
    the side head and the main area slide toward the direction of travel and fade (app.html sets data-vt). */
 .bp-chat .bridge-threads { view-transition-name: bp-list; }
 .bp-chat .bridge-side-head { view-transition-name: bp-side-head; }
 .bp-chat .bridge-new { view-transition-name: bp-new; }
-.bp-chat .bp-mode { view-transition-name: bp-mode; }
-/* Claude | DeepSeek: a full-width segmented control heading the sidebar (@szyyw/design .seg) */
-.bp-backend { display: flex; width: 100%; }
-.bp-backend > button { flex: 1; }
-.bridge-side-head:has(.bp-backend) { display: flex; flex-direction: column; gap: var(--sp-2); }
 .bp-chat .bridge-list, .bp-chat .bp-home { view-transition-name: bp-body; }
 ::view-transition-group(*) { animation-duration: var(--dur-base); animation-timing-function: var(--ease-out); }
 html[data-vt="fwd"]::view-transition-old(bp-list), html[data-vt="fwd"]::view-transition-old(bp-body) { animation: bp-vt-out-l var(--dur-fast) ease-in both; }
@@ -86,12 +89,6 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 @keyframes bp-vt-out-r { to { opacity: 0; transform: translateX(18px); } }
 @keyframes bp-vt-in-l { from { opacity: 0; transform: translateX(-18px); } }
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } }
-
-/* Code mode: project button in the chat top bar */
-.bp-proj { display: inline-flex; align-items: center; gap: var(--sp-1); max-width: 40vw; border: 1px solid var(--bridge-border); background: var(--bridge-panel); color: var(--bridge-fg); font: inherit; font-size: .857em; font-weight: 600; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-xs); cursor: pointer; flex: none; }
-.bp-proj span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-proj i { display: inline-flex; color: var(--bridge-muted); font-size: .8em; }
-.bp-proj:hover { background: var(--bridge-hover); }
 
 /* Code mode: project picker page, in the chat's frame (sidebar = projects) */
 .bp-homeview .bridge-main { grid-template-rows: auto 1fr; }
@@ -116,22 +113,8 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
   min-height: calc(min(var(--corner-rail-h, 34px), 40px) + 20px + env(safe-area-inset-top, 0px));
   padding-top: calc(6px + env(safe-area-inset-top, 0px));
 }
-
-/* phones: the corner tools leave too little room for the switches, so the top bar takes two rows —
-   row 1: ☰ · title · ⋯ beside the corner tools; row 2 (below them, full width): Chat⟨⟩Code and the project */
-@media (max-width: 720px) {
-  .bp-chat .bridge-top { flex-wrap: wrap; padding-right: 12px; row-gap: 0; }
-  /* the spacer under the corner tools: as wide as they are (less the bar's padding and gap) and as tall, so row 2 starts below them */
-  .bp-chat .bridge-top::before { content: ""; order: 1; flex: 0 0 max(0px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px) - 18px));
-    height: calc(min(var(--corner-rail-h, 36px), 40px) + 8px); }
-  .bp-chat .bridge-top::after { content: ""; order: 1; flex-basis: 100%; height: 0; }
-  .bp-chat .bridge-top > :is(.bp-mode, .bp-proj) { order: 2; margin: var(--sp-1) 0 2px; }
-  .bp-chat .bridge-top > .bp-proj { margin-left: var(--sp-3); }
-  .bp-chat .bridge-top > .bp-mode:first-of-type { padding-left: 0; }
-  /* row 1 must hold its items plus the spacer, or the spacer wraps: the title takes what is left, the helper status is just its dot */
-  .bp-chat .bridge-top > .bridge-title { flex: 1 1 0; }
-  .bp-chat .bridge-top > .bridge-agent .txt { display: none; }
-}
+/* phones: next to the corner tools the bar holds ☰ · title · ⋯ only; the helper status is just its dot */
+@media (max-width: 720px) { .bp-chat .bridge-top > .bridge-agent .txt { display: none; } }
 
 /* ---------- chat page on the site's background theme: glass layers over .bg-layer ----------
    Scoped to body.bp-chat, so the embedded widget (bridge-widget.css alone) keeps its flat look. */
@@ -170,3 +153,6 @@ body.bp-chat #app { position: relative; z-index: 1; }
 /* account › a backend's API key: label, its state and 清除 on one line above the field */
 .bp-key-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .bp-key-head .btn-small { margin-left: auto; }
+.bp-acct .menu-item svg { width: 1.05em; height: 1.05em; flex: none; color: var(--text-dim); }
+.bp-balance { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+.bp-balance b { font-size: var(--fs-title); font-variant-numeric: tabular-nums; }

@@ -67,7 +67,7 @@ claude-bridge status    # 检查服务端连通性与本机 claude 登录状态
 
 ### 其他后端
 
-worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏对话列表上方）（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
+worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏最上方）（任何提供 Anthropic 兼容接口的模型都行）。在 worker 机器上建一个私有文件（`chmod 600`），用 `CLAUDE_BRIDGE_BACKENDS` 指向它，格式见 [deploy/mac/backends.example.json](deploy/mac/backends.example.json)：
 
 - `owners`：可以使用的账户 id；还要求该账户当前是 admin。普通用户、API 令牌和调用方（callers）都用不了
 - `models`：切到这个后端时模型菜单里的选项，`id` 即传给 `--model` 的模型名，第一个为默认
@@ -76,7 +76,7 @@ worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏�
 - `pricing` / `peak`：按对方 API 价格记账用（美元 / 百万 token，按模型名匹配；`peak` 为高峰时段与倍数）
 - `balance_url`：可选，worker 每 10 分钟用 key 查一次账户余额，显示在页面上
 
-切到这个后端后，对话列表、模型菜单和设置都是它自己的（对话的 scope 是 `<原 scope>@<后端名>`，Code 模式下用同一个项目目录）。它的用量单独记账，按对方的 API 价格估算（区分缓存命中、未命中和高峰时段；节假日不识别，按高峰价估，宁高勿低），显示在页面右上角和「我的账户」，不计入 Claude 额度，也不参与额度标定。
+切到这个后端后，对话列表、模型菜单和设置都是它自己的（对话的 scope 是 `<原 scope>@<后端名>`，Code 模式下用同一个项目目录）。它的用量单独记账，按对方的 API 价格估算（区分缓存命中、未命中和高峰时段；节假日不识别，按高峰价估，宁高勿低），显示在 DeepSeek 一侧的账户行与它自己的账户页（`/account?svc=<后端名>`），不计入 Claude 额度，也不参与额度标定。
 
 ### Docker
 

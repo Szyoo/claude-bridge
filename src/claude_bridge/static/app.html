@@ -26,7 +26,7 @@
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';
     import { api, esc, fmtPct, fmtSeen, toast, fmtUsd, fmtBalance } from '/static/bridge/bridge-pages.js';
-    import { enhanceSwitches } from '@szyyw/design/switch.js';
+    import { attachMenu } from '@szyyw/design/menu.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { iconSvg } from '@szyyw/design/icons.js';
     import { openLightbox } from '@szyyw/design/lightbox.js';
@@ -47,23 +47,18 @@
     let backends = [], backend = store.get('bridge_backend', '') || '';
     const sfx = () => backend ? `@${backend}` : '';
     const backendLabel = () => backends.find(b => b.name === backend)?.label || backend;
-    // a segmented control at the head of the sidebar: it picks whose conversations the list (and the page) shows,
-    // so it lives with the list — and looks nothing like the Chat ⟨⟩ Code switch in the top bar
+    // ---- the sidebar, laid out like claude.ai: the model service on top (the biggest switch: Claude | DeepSeek),
+    // ＋ new, the views (对话 / 项目), the recent list, and your account at the foot. The top bar only names the
+    // open conversation. On the DeepSeek side everything about the account is DeepSeek's own (its use, balance, key).
     const backendSeg = () => {
       if (!backends.length) return '';
       const opt = (name, label) => `<button type="button" data-backend="${esc(name)}" aria-pressed="${backend === name}"${backend === name ? ' class="active"' : ''}>${esc(label)}</button>`;
-      return `<div class="seg compact bp-backend" role="group" aria-label="对话用的模型服务">${opt('', 'Claude')}${backends.map(b => opt(b.name, b.label)).join('')}</div>`;
+      return `<div class="seg bp-backend" role="group" aria-label="模型服务">${opt('', 'Claude')}${backends.map(b => opt(b.name, b.label)).join('')}</div>`;
     };
-
-    // Chat ⟨switch⟩ Code (@szyyw/design Squish Switch); both words are clickable too
-    const toggle = () => `<span class="bp-mode" role="group" aria-label="模式">`
-      + `<button type="button" class="l${mode === '' ? ' on' : ''}" data-mode="" aria-pressed="${mode === ''}">Chat</button>`
-      + `<input type="checkbox" class="switch" data-mode-switch data-width="34" data-height="18" aria-label="Code 模式"${mode === 'code' ? ' checked' : ''} />`
-      + `<button type="button" class="l${mode === 'code' ? ' on' : ''}" data-mode="code" aria-pressed="${mode === 'code'}">Code</button></span>`;
-    // who is signed in + your own use of the 5h / weekly windows: top right in every view (the sidebar foot on phones)
-    const ME = '<span class="bp-me bp-me-top"></span>';
-    let unSwitch = null;
-    const wireSwitch = () => { unSwitch?.(); unSwitch = enhanceSwitches(app); };
+    const navItem = (m, icon, label) => `<button type="button" class="bp-nav-item${mode === m ? ' on' : ''}" data-mode="${m}"${mode === m ? ' aria-current="page"' : ''}>${iconSvg(icon)}<span>${label}</span></button>`;
+    const nav = () => `<nav class="bp-nav" aria-label="视图">${navItem('', 'sparkles', '对话')}${navItem('code', 'folder', '项目')}</nav>`;
+    const label = (t) => `<div class="bp-side-label">${esc(t)}</div>`;
+    const ACCT = '<div class="bp-acct"></div>';
 
     // Swaps views with a View Transition: the sidebar box and the top bar stay, their contents slide in the
     // direction of travel (Chat → Code → a project is "forward"). No animation for reduced motion / old browsers.
@@ -86,12 +81,9 @@
 
     async function setMode(next) {
       if (next === mode) return;
-      const sw = app.querySelector('[data-mode-switch]');
-      if (sw && sw.checked !== (next === 'code')) sw.checked = next === 'code';
-      for (const b of app.querySelectorAll('.bp-mode [data-mode]')) { const on = b.dataset.mode === next; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+      for (const b of app.querySelectorAll('.bp-nav [data-mode]')) { const on = b.dataset.mode === next; b.classList.toggle('on', on); on ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'); }
       mode = next; store.set('bridge_mode', mode);
-      if (!reduced()) await new Promise(r => setTimeout(r, 300));  // let the switch slide first
-      if (mode === next) transition(() => show(), next === 'code' ? 'fwd' : 'back');
+      transition(() => show(), next === 'code' ? 'fwd' : 'back');
     }
 
     async function setBackend(next) {
@@ -103,23 +95,22 @@
     }
     function unmount() { widget?.destroy(); widget = null; clearTimeout(poll); poll = null; }
 
-    function mountChat(scope, extra = '', proj = null) {
+    function mountChat(scope, proj = null) {
       unmount();
-      // Code: the sidebar is this project's sessions, headed by the project itself
-      const code = proj ? {
-        sideHead: backendSeg() + `<div class="bp-side-proj"><span class="ic">${FOLDER}</span><div class="who"><div class="n">${esc(proj.name)}</div>`
+      // Code: the list is this project's sessions, headed by the project itself
+      const projHead = proj ? `<div class="bp-side-proj"><span class="ic">${FOLDER}</span><div class="who"><div class="n">${esc(proj.name)}</div>`
           + `<div class="d">${esc([proj.info?.branch, proj.source ? proj.source.replace(/^https?:\/\//, '').replace(/\.git$/, '') : '本地项目'].filter(Boolean).join(' · '))}</div></div>`
-          + `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-home title="切换 / 新建项目">切换</button></div>`,
-        strings: { newThread: '＋ 新会话', threadTitle: '新会话', del: '删除会话', delConfirm: '删除这个会话？记录会一起删除，项目里的文件不受影响。',
-          empty: `在 ${proj.name} 里开始：描述你想让 Claude 做的事` },
-      } : (backends.length ? { sideHead: backendSeg() } : {});
+          + `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-home title="切换 / 新建项目">切换</button></div>` : '';
+      const who = backend ? backendLabel() : 'Claude';
       widget = mountBridgeWidget(app, client, {
-        scope, title: 'claude-bridge', fill: true, topStart: toggle() + extra, topEnd: ME, sideFoot: '<div class="bp-me bp-me-side"></div>',
-        placeholder: scope.startsWith('code:') ? `让 ${backend ? backendLabel() : 'Claude'} 读代码、改文件、跑命令` : (backend ? `输入消息（${backendLabel()}）` : '输入消息'), ...code,
+        scope, title: 'claude-bridge', fill: true, sideHead: backendSeg() || undefined,
+        sideNav: nav() + (proj ? label('项目') + projHead + label('会话') : label('最近')), sideFoot: ACCT,
+        placeholder: proj ? `让 ${who} 读代码、改文件、跑命令` : (backend ? `给 ${who} 发消息` : '输入消息'),
+        ...(proj ? { strings: { newThread: '＋ 新会话', threadTitle: '新会话', del: '删除会话', delConfirm: '删除这个会话？记录会一起删除，项目里的文件不受影响。',
+          empty: `在 ${proj.name} 里开始：描述你想让 ${who} 做的事` } } : (backend ? { strings: { empty: `${who} · 问点什么吧` } } : {})),
         openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
       });
-      wireSwitch();
-      renderMe();
+      renderAccount();
       return listReady();
     }
 
@@ -131,7 +122,7 @@
         const p = projects.find(x => x.name === project && x.status === 'ready');
         if (p) {
           document.title = `claude-bridge · ${p.name}${tag}`;
-          return mountChat(`code:${p.name}${sfx()}`, `<button type="button" class="bp-proj" data-home title="切换 / 新建项目">${FOLDER}<span>${esc(p.name)}</span><i>${iconSvg('chevron-down')}</i></button>`, p);
+          return mountChat(`code:${p.name}${sfx()}`, p);
         }
         project = null; store.set('bridge_project', null);
       }
@@ -176,13 +167,14 @@
           + `<span class="m">${esc(meta)}</span></button>`;
       }).join('');
       app.innerHTML = `<div class="bridge fill bp-homeview">
-        <aside class="bridge-side">${backends.length ? `<div class="bridge-side-head">${backendSeg()}</div>` : ''}<button type="button" class="bridge-btn bridge-new" data-act="home-new">${iconSvg('plus')}新建项目</button>
-          <div class="bridge-threads">${side}</div><div class="bridge-side-foot"><div class="bp-me bp-me-side"></div></div></aside>
+        <aside class="bridge-side">${backends.length ? `<div class="bridge-side-head">${backendSeg()}</div>` : ''}<button type="button" class="bridge-btn bridge-new" data-act="home-new">＋ 新建项目</button>
+          <div class="bridge-side-nav">${nav()}${projects.length ? label('全部项目') : ''}</div>
+          <div class="bridge-threads">${side}</div><div class="bridge-side-foot">${ACCT}</div></aside>
         <div class="bridge-side-scrim" data-act="side-close"></div>
         <div class="bridge-main">
-          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button>${toggle()}<span class="bridge-title">选择项目</span>${ME}</div>
+          <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button><span class="bridge-title">项目</span></div>
           <div class="bp-home"><main class="bp-wrap narrow">
-          <p class="page-sub">每个项目是你专属空间里的一个目录（通常是 git 仓库）。Claude 在项目里读写文件、跑命令，每个项目有自己的对话记录。</p>
+          <p class="page-sub">每个项目是你专属空间里的一个目录（通常是 git 仓库）。${backend ? esc(backendLabel()) : 'Claude'} 在项目里读写文件、跑命令，每个项目有自己的对话记录${backends.length ? '（Claude 和其他服务共用同一批项目目录，对话各自分开）' : ''}。</p>
           ${agentOnline ? '' : '<div class="callout warn">helper 现在离线：新建 / 克隆会排队，等它上线后执行。</div>'}
           <div class="list gap bp-projects">${rows || '<p class="muted small">还没有项目，先克隆一个仓库或新建一个空项目。</p>'}</div>
           <div class="bp-grid">
@@ -195,20 +187,19 @@
             <form class="glass panel" data-form="new">
               <h2 class="panel-title bp-lead">新建空项目</h2>
               <div class="form-row"><label for="pj-name">项目名（字母、数字、. _ -）</label><input id="pj-name" class="field" name="name" required maxlength="64" placeholder="my-app" autocapitalize="none" spellcheck="false" />
-                <p class="hint">会建一个带 git 的空目录，之后让 Claude 从零开始写。</p></div>
+                <p class="hint">会建一个带 git 的空目录，之后让 ${backend ? esc(backendLabel()) : 'Claude'} 从零开始写。</p></div>
               <div class="actions"><button class="btn">创建</button></div>
             </form>
           </div>
         </main></div></div></div>`;
       applyPrefs(app.firstElementChild, loadPrefs());  // the chat's sidebar on / off and width
-      wireSwitch();
-      renderMe();
+      renderAccount();
       if (busy || openWhenReady) poll = setTimeout(showHomeIfStill, 2000);
     }
     const showHomeIfStill = () => { if (mode === 'code' && !project) showHome(); };
 
     app.addEventListener('click', async (e) => {
-      const m = e.target.closest('.bp-mode [data-mode]');
+      const m = e.target.closest('.bp-nav [data-mode]');
       if (m) return setMode(m.dataset.mode);
       const bk = e.target.closest('.bp-backend [data-backend]');
       if (bk) return setBackend(bk.dataset.backend);
@@ -235,9 +226,6 @@
       const open = e.target.closest('[data-open]');
       if (open) { project = open.dataset.open; store.set('bridge_project', project); return transition(() => show(), 'fwd'); }
     });
-    app.addEventListener('change', (e) => {
-      if (e.target.matches('[data-mode-switch]')) setMode(e.target.checked ? 'code' : '');
-    });
     app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches?.('[data-open]')) e.target.click(); });
     app.addEventListener('submit', async (e) => {
       const f = e.target.closest('[data-form]');
@@ -253,36 +241,49 @@
       showHome();
     });
 
-    // who is signed in + how much of their share is left
-    async function renderMe() {
-      const boxes = app.querySelectorAll('.bp-me');
+    // the account at the sidebar's foot: avatar · name · one line of use, and a menu. Claude side: your share of the
+    // 5 h / weekly windows, 账户与用量, 管理. DeepSeek side: only DeepSeek's own — its use and balance, its page.
+    let acctMenus = [];
+    async function renderAccount() {
+      const boxes = app.querySelectorAll('.bp-acct');
       if (!boxes.length) return;
       let d;
       try { d = await api('GET', '/api/me'); } catch { return; }
-      const u = d.user, us = d.usage;
-      // your own use of each window (of your share, when the admin set one)
-      const parts = [['five_hour', '5h'], ['seven_day', '周']]
-        .filter(([k]) => us[k].used_pct != null)
-        .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}${us[k].limit_pct != null ? `/${fmtPct(us[k].limit_pct)}` : ''}`);
-      let sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
+      const u = d.user, us = d.usage, name = (d.sso && d.sso.portal_user) || u.display_name || u.username;
       const bk = backend && (d.backends || []).find(b => b.name === backend);
-      if (bk) {  // the backend side: its own API-priced use in the last 24 h and the provider's balance
+      let sub, full = false, items;
+      if (bk) {
         const bal = fmtBalance(bk.balance);
         sub = `${bk.label} 24h ${fmtUsd(bk.usage.day.cost_usd)}${bal ? ` · 余额 ${bal}` : ''}`;
+        items = `<div class="bp-acct-menu-head">${esc(bk.label)} · 按 API 价格计费</div>`
+          + `<a class="menu-item" href="/account?svc=${encodeURIComponent(bk.name)}">${iconSvg('settings')}${esc(bk.label)} 用量与 API key</a>`;
+      } else {
+        const parts = [['five_hour', '5h'], ['seven_day', '周']]
+          .filter(([k]) => us[k].used_pct != null)
+          .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}${us[k].limit_pct != null ? `/${fmtPct(us[k].limit_pct)}` : ''}`);
+        full = !!us.blocked;
+        sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
+        items = `<a class="menu-item" href="/account">${iconSvg('user')}账户与用量</a>`
+          + (u.role === 'admin' ? `<a class="menu-item" href="/admin">${iconSvg('users')}管理</a>` : '');
       }
-      const html = `<a class="me" href="/account" title="账户设置与用量${us.blocked ? `\n${esc(us.blocked)}` : ''}">`
-        + `<span class="n">${esc((d.sso && d.sso.portal_user) || u.display_name || u.username)}</span><span class="u${us.blocked ? ' full' : ''}">${esc(sub)}</span></a>`
-        + (u.role === 'admin' ? '<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="/admin">管理</a>' : '')
-        // portal SSO: sign-out lives in the corner account menu (it signs out of the portal); no local button
-        + (d.sso ? '' : '<form method="post" action="/logout"><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny" title="退出登录">退出</button></form>');
-      for (const b of boxes) b.innerHTML = html;
+      // portal SSO: sign-out lives in the corner account menu (it signs out of the portal)
+      if (!d.sso) items += '<div class="menu-sep"></div><form method="post" action="/logout"><button type="submit" class="menu-item">' + iconSvg('log-out') + '退出登录</button></form>';
+      for (const m of acctMenus) m.destroy();
+      acctMenus = [];
+      for (const box of boxes) {
+        box.innerHTML = `<button type="button" class="bp-acct-btn" aria-haspopup="menu" aria-expanded="false" title="${esc(us.blocked && !bk ? us.blocked : '账户')}">`
+          + `<span class="av" aria-hidden="true">${esc([...name][0] || '?').toUpperCase()}</span>`
+          + `<span class="who"><span class="n">${esc(name)}</span><span class="u${full ? ' full' : ''}">${esc(sub)}</span></span>${iconSvg('chevrons-up-down')}</button>`
+          + `<div class="menu up" role="menu" hidden>${items}</div>`;
+        acctMenus.push(attachMenu(box.querySelector('.bp-acct-btn'), box.querySelector('.menu'), { align: 'start' }));
+      }
     }
     // which backends this account may switch to (none for most accounts); a stale saved choice falls back to Claude
     try { backends = ((await api('GET', '/api/me')).backends || []).map(b => ({ name: b.name, label: b.label })); } catch {}
     if (backend && !backends.some(b => b.name === backend)) { backend = ''; store.set('bridge_backend', null); }
     show();
-    setInterval(renderMe, 120000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) renderMe(); });
+    setInterval(renderAccount, 120000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) renderAccount(); });
   </script>
 </body>
 </html>

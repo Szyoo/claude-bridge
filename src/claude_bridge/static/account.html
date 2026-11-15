@@ -86,6 +86,9 @@
     enhanceIcons();
     const $ = (s) => document.querySelector(s);
     const profile = $('#profile'), pw = $('#password');
+    // ?svc=deepseek: the DeepSeek side's own page (opened from its account menu) — only that service's use, balance
+    // and key; nothing of the Claude account (its quota, profile, API keys, admin)
+    const svc = new URLSearchParams(location.search).get('svc') || '';
 
     async function load() {
       const d = await api('GET', '/api/me');
@@ -107,7 +110,13 @@
         }).join('');
       $('#blocked').innerHTML = us.blocked ? `<div class="callout err bp-gap">${esc(us.blocked)}</div>` : '';
       // other backends (admins only): billed per API call, booked at the provider's prices, apart from Claude's quota
-      const bk = d.backends || [];
+      const bk = svc ? (d.backends || []).filter(b => b.name === svc) : [];  // each side keeps to its own
+      if (svc && bk.length) {
+        for (const el of document.querySelectorAll('main > *')) el.hidden = el.id !== 'backends';
+        $('[data-admin]').hidden = true;
+        $('.app-title').textContent = bk[0].label;
+        document.title = `claude-bridge · ${bk[0].label}`;
+      }
       $('#backends').hidden = !bk.length;
       $('#backends').innerHTML = bk.map(b => {
         const bal = fmtBalance(b.balance);
@@ -125,8 +134,9 @@
             + ` placeholder="${key.source === 'page' ? '输入新的 key 替换' : `粘贴 ${esc(b.label)} 的 API key`}" />`
             + `<button type="submit" class="btn">保存</button>`
             + `</div></div><p class="tiny muted">保存在服务器上，只交给运行 helper 的电脑使用，页面上不会再显示。</p></form>`;
-        return `<h2 class="panel-title">${esc(b.label)} 用量</h2>`
-          + `<p class="muted small bp-lead">按 ${esc(b.label)} 的 API 价格估算（区分缓存命中与高峰时段），不计入 Claude 额度。${bal ? `账户余额：<b>${esc(bal)}</b>${b.balance?.is_available === false ? '（不足）' : ''}` : ''}</p>`
+        return (bal ? `<div class="bp-balance"><span class="muted small">账户余额</span><b>${esc(bal)}</b>${b.balance?.is_available === false ? '<span class="pill err">不足</span>' : ''}</div>` : '')
+          + `<h2 class="panel-title">用量</h2>`
+          + `<p class="muted small bp-lead">按 ${esc(b.label)} 的 API 价格估算（区分缓存命中与高峰时段）。</p>`
           + (key.source ? '' : `<div class="callout warn bp-gap">还没有 API key：在下面填写后才能和 ${esc(b.label)} 对话。</div>`)
           + `<div class="list divided">${rows}</div>` + keyLine;
       }).join('');
@@ -201,7 +211,7 @@
         e.target.reset();
         keyValue.textContent = r.key;
         keySheet.open();
-        loadKeys();
+        if (!svc) loadKeys();
       } catch (err) { toast(err.message, true); }
     });
     $('#api-keys').addEventListener('click', async (e) => {
