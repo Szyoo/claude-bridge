@@ -107,6 +107,7 @@
         scope, title: 'claude-bridge', fill: true, sideHead: backendSeg() || undefined,
         sideNav: nav() + (proj ? label('项目') + projHead + label('会话') : label('最近')), sideFoot: ACCT,
         placeholder: proj ? `让 ${who} 读代码、改文件、跑命令` : (backend ? `给 ${who} 发消息` : '输入消息'),
+        assistantName: who,
         ...(proj ? { strings: { newThread: '＋ 新会话', threadTitle: '新会话', del: '删除会话', delConfirm: '删除这个会话？记录会一起删除，项目里的文件不受影响。',
           empty: `在 ${proj.name} 里开始：描述你想让 ${who} 做的事` } } : (backend ? { strings: { empty: `${who} · 问点什么吧` } } : {})),
         openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),

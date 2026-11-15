@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.22.1 — 2026-11-16
+
+- 界面文字按实际回答的服务显示：DeepSeek 一侧的「正在思考」、消息署名、排队提示、压缩提示、超时与出错提示、新对话提示都显示 DeepSeek，不再写成 Claude
+- 组件：`mountBridgeWidget` 新增 `assistantName`（回答者名字，默认 Claude）
+
 ## v0.22.0 — 2026-11-16
 
 - 后端新增 `projects_root`：这个后端的 Code 项目就是 worker 机器上该目录下的文件夹（例如 `~/Documents/GitHub`），项目列表即文件夹列表（显示分支，可筛选），新建空项目和克隆仓库都放进去；网页上不删除这些文件夹。Claude 一侧仍用每个账户隔离的项目目录，两边的项目列表分开

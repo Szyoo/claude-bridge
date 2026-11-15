@@ -1198,6 +1198,8 @@ class ChatRunner:
         self._kill_lock = threading.Lock()
         self._done = threading.Event()
         self.stderr_tail: deque[str] = deque(maxlen=200)
+        backend = worker.config.backends.get(split_backend(str((job.get("payload") or {}).get("scope") or ""))[1])
+        self.assistant_name = (backend.label if backend else "") or "Claude"  # who answers, in error messages
         self.emitter = Emitter(worker.client, job["id"], self.cfg, on_cancel=lambda: self.kill("cancel"))
         self.state: StreamState | None = None
         self._input_lock = threading.Lock()
@@ -1498,8 +1500,9 @@ class ChatRunner:
             )
             return
         if self.kill_reason in ("timeout", "idle"):
-            error = (f"Claude 已 {fmt_span(self.cfg.idle_timeout)}没有任何进展，已停止" if self.kill_reason == "idle"
-                     else f"Claude 运行超过 {fmt_span(self.cfg.chat_timeout)}上限，已停止")
+            who = self.assistant_name
+            error = (f"{who} 已 {fmt_span(self.cfg.idle_timeout)}没有任何进展，已停止" if self.kill_reason == "idle"
+                     else f"{who} 运行超过 {fmt_span(self.cfg.chat_timeout)}上限，已停止")
             self.worker._safe_finish(jid, ok=False, error=error + "（发「继续」可以接着做）", error_kind="timeout",
                                      session_id=st.session_id)
             return
@@ -1523,7 +1526,7 @@ class ChatRunner:
             low = msg.lower()
             bad_session = bool(self.job["payload"].get("session_id")) and ("session" in low or "resume" in low)
             self.worker._safe_finish(
-                jid, ok=False, error=f"Claude 返回错误：{msg}", error_kind="bad_session" if bad_session else "claude",
+                jid, ok=False, error=f"{self.assistant_name} 返回错误：{msg}", error_kind="bad_session" if bad_session else "claude",
                 reset_session=bad_session,
             )
             return

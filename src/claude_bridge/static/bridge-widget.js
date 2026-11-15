@@ -193,7 +193,7 @@ export function jobBannerHtml(job) {
     return `<div class="bridge-job"><i class="bridge-spin"></i><div><b>${queued ? '压缩任务排队中' : '正在压缩'}</b>`
       + (queued ? '' : ` · 已进行 <span data-job-since="${esc(since)}">${fmtElapsed(since)}</span>`)
       + `<div class="bridge-job-hint">${queued ? '等 helper 接手；helper 离线时会一直排队。'
-        : 'Claude 在通读这段对话的全部历史并写成摘要，对话越长越久（通常 1–3 分钟）。完成后上下文数字会自动更新，不用手动刷新。'}</div></div></div>`;
+        : '模型在通读这段对话的全部历史并写成摘要，对话越长越久（通常 1–3 分钟）。完成后上下文数字会自动更新，不用手动刷新。'}</div></div></div>`;
   }
   return `<div class="bridge-job"><i class="bridge-spin"></i><div><b>${queued ? '刷新构成排队中' : '正在刷新构成…'}</b></div></div>`;
 }
@@ -230,7 +230,7 @@ export function renderContextPanel(el, ctx, opts = {}) {
   // DESIGN §8: the first click arms the button and says what will happen; the second (within 5 s) compacts
   el.querySelector('[data-ctx="compact"]')?.addEventListener('click', (e) => {
     if (armConfirm(e.currentTarget, { label: '再点一次确认压缩', warnEl: el.querySelector('.bridge-ctx-warn'),
-      warning: 'Claude 会把这段对话的历史压缩成摘要：细节会丢失，但上下文会明显变小。' })) opts.onCompact?.();
+      warning: opts.compactWarn || 'Claude 会把这段对话的历史压缩成摘要：细节会丢失，但上下文会明显变小。' })) opts.onCompact?.();
   });
 }
 
@@ -1461,6 +1461,13 @@ export function mountBridgeWidget(el, client, opts = {}) {
     contextWindows: CONTEXT_WINDOWS, placeholder: '输入消息', prefsKey: 'bridge_ui', strings: {},
     maxRows: 12, locale: '', voice: true, sources: null, commands: [], onSource: null, ...opts,
   };
+  // `assistantName`: who answers (e.g. "DeepSeek" when the turn runs on another provider); the default texts say Claude
+  if (o.assistantName) {
+    const n = o.assistantName;
+    o.strings = { assistant: n, thinking: `${n} 正在思考…`, busyPlaceholder: `${n} 正在回答，可以接着输入，会在下一步读到…`,
+      queueDelivered: `已交给 ${n}`, queueBusy: (k) => `排队 ${k} 条 · ${n} 会在下一步读到`,
+      compactWarn: `${n} 会把这段对话的历史压缩成摘要：细节会丢失，但上下文会明显变小。`, ...o.strings };
+  }
   const S = { threadTitle: '新对话', helperOff: 'helper 离线：消息会排队', polling: '轮询模式',
     waitingHelper: '等待 helper 接单…', thinking: 'Claude 正在思考…', empty: '问点什么吧', newThread: '＋ 新对话',
     rename: '重命名', pin: '置顶', unpin: '取消置顶', del: '删除对话', delConfirm: '删除这个对话？消息记录会一起删除。', delArm: '再点一次确认删除', renameLabel: '对话标题', save: '保存', cancel: '取消', stop: '停止', me: '我', assistant: 'Claude',
@@ -1614,7 +1621,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       try { state.ctxBusy = true; renderSession(); const r = await fn(state.thread); if (r?.job) state.job = r.job; state.ctxBusy = false; renderSession(); toast(msg); }
       catch (e) { state.ctxBusy = false; renderSession(); toast(e.message, true); }
     };
-    return { busy: state.ctxBusy || jobActive(state.job), job: state.job, onRefresh: run((t) => client.refreshContext(t), '已请求刷新，helper 计算中…'), onCompact: run((t) => client.compact(t), '已请求压缩，进度见上下文胶囊') };
+    return { busy: state.ctxBusy || jobActive(state.job), job: state.job, compactWarn: S.compactWarn, onRefresh: run((t) => client.refreshContext(t), '已请求刷新，helper 计算中…'), onCompact: run((t) => client.compact(t), '已请求压缩，进度见上下文胶囊') };
   }
   function renderAgent(agent, fallback = state.sub?.fallback) {
     if (agent) state.agent = agent;
@@ -2089,7 +2096,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
       dict = null;
       input.value = cancelled ? base : joinDictation(base, text, lang);
       input.readOnly = false; delete form.dataset.listening;
-      input.placeholder = state.inflight ? 'Claude 正在回答，稍等…' : placeholder();
+      input.placeholder = state.inflight ? `${S.assistant} 正在回答，稍等…` : placeholder();
       autoGrow(); syncSend();
       if (voice.listening) voice.stop('ended');
       if (!cancelled) { input.focus({ preventScroll: true }); const n = input.value.length; input.setSelectionRange(n, n); }

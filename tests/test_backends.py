@@ -330,3 +330,12 @@ def test_worker_runs_local_projects_in_the_backends_folder(tmp_path):
         w._project_path({"scope": "code:teardown@ds", "name": "teardown", "owner": "1", "action": "delete"})
     with pytest.raises(RuntimeError, match="不能使用"):
         w._project_path({"scope": "code:new@ds", "name": "new", "owner": "2", "action": "create"})
+
+
+def test_texts_name_the_backend_that_answers(env):
+    b, _, _ = env
+    svc = b.service
+    assert svc.assistant_name("code:app@ds") == "DeepSeek" and svc.assistant_name("code:app") == "Claude"
+    svc.config.new_thread_notice = "新对话已开始，Claude 不再记得之前的内容。"
+    tid = svc.new_thread("@ds", owner="1")
+    assert svc.store.messages(tid)[0]["content"] == "新对话已开始，DeepSeek 不再记得之前的内容。"

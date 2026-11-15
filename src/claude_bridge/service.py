@@ -188,12 +188,20 @@ class BridgeService:
         self.store.set_meta(key, tid)
         return tid
 
+    def assistant_name(self, scope: str) -> str:
+        """Who answers in this scope: the backend's label (the model is the provider's), else Claude."""
+        backend = split_backend(scope or "")[1]
+        return ((self.backend_info(backend) or {}).get("label") or backend) if backend else "Claude"
+
+    def _thread_assistant(self, thread_id: str) -> str:
+        return self.assistant_name((self.store.get_thread(thread_id) or {}).get("scope") or "")
+
     def new_thread(self, scope: str = "", key: str = "", title: str = "", *, select: bool = True, owner: str = "") -> str:
         self._check_scope(scope, owner)
         tid = uuid.uuid4().hex[:12]
         self.store.create_thread(tid, scope=scope, key=key, title=title, owner=owner)
         if self.config.new_thread_notice:
-            self.store.add_message(tid, "system", self.config.new_thread_notice)
+            self.store.add_message(tid, "system", self.config.new_thread_notice.replace("Claude", self.assistant_name(scope)))
         if select:
             self.store.set_meta(self.meta_key(owner, f"current_thread:{scope}"), tid)
         return tid
@@ -259,7 +267,7 @@ class BridgeService:
         """Queue a `/context` refresh or a `/compact` on the thread's Claude session; the worker does the rest."""
         th = self.own_thread(thread_id, principal.owner)
         if not th.get("session_id"):
-            raise BadRequest("这个对话还没有 Claude 会话，先发一条消息")
+            raise BadRequest("这个对话还没有会话记录，先发一条消息")
         if kind == "compact" and self.store.inflight(thread_id):
             raise ChatBusy("回答中不能压缩")
         existing = next((j for j in self.store.active_jobs(thread_id, (kind,))), None)
@@ -461,7 +469,7 @@ class BridgeService:
         item = self.store.queue_remove(thread, queue_id)
         if not item:
             if any(q["id"] == queue_id for q in self.store.queue(thread)):
-                raise BadRequest("已经交给 Claude 了，撤不回来；可以点「立即发送」打断它")
+                raise BadRequest(f"已经交给 {self._thread_assistant(thread)} 了，撤不回来；可以点「立即发送」打断它")
             raise NotFound("这条已经发出去了")
         self._pub_queue(thread)
         return {"item": {k: item[k] for k in ("id", "text", "files")}}
@@ -1007,7 +1015,7 @@ class BridgeService:
         except json.JSONDecodeError:
             meta = {}
         size = f"：{_fmt_tokens(meta.get('pre_tokens'))} → {_fmt_tokens(meta.get('post_tokens'))}" if meta.get("pre_tokens") else ""
-        msg = self.store.add_message(thread, "system", f"已压缩会话历史{size}。之后 Claude 看到的是摘要，更早的细节可能记不清。")
+        msg = self.store.add_message(thread, "system", f"已压缩会话历史{size}。之后 {self._thread_assistant(thread)} 看到的是摘要，更早的细节可能记不清。")
         self._pub(thread, "message", msg)
 
     # ---------------- Code-mode projects ----------------
