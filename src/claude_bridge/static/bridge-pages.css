@@ -60,8 +60,9 @@
 .bp-tree-add svg, .bp-node-new svg { width: 15px; height: 15px; }
 .bp-tree-add:hover, .bp-node-new:hover { background: var(--hover-tint, var(--bridge-hover)); color: var(--text); }
 .bp-node-head { display: flex; align-items: center; gap: 2px; border-radius: var(--r-sm); padding-right: 2px; }
-.bp-node-head:hover { background: var(--bridge-hover); }
-.bp-node.active > .bp-node-head { background: var(--selected-bg, var(--bridge-hover)); }
+@media (hover: hover) { .bp-node-head:hover { background: var(--bridge-hover); } }
+/* the open node isn't boxed: its name stays bold and its folder takes the accent; the open session carries the mark */
+.bp-node.active > .bp-node-head .bp-node-toggle > svg:nth-child(2) { color: var(--accent); opacity: 1; }
 .bp-node-toggle { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 4px 0 2px; border: 0;
   background: none; color: var(--text); font: inherit; font-size: var(--fs-body); font-weight: 600; text-align: left; cursor: pointer; }
 .bp-node-toggle > svg { flex: none; width: 18px; height: 18px; }
@@ -78,14 +79,25 @@
 .bp-node.pending .bp-node-toggle { cursor: default; font-weight: 500; color: var(--text-dim); }
 .bp-node.pending .pill { margin-left: auto; }
 /* a node's sessions: indented one-line titles */
-.bp-node-body { display: none; flex-direction: column; gap: 1px; margin: 1px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--line-soft, var(--bridge-border)); }
+.bp-node-body { display: none; flex-direction: column; gap: 1px; margin: 0 0 6px 21px; padding-left: 4px;
+  border-left: 1px solid color-mix(in srgb, var(--line-soft, var(--bridge-border)) 60%, transparent); }
 .bp-node.open > .bp-node-body { display: flex; }
 .bp-tree-thread { display: block; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-dim);
   font: inherit; font-size: var(--fs-md); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-.bp-tree-thread:hover { background: var(--bridge-hover); color: var(--text); }
+@media (hover: hover) { .bp-tree-thread:hover { background: var(--bridge-hover); color: var(--text); } }
 .bp-tree-thread .pin { margin-right: 4px; }
 .bp-tree-note, .bp-tree-empty { padding: 4px 8px; font-size: var(--fs-sm); color: var(--text-dim); }
-.bp-tree .bridge-thread { padding: 5px 34px 5px 8px; font-size: var(--fs-md); }
+.bp-tree .bridge-thread { position: relative; padding: 5px 34px 5px 10px; font-size: var(--fs-md); }
+/* the open session: a faint wash and a short accent bar at its left, not a box */
+.bp-tree .bridge-thread.active { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.bp-tree .bridge-thread.active::before { content: ""; position: absolute; left: 0; top: 50%; width: 3px; height: 14px; margin-top: -7px;
+  border-radius: 2px; background: var(--accent); }
+.bp-tree .bridge-thread.active .t { color: var(--text); font-weight: 600; }
+@media (pointer: coarse) {
+  .bp-node-toggle { min-height: 44px; }
+  .bp-tree .bridge-thread, .bp-tree-thread { padding-top: 9px; padding-bottom: 9px; }
+  .bp-tree .bridge-thread-more { top: 6px; }
+}
 .bp-tree .bridge-thread .p, .bp-tree .bridge-thread .m { display: none; }   /* titles only */
 .bp-tree .bridge-thread:not(.active) .t { color: var(--text-dim); }
 .bp-tree .bridge-thread:hover .t { color: var(--text); }
@@ -255,3 +267,4 @@ body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px
 .bp-u-simout { margin-top: var(--sp-3); }
 .bp-u-simres { --stat-min: 200px; }
 @media (max-width: 640px) { .bp-u-arrow { display: none; } .bp-u-chart { gap: 1px; } }
+@media (hover: none) { .bp-tree .bridge-thread:not(.active):hover { background: none; } }
