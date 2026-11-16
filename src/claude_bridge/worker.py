@@ -42,6 +42,8 @@ from claude_bridge.stream_json import (
 )
 
 OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"  # `claude setup-token`
+# `/usage` asks the account server: 7–12 s on an idle machine, past 30 s while long turns keep the machine busy
+USAGE_PROBE_TIMEOUT = 90
 
 log = logging.getLogger(__name__)
 
@@ -764,7 +766,7 @@ class Worker:
         except (OSError, subprocess.SubprocessError):
             return ""
 
-    def _slash(self, command: str, model: str | None = None, drop_env: tuple[str, ...] = ()) -> str | None:
+    def _slash(self, command: str, model: str | None = None, drop_env: tuple[str, ...] = (), timeout: float = 30) -> str | None:
         """Run a local slash command in print mode (no model call, nothing saved) and return its text."""
         cmd = [self.config.claude_bin, "-p", command, "--output-format", "json", "--no-session-persistence"]
         if model:
@@ -772,7 +774,7 @@ class Worker:
         env = {k: v for k, v in self._session_env().items() if k not in drop_env}
         try:
             proc = subprocess.run(cmd, cwd=str(self.config.cwd) if self.config.cwd else None, env=env,
-                                  capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+                                  capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError) as e:
             log.warning("claude %s failed: %s", command, e)
             return None
@@ -885,12 +887,12 @@ class Worker:
     # ---------------- subscription usage (`/usage`) ----------------
 
     def probe_usage(self) -> dict[str, float] | None:
-        text = self._slash("/usage")
+        text = self._slash("/usage", timeout=USAGE_PROBE_TIMEOUT)
         report = parse_usage_report(text) if text else None
         if report is None and self._session_env().get(OAUTH_TOKEN_ENV):
             # a `claude setup-token` token is inference-only: /usage then shows just costs, no limits.
             # The machine's own login (keychain) can still read them.
-            text = self._slash("/usage", drop_env=(OAUTH_TOKEN_ENV,))
+            text = self._slash("/usage", drop_env=(OAUTH_TOKEN_ENV,), timeout=USAGE_PROBE_TIMEOUT)
             report = parse_usage_report(text) if text else None
         if report is None and not self._usage_warned:
             self._usage_warned = True
