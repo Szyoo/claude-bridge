@@ -135,13 +135,13 @@ body.bp-chat .bridge-form {
 body.bp-chat .bridge-side, body.bp-chat .bridge-top, body.bp-chat .bridge-form { border-color: var(--glass-border); }
 /* the transcript is transparent so the theme shows; each turn (and the empty hint) is its own translucent card, so body text
    keeps its contrast on every theme / scheme / palette */
-body.bp-chat .bridge-turn, body.bp-chat .bridge-empty {
+body.bp-chat .bridge-turn, body.bp-chat .bridge-empty, body.bp-chat .bridge-skel-turn {
   background: color-mix(in srgb, var(--bg) 74%, transparent);
   border-radius: var(--r-md);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
-body.bp-chat .bridge-turn { padding: var(--sp-3) var(--sp-4); }
+body.bp-chat .bridge-turn, body.bp-chat .bridge-skel-turn { padding: var(--sp-3) var(--sp-4); }
 body.bp-chat .bridge-empty { width: fit-content; margin: 40px auto 0; padding: var(--sp-2) var(--sp-4); }
 body.bp-chat .bridge-form { background: color-mix(in srgb, var(--bg) 66%, var(--glass-bg)); }
 body.bp-chat .bp-home { background: transparent; }
@@ -164,8 +164,8 @@ body.bp-chat .bridge-form {
 body.bp-chat.kb-open .bridge-form { margin-bottom: var(--chat-item-gap, 10px); }
 /* "comfortable" width: the composer lines up with the centred message column, like claude.ai */
 body.bp-chat .bridge[data-width="cozy"] .bridge-form {
-  margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px), calc((100% - 72ch) / 2));
-  margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px), calc((100% - 72ch) / 2));
+  margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px), calc((100% - var(--chat-col-w, 72ch)) / 2));
+  margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px), calc((100% - var(--chat-col-w, 72ch)) / 2));
 }
 body.bp-chat .bridge-side { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
 body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px)); }

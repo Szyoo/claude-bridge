@@ -1520,6 +1520,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   for (const [k, p] of Object.entries(pops)) { p.className = `bridge-pop bridge-root pop-${k}`; p.hidden = true; document.body.appendChild(p); }
   // 弹层 / 菜单都挂到 body：宿主祖先若有 transform / filter / backdrop-filter，会把 position:fixed 的参照系困在那个祖先里
   const menu = el.querySelector('.bridge-menu');
+  let menuTarget = { id: null };  // the conversation the ⋯ menu acts on: the open one (top bar) or a sidebar row's
   if (menu) { menu.classList.add('bridge-root'); document.body.appendChild(menu); }
   // phones: popovers become bottom sheets that cover their own toggles; a scrim behind them closes on tap
   const scrim = document.createElement('div'); scrim.className = 'bridge-scrim'; scrim.hidden = true; document.body.appendChild(scrim);
@@ -1645,8 +1646,23 @@ export function mountBridgeWidget(el, client, opts = {}) {
   }
 
   // ---------- subscription ----------
+  // Switching to another conversation: show it at once (its row highlighted, its title, a placeholder for the
+  // messages) and swap in the real messages when the snapshot arrives, instead of leaving the old one up meanwhile.
+  function showLoading(threadId) {
+    for (const b of el.querySelectorAll('.bridge-thread')) b.classList.toggle('active', b.dataset.id === threadId);
+    const row = [...el.querySelectorAll('.bridge-thread')].find(b => b.dataset.id === threadId);
+    $('.bridge-title').textContent = row?.querySelector('.t')?.textContent.replace(/^📌/, '') || S.threadTitle;
+    state.msgs.clear(); state.order = []; state.queue = []; state.inflight = null; state.threadRow = null; state.job = null;
+    renderQueue(); setPending(false);
+    list.innerHTML = '<div class="bridge-skel" aria-busy="true" aria-label="加载中">'
+      + '<div class="bridge-skel-turn user"><i></i></div>'
+      + '<div class="bridge-skel-turn"><i></i><i></i><i></i><i class="short"></i></div>'
+      + '<div class="bridge-skel-turn user"><i></i></div>'
+      + '<div class="bridge-skel-turn"><i></i><i></i><i class="short"></i></div></div>';
+  }
   function subscribe(threadId) {
     state.sub?.close();
+    if (threadId !== state.thread) showLoading(threadId);
     state.thread = threadId;
     state.sub = client.subscribe(threadId, {
       onSnapshot: applySnapshot,
@@ -1686,14 +1702,19 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (!o.showThreads) return;
     try {
       const d = await client.threads(o.scope);
-      $('.bridge-threads').innerHTML = d.items.map(t => `<button type="button" class="bridge-thread ${t.id === state.thread ? 'active' : ''}" data-id="${esc(t.id)}">`
+      state.threadList = new Map(d.items.map(t => [t.id, t]));
+      // each row: the conversation, and its own ⋯ (the same menu as the top bar's, for that conversation)
+      $('.bridge-threads').innerHTML = d.items.map(t => `<div class="bridge-thread-row"><button type="button" class="bridge-thread ${t.id === state.thread ? 'active' : ''}" data-id="${esc(t.id)}">`
         + `<span class="t">${t.pinned ? '<span class="pin">📌</span>' : ''}${esc(t.title || S.threadTitle)}</span>`
-        + `<span class="p">${esc(t.preview || '')}</span><span class="m">${t.n ?? 0} 条 · ${esc(fmtRelative(t.updated_at))}${quotaText(t.quota_pct)}</span></button>`).join('');
+        + `<span class="p">${esc(t.preview || '')}</span><span class="m">${t.n ?? 0} 条 · ${esc(fmtRelative(t.updated_at))}${quotaText(t.quota_pct)}</span></button>`
+        + `<button type="button" class="bridge-thread-more" data-act="menu" data-id="${esc(t.id)}" title="更多" aria-label="更多：${esc(t.title || S.threadTitle)}">⋯</button></div>`).join('');
       if (!state.thread && d.current) subscribe(d.current);
     } catch (e) { toast(e.message, true); }
   }
   async function openThread(id) {
-    try { await client.selectThread(id, o.scope); subscribe(id); loadThreads(); root.classList.remove('side-open'); } catch (e) { toast(e.message, true); }
+    root.classList.remove('side-open');
+    if (id !== state.thread) subscribe(id);  // the messages start loading now; remembering the choice runs alongside
+    try { await client.selectThread(id, o.scope); loadThreads(); } catch (e) { toast(e.message, true); }
   }
 
   // ---------- settings (server side: model / effort / auto_context) ----------
@@ -2171,19 +2192,31 @@ export function mountBridgeWidget(el, client, opts = {}) {
       if (act === 'new') await newThread();
       else if (act === 'side-close') root.classList.remove('side-open');
       else if (act === 'side') { if (matchMedia('(max-width: 720px)').matches) root.classList.toggle('side-open'); else { prefs.sidebar = !prefs.sidebar; usePrefs('sidebar'); } }
-      else if (act === 'menu') { const m = menu; const was = m.hidden; closePops(); disarmConfirm(m.querySelector('[data-act="del"]')); if (was) { m.querySelector('[data-act="pin"]').textContent = state.threadRow?.pinned ? S.unpin : S.pin; placePopover(e.target.closest('[data-act]'), m); } }
+      else if (act === 'menu') {
+        const btn = e.target.closest('[data-act]'), id = btn.dataset.id || state.thread;
+        const m = menu; const again = !m.hidden && menuTarget.id === id; closePops(); disarmConfirm(m.querySelector('[data-act="del"]'));
+        if (!again && id) {
+          const row = id === state.thread ? state.threadRow : state.threadList?.get(id);
+          menuTarget = { id, pinned: !!row?.pinned, title: row?.title || '', button: btn };
+          m.querySelector('[data-act="pin"]').textContent = menuTarget.pinned ? S.unpin : S.pin; placePopover(btn, m);
+        }
+      }
       else if (act === 'prefs' || act === 'ctx') openPop(act, e.target.closest('[data-act]'));
       else if (act === 'rename') {
         closePops();
-        const t = await promptDialog({ title: S.rename, label: S.renameLabel, value: state.threadRow?.title || '', placeholder: S.threadTitle,
-          okLabel: S.save, cancelLabel: S.cancel, returnFocus: $('[data-act="menu"]') });
-        if (t != null) await client.patchThread(state.thread, { title: t.trim() || null });
+        const { id, title, button } = menuTarget;
+        const t = await promptDialog({ title: S.rename, label: S.renameLabel, value: title, placeholder: S.threadTitle,
+          okLabel: S.save, cancelLabel: S.cancel, returnFocus: button?.isConnected ? button : $('[data-act="menu"]') });
+        if (t != null) { await client.patchThread(id, { title: t.trim() || null }); loadThreads(); }
       }
-      else if (act === 'pin') { closePops(); await client.patchThread(state.thread, { pinned: !state.threadRow?.pinned }); }
+      else if (act === 'pin') { closePops(); await client.patchThread(menuTarget.id, { pinned: !menuTarget.pinned }); loadThreads(); }
       else if (act === 'del') {
         // two-step inside the ⋯ menu (it stays open while armed): first click warns, second deletes
         if (!armConfirm(e.target.closest('[data-act]'), { label: S.delArm, warnEl: menu.querySelector('.bridge-menu-warn'), warning: S.delConfirm })) return;
-        closePops(); const r = await client.deleteThread(state.thread, o.scope); state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } loadThreads(); }
+        closePops();
+        const id = menuTarget.id, r = await client.deleteThread(id, o.scope);
+        if (id === state.thread) { state.thread = null; state.sub?.close(); if (r.current) subscribe(r.current); else { list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`; } }
+        loadThreads(); }
     } catch (err) { toast(err.message, true); }
   };
   el.addEventListener('click', onClick); menu?.addEventListener('click', onClick);

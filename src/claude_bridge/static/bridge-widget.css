@@ -83,6 +83,14 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-thread .p { color: var(--bridge-muted); font-size: .857em; }
 .bridge-thread .m { color: var(--bridge-muted); font-size: .786em; }
 .bridge-thread .pin { color: var(--bridge-accent); margin-right: 4px; }
+/* a conversation row and its own ⋯ at the right edge: shown on hover / keyboard focus / for the open one, always on touch */
+.bridge-thread-row { position: relative; display: flex; flex-direction: column; flex-shrink: 0; }
+.bridge-thread-row > .bridge-thread { padding-right: 34px; }
+.bridge-thread-more { position: absolute; top: 6px; right: 4px; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--bridge-muted); font: inherit; font-size: 1em; line-height: 1; cursor: pointer; opacity: 0; }
+.bridge-thread-more:hover { background: var(--bridge-hover); color: var(--bridge-fg); }
+.bridge-thread-row:hover .bridge-thread-more, .bridge-thread-row:focus-within .bridge-thread-more, .bridge-thread.active + .bridge-thread-more { opacity: 1; }
+@media (hover: none) { .bridge-thread-more { opacity: 1; } }
 .bridge-side-foot { margin-top: auto; border-top: 1px solid var(--bridge-border); padding-top: 8px; }
 
 /* ---------- main column ---------- */
@@ -120,11 +128,24 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 @media (max-width: 720px) { .bridge-dlg-scrim { place-items: end center; padding: 0; } .bridge-dlg { width: 100%; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); } }
 
 /* ---------- transcript ---------- */
-.bridge-list { overflow-y: auto; overflow-x: hidden; padding: var(--chat-turn-gap) var(--chat-gutter); min-height: 0; }
+.bridge-list { overflow-y: auto; overflow-x: hidden; padding: var(--chat-turn-gap) var(--chat-gutter); min-height: 0;
+  scrollbar-gutter: stable both-edges; }  /* a classic scrollbar must not shift the column off the composer's centre */
 .bridge-empty { color: var(--bridge-muted); font-size: .928em; text-align: center; margin-top: 40px; }
+/* placeholder while a conversation loads (bridge-widget.js showLoading) */
+.bridge-skel { display: flex; flex-direction: column; gap: var(--chat-turn-gap); }
+.bridge-skel-turn { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: var(--chat-col-w, none); margin-inline: auto; box-sizing: border-box; }
+.bridge-skel-turn.user { align-items: stretch; }
+.bridge-skel-turn i { display: block; height: .9em; border-radius: 6px; background: var(--bridge-hover); animation: bridge-skel 1.2s ease-in-out infinite; }
+.bridge-skel-turn.user i { height: 2.2em; border-radius: var(--chat-radius, 8px); }
+.bridge-skel-turn i.short { width: 55%; }
+@keyframes bridge-skel { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .bridge-skel-turn i { animation: none; } }
 .bridge-turn { min-width: 0; word-break: break-word; overflow-wrap: anywhere; }
 .bridge-turn + .bridge-turn { margin-top: var(--chat-turn-gap); }
-.bridge[data-width="cozy"] .bridge-turn, .bridge-root[data-width="cozy"] .bridge-turn { max-width: 72ch; margin-inline: auto; }
+/* "comfortable" width: 72ch on ordinary screens, widening with the window up to 110ch. Viewport-based (not %) so the
+   transcript and the composer, which sit in different boxes, get exactly the same width */
+.bridge[data-width="cozy"], .bridge-root[data-width="cozy"] { --chat-col-w: clamp(72ch, 50vw, 110ch); }
+.bridge[data-width="cozy"] .bridge-turn, .bridge-root[data-width="cozy"] .bridge-turn { max-width: var(--chat-col-w); margin-inline: auto; }
 /* a hairline above each user turn separates rounds */
 .bridge-turn.user:not(:first-child)::before { content: ""; display: block; height: 1px; background: var(--bridge-border); margin-bottom: var(--chat-turn-gap); }
 .bridge-turn-head { display: flex; align-items: baseline; gap: .6em; font-size: .857em; color: var(--bridge-muted); margin-bottom: calc(var(--chat-item-gap) * .5); }
