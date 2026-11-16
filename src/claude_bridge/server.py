@@ -90,7 +90,18 @@ class Bridge:
         if self.client_tool_router is not None:
             app.include_router(self.client_tool_router,prefix=agent_prefix+'/client-tools')
         if static_prefix:
-            app.mount(static_prefix, StaticFiles(directory=str(static_dir())), name="bridge-static")
+            app.mount(static_prefix, RevalidatedStatic(directory=str(static_dir())), name="bridge-static")
+
+
+class RevalidatedStatic(StaticFiles):
+    """The page's scripts and styles keep their names across releases: without a Cache-Control header browsers cache
+    them heuristically and keep running the old code after a deploy. `no-cache` makes them ask every time (a 304 via
+    the ETag when nothing changed)."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
 
 def create_bridge(

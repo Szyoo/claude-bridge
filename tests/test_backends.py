@@ -339,3 +339,11 @@ def test_texts_name_the_backend_that_answers(env):
     svc.config.new_thread_notice = "新对话已开始，Claude 不再记得之前的内容。"
     tid = svc.new_thread("@ds", owner="1")
     assert svc.store.messages(tid)[0]["content"] == "新对话已开始，DeepSeek 不再记得之前的内容。"
+
+
+def test_static_files_are_revalidated(tmp_path):
+    b = create_bridge(store=BridgeStore(tmp_path / "b.db"), config=BridgeConfig(), browser_auth=lambda: WHO["me"], agent_token="t")
+    app = FastAPI()
+    b.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix="/static/bridge")
+    r = TestClient(app).get("/static/bridge/bridge-widget.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
