@@ -130,7 +130,8 @@ class Backend:
         if unknown:
             raise ValueError(f"backend {name!r}: unknown keys {sorted(unknown)}")
         env = {str(k): str(v) for k, v in (d.get("env") or {}).items()}
-        models = [{"id": str(m["id"]), "name": str(m.get("name") or m["id"])} for m in d.get("models") or [] if m.get("id")]
+        models = [{"id": str(m["id"]), "name": str(m.get("name") or m["id"]), "images": bool(m.get("images", True))}
+                  for m in d.get("models") or [] if m.get("id")]
         owners = [str(o) for o in d.get("owners") or [] if str(o)]
         if not env.get("ANTHROPIC_BASE_URL") or not models or not owners:
             raise ValueError(f"backend {name!r} needs env.ANTHROPIC_BASE_URL, models and owners")
@@ -157,6 +158,18 @@ class Backend:
         return {"name": name, "label": self.label, "owners": list(self.owners), "models": list(self.models),
                 "pricing": self.pricing, "peak": self.peak, "has_key": self.has_key,
                 "currency": self.currency, "local_projects": bool(self.projects_root)}
+
+    def image_model_for(self, model: str) -> str | None:
+        """A model of this backend that sees images, to use instead of `model` for a turn with images; None when
+        `model` sees them itself (or none of the models does). Unlisted / empty = the first listed model."""
+        ids = {m["id"]: m for m in self.models}
+        cur = ids.get(model) or (self.models[0] if self.models else None)
+        if cur is None or cur.get("images", True):
+            return None
+        return next((m["id"] for m in self.models if m.get("images", True)), None)
+
+    def model_name(self, model: str) -> str:
+        return next((m["name"] for m in self.models if m["id"] == model), model)
 
     def project_dir(self, project: str) -> Path:
         """`projects_root/<project>`, refusing names that would leave the root."""
@@ -1203,6 +1216,7 @@ class ChatRunner:
         self.stderr_tail: deque[str] = deque(maxlen=200)
         backend = worker.config.backends.get(split_backend(str((job.get("payload") or {}).get("scope") or ""))[1])
         self.assistant_name = (backend.label if backend else "") or "Claude"  # who answers, in error messages
+        self.backend = backend
         self.emitter = Emitter(worker.client, job["id"], self.cfg, on_cancel=lambda: self.kill("cancel"))
         self.state: StreamState | None = None
         self._input_lock = threading.Lock()
@@ -1248,6 +1262,12 @@ class ChatRunner:
                 'Its execution environment is '+json.dumps(p.get('client_environment',{}),ensure_ascii=False)+
                 '. Other tools still execute on this worker. Use the tool namespace to choose the appropriate environment.')
         images = self._load_images(p.get("files") or [])
+        swap = self.backend.image_model_for((settings.get("model") or "").strip()) if images and self.backend else None
+        if swap:  # a text-only model (DeepSeek V4 Pro) would get "[Unsupported Image]": this turn runs on one that sees it
+            was = (settings.get("model") or "").strip() or self.backend.models[0]["id"]
+            settings = {**settings, "model": swap}
+            self.emitter.add_event("notice", {"text": f"这一轮带图片：{self.backend.model_name(was)} 看不到图片，改用 "
+                                                      f"{self.backend.model_name(swap)} 回答", "at": 0})
         system_file = None
         if replace_system:
             fd, system_file = tempfile.mkstemp(prefix='claude-bridge-system-', suffix='.md')

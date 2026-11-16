@@ -192,7 +192,14 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-caret::before { content: "▸"; }
 .bridge-step[open] > summary .bridge-caret { transform: rotate(90deg); }
 .bridge-step-name { flex: none; color: inherit; }
-.bridge-step.tool .bridge-step-name { font-family: var(--bridge-mono); color: var(--bridge-fg); font-size: .93em; }
+.bridge-step.tool .bridge-step-name { font-family: var(--bridge-mono); color: var(--bridge-fg); font-size: .93em; font-weight: 600; }
+/* thinking reads quieter than a tool call: no ✓ but the ✻ glyph, smaller grey text, a dashed rule beside the expanded text
+   (tool calls are the actions — status, name, time, output — so they carry the weight) */
+.bridge-step.thinking { font-size: .893em; }
+.bridge-step.thinking > summary { color: var(--bridge-muted); }
+.bridge-step.thinking .bridge-step-name { color: var(--bridge-muted); }
+.bridge-step.thinking .bridge-step-desc { opacity: .75; }
+.bridge-think-ic { flex: none; width: 1.15em; text-align: center; font-style: normal; color: var(--bridge-accent); opacity: .65; }
 .bridge-step-desc { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--bridge-mono); font-size: .93em; opacity: .85; }
 .bridge-step.thinking .bridge-step-desc { font-family: inherit; }
 .bridge-step-state { flex: none; font-size: .857em; }
@@ -203,7 +210,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-term pre.cmd { color: var(--bridge-term-dim); }
 .bridge-term pre.cmd + pre.out { border-top: 1px solid var(--bridge-term-border); }
 .bridge-step-body { margin: 4px 0 6px 1.3em; padding: .3em .8em; border-left: 2px solid var(--bridge-border); white-space: pre-wrap; max-height: 320px; overflow: auto; }
-.bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; }
+.bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; border-left-style: dashed; color: var(--bridge-muted); line-height: 1.6; }
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
 /* a message the user sent mid-turn, at the point Claude got it */

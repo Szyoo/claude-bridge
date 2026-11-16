@@ -358,6 +358,8 @@ export function splitTurn(content, events) {
       case 'compact': items.push({ kind: 'note', sub: 'compact', text: describeCompact(d), at: 0 }); break;
       // a message the user sent while this turn ran, handed to Claude mid-turn
       case 'user_note': items.push({ kind: 'note', sub: 'user', text: d.text || '', files: d.files || [], at: d.at ?? 0 }); break;
+      // a line from the bridge about this turn (e.g. it switched to a model that sees the attached images)
+      case 'notice': items.push({ kind: 'note', sub: 'notice', text: d.text || '', at: d.at ?? 0 }); break;
       case 'error': items.push({ kind: 'note', sub: 'error', text: d.message || '出错', at: END }); break;
       case 'status':
         if (d.phase === 'legacy_trace') items.push({ kind: 'trace', text: d.text || '', at: END });
@@ -500,7 +502,7 @@ export function stepsHtml(items, opts = {}) {
       const label = it.redacted ? '思考内容未公开' : signatureOnly ? '未返回思考文本' : running ? '正在思考' : '思考过程';
       const text = it.redacted ? '模型未公开这段思考内容。' : signatureOnly ? '上游只提供了思考块签名，没有提供可显示的思考文本。' : it.text;
       const st = running ? 'running' : 'done';
-      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}" data-st="${st}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i>${markHtml(st, { now: o.now, label: markLabel(st, o.S) })}<span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text))}</span></summary>`
+      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}" data-st="${st}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i>${running ? markHtml(st, { now: o.now, label: markLabel(st, o.S) }) : '<i class="bridge-think-ic" aria-hidden="true">✻</i>'}<span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text))}</span></summary>`
         + `<div class="bridge-step-body">${esc(text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`);
     } else if (it.kind === 'trace') {
       out.push(`<details class="bridge-step trace" data-k="${o.key}-r${i}"><summary><i class="bridge-caret"></i><span class="bridge-step-name">执行轨迹</span></summary><div class="bridge-term"><pre class="out">${esc(it.text)}</pre></div></details>`);

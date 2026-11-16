@@ -131,6 +131,7 @@ class JobFinishIn(BaseModel):
 class ModelEntry(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field("", max_length=100)  # the CLI's display name, e.g. "Opus 5.5"
+    images: bool = True  # a backend's text-only model (e.g. DeepSeek V4 Pro) says false
 
 
 class AgentModelsIn(BaseModel):

@@ -783,3 +783,33 @@ def test_no_live_input_for_one_off_turns(tmp_path):
     worker.run_chat(job)
     args = json.loads((tmp_path / "args.json").read_text())
     assert args[:2] == ["-p", "我有几只股票"] and "--input-format" not in args
+
+
+def test_turn_with_images_switches_a_text_only_backend_model(tmp_path):
+    from claude_bridge.worker import Backend
+
+    ds = Backend.from_dict("ds", {"owners": ["1"], "env": {"ANTHROPIC_BASE_URL": "https://api.example.com/anthropic", "ANTHROPIC_AUTH_TOKEN": "k"},
+                                  "models": [{"id": "deepseek-v4-pro[1m]", "name": "V4 Pro", "images": False},
+                                             {"id": "deepseek-flash[1m]", "name": "Flash"}]})
+    assert ds.image_model_for("deepseek-v4-pro[1m]") == "deepseek-flash[1m]" and ds.image_model_for("") == "deepseek-flash[1m]"
+    assert ds.image_model_for("deepseek-flash[1m]") is None and ds.public("ds")["models"][0]["images"] is False
+
+    class Client(FakeClient):
+        def get_file(self, file_id):
+            return b"\x89PNG", "image/png"
+
+    worker, client = make_worker(tmp_path, HAPPY, client=Client(), backends={"ds": ds})
+    job = chat_job(model="deepseek-v4-pro[1m]")
+    job["payload"].update(scope="@ds", owner="1", files=[{"id": "f1", "mime": "image/png", "name": "a.png"}])
+    worker.run_chat(job)
+    args = json.loads((tmp_path / "args.json").read_text())
+    assert args[args.index("--model") + 1] == "deepseek-flash[1m]"
+    assert "V4 Pro 看不到图片，改用 Flash" in client.events("notice")[0]["data"]["text"]
+
+    (tmp_path / "args.json").unlink()  # the fake claude records only its first invocation
+    worker, client = make_worker(tmp_path, HAPPY, client=Client(), backends={"ds": ds})  # no images: the chosen model
+    job = chat_job(model="deepseek-v4-pro[1m]")
+    job["payload"].update(scope="@ds", owner="1")
+    worker.run_chat(job)
+    args = json.loads((tmp_path / "args.json").read_text())
+    assert args[args.index("--model") + 1] == "deepseek-v4-pro[1m]" and not client.events("notice")
