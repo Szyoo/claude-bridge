@@ -119,10 +119,8 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 
 /* ---------- chat page on the site's background theme: glass layers over .bg-layer ----------
    Scoped to body.bp-chat, so the embedded widget (bridge-widget.css alone) keeps its flat look. */
-/* the chat page is one screen: only the transcript, the side list and the composer scroll inside it. The page itself
-   neither scrolls (the design tokens' body min-height: 100vh is taller than what a phone shows) nor bounces. */
-html:has(> body.bp-chat), body.bp-chat { height: 100%; overflow: hidden; overscroll-behavior: none; }
-body.bp-chat { min-height: 0; }
+/* the chat page is one screen (body.app-screen + #app.app-fill from the design package): only the transcript, the side
+   list and the composer scroll, each inside itself */
 body.bp-chat .bridge-list, body.bp-chat .bridge-threads { overscroll-behavior: contain; }
 body.bp-chat .bridge { background: transparent; }
 body.bp-chat .bridge-side,
@@ -156,18 +154,16 @@ body.bp-chat #app { position: relative; z-index: 1; }
 /* the page runs edge to edge (viewport-fit=cover): keep the composer, the sidebar's foot and the drawer clear of the
    phone's rounded corners and home indicator, and of the notch / side insets in landscape */
 body.bp-chat .bridge-form {
-  margin-bottom: calc(var(--chat-item-gap, 10px) + env(safe-area-inset-bottom, 0px));
+  margin-bottom: calc(var(--chat-item-gap, 10px) + var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
   margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px));
   margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px));
 }
-/* keyboard up (app.html sets kb-open): the composer sits on the keyboard, no home-indicator gap below it */
-body.bp-chat.kb-open .bridge-form { margin-bottom: var(--chat-item-gap, 10px); }
 /* "comfortable" width: the composer lines up with the centred message column, like claude.ai */
 body.bp-chat .bridge[data-width="cozy"] .bridge-form {
   margin-left: max(var(--chat-gutter, 12px), env(safe-area-inset-left, 0px), calc((100% - var(--chat-col-w, 72ch)) / 2));
   margin-right: max(var(--chat-gutter, 12px), env(safe-area-inset-right, 0px), calc((100% - var(--chat-col-w, 72ch)) / 2));
 }
-body.bp-chat .bridge-side { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
+body.bp-chat .bridge-side { padding-bottom: calc(10px + var(--safe-bottom, env(safe-area-inset-bottom, 0px))); padding-left: max(10px, env(safe-area-inset-left, 0px)); }
 body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px)); }
 
 /* account page: API keys */
