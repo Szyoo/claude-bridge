@@ -130,7 +130,7 @@ def test_backend_usage_goes_to_its_own_ledger(env):
     me_info = b.service.backend_usage("1")[0]
     day = me_info["usage"]["day"]
     assert day["turns"] == 1 and day["input_tokens"] == 1_000_000 and day["cache_read_tokens"] == 1_000_000
-    assert day["cost_usd"] in (pytest.approx(0.753), pytest.approx(1.506))  # off-peak or peak
+    assert day["cost"] in (pytest.approx(0.753), pytest.approx(1.506))  # off-peak or peak
     assert me_info["balance"] == BALANCE
     assert b.service.backend_usage("2") == []
     rl = {"status": "allowed", "five_hour": {"utilization": 0.9, "resets_at": None}, "seven_day": None}
@@ -347,3 +347,35 @@ def test_static_files_are_revalidated(tmp_path):
     b.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix="/static/bridge")
     r = TestClient(app).get("/static/bridge/bridge-widget.js")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
+
+
+def test_backend_in_yuan_and_switching_currency_reprices(env):
+    b, client, agent = env
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_read_input_tokens": 1_000_000, "model": "deepseek-flash"}
+    b.service.backend_ledger.add("1", "ds", INFO, usage)  # booked in USD at the old prices
+    yuan = {**INFO, "currency": "CNY", "pricing": {"flash": {"input": 1, "cache_read": 0.02, "output": 4}}}
+    assert agent.post("/api/agent/backends", json={"backends": [yuan], "balances": {}}).status_code == 200
+    me = b.service.backend_usage("1")[0]
+    assert me["currency"] == "CNY"
+    assert me["usage"]["day"]["cost"] in (pytest.approx(5.02), pytest.approx(10.04))  # off-peak or peak, in yuan
+    rows = b.service.store._q("SELECT currency FROM bridge_backend_usage", ())
+    assert {r["currency"] for r in rows} == {"CNY"}
+    assert b.service.backend_ledger.reprice("ds", yuan) == 0  # already in yuan
+
+
+def test_old_ledger_column_is_migrated(tmp_path):
+    import sqlite3
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE bridge_backend_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL DEFAULT '', "
+                "backend TEXT NOT NULL, model TEXT, thread TEXT, message_id INTEGER, job_id INTEGER, kind TEXT NOT NULL DEFAULT 'chat', "
+                "input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0, "
+                "cache_write_tokens INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0, "
+                "created_at TEXT NOT NULL DEFAULT (datetime('now')))")
+    con.execute("INSERT INTO bridge_backend_usage(backend, model, output_tokens, cost_usd) VALUES('ds', 'deepseek-flash', 10, 0.5)")
+    con.commit()
+    con.close()
+    from claude_bridge.backends import BackendLedger
+    ledger = BackendLedger(BridgeStore(db))
+    row = ledger.store._one("SELECT cost, currency FROM bridge_backend_usage", ())
+    assert row == {"cost": 0.5, "currency": "USD"}

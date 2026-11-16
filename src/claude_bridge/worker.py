@@ -120,6 +120,7 @@ class Backend:
     # this directory's listing, new / cloned projects land here, and the page never deletes them. Empty = the
     # per-owner project directories shared with Claude.
     projects_root: str = ""
+    currency: str = "USD"  # what `pricing` is in: DeepSeek's price list is in yuan ("CNY")
 
     @classmethod
     def from_dict(cls, name: str, d: dict[str, Any]) -> Backend:
@@ -139,7 +140,7 @@ class Backend:
         return cls(env=env, models=models, owners=owners, label=str(d.get("label") or name), pricing=pricing,
                    peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""),
                    profile=WorkerProfile.from_dict(prof) if prof else None,
-                   projects_root=str(d.get("projects_root") or ""))
+                   projects_root=str(d.get("projects_root") or ""), currency=str(d.get("currency") or "USD").upper())
 
     @property
     def has_key(self) -> bool:
@@ -153,7 +154,7 @@ class Backend:
         """What the server may know: no env (the API key)."""
         return {"name": name, "label": self.label, "owners": list(self.owners), "models": list(self.models),
                 "pricing": self.pricing, "peak": self.peak, "has_key": self.has_key,
-                "local_projects": bool(self.projects_root)}
+                "currency": self.currency, "local_projects": bool(self.projects_root)}
 
     def project_dir(self, project: str) -> Path:
         """`projects_root/<project>`, refusing names that would leave the root."""

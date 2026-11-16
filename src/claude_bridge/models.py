@@ -153,6 +153,7 @@ class BackendInfo(BaseModel):
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)  # model → {input, cache_read, output} USD/1M
     peak: dict[str, Any] = Field(default_factory=dict)  # {"utc_hours": [[1, 4], …], "weekdays_only", "multiplier"}
     has_key: bool = False  # the worker's backends file carries the key itself
+    currency: str = Field("USD", pattern=r"^[A-Z]{3}$")  # what `pricing` is in (DeepSeek: CNY)
     local_projects: bool = False  # its Code projects are the folders of a directory on the worker's machine
 
 

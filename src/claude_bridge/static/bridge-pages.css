@@ -46,16 +46,56 @@
 .bp-backend { display: flex; width: 100%; }
 .bp-backend > button { flex: 1; }
 
-/* views: 对话 / 项目 */
+/* the sidebar tree: 对话 and each project are nodes that open to their sessions (titles only). The side nav holds the
+   whole tree and is the part that scrolls; the open node's session list is the chat widget's own (.bridge-threads). */
 .bridge-side-nav { display: flex; flex-direction: column; gap: 2px; }
-.bp-nav-item { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 34px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-sm);
-  background: none; color: var(--bridge-fg); font: inherit; font-size: .928em; text-align: left; cursor: pointer; transition: background var(--dur-fast) var(--ease); }
-.bp-nav-item svg { width: 1.1em; height: 1.1em; flex: none; color: var(--bridge-muted); }
-.bp-nav-item:hover { background: var(--bridge-hover); }
-.bp-nav-item.on { background: var(--bridge-hover); font-weight: 600; }
-.bp-nav-item.on svg { color: var(--bridge-fg); }
-.bp-nav-item:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
-.bp-side-label { font-size: .786em; color: var(--bridge-muted); padding: var(--sp-3) var(--sp-2) 2px; }
+.bridge.tree .bridge-side-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -4px; padding: 0 4px; }
+.bridge.tree .bridge-threads { overflow: visible; flex: none; min-height: auto; }
+.bp-tree-search { margin-bottom: var(--sp-1); }
+.bp-tree { display: flex; flex-direction: column; gap: 2px; }
+.bp-tree-label { display: flex; align-items: center; justify-content: space-between; margin: var(--sp-3) 2px 2px var(--sp-2);
+  font-size: var(--fs-xs); font-weight: 600; letter-spacing: .06em; color: var(--text-dim); }
+.bp-tree-add, .bp-node-new { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--r-xs);
+  background: none; color: var(--text-dim); cursor: pointer; flex: none; }
+.bp-tree-add svg, .bp-node-new svg { width: 15px; height: 15px; }
+.bp-tree-add:hover, .bp-node-new:hover { background: var(--hover-tint, var(--bridge-hover)); color: var(--text); }
+.bp-node-head { display: flex; align-items: center; gap: 2px; border-radius: var(--r-sm); padding-right: 2px; }
+.bp-node-head:hover { background: var(--bridge-hover); }
+.bp-node.active > .bp-node-head { background: var(--selected-bg, var(--bridge-hover)); }
+.bp-node-toggle { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 4px 0 2px; border: 0;
+  background: none; color: var(--text); font: inherit; font-size: var(--fs-body); font-weight: 600; text-align: left; cursor: pointer; }
+.bp-node-toggle > svg { flex: none; width: 18px; height: 18px; }
+.bp-node-toggle > svg:first-child { width: 13px; height: 13px; color: var(--text-dim); transition: transform var(--dur-fast) var(--ease); }
+.bp-node.open > .bp-node-head .bp-node-toggle > svg:first-child { transform: rotate(90deg); }
+.bp-node-toggle > svg:nth-child(2) { color: var(--accent); }   /* the project's folder: what the eye finds first */
+.bp-node-toggle .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-node-toggle .s { margin-left: auto; padding-left: var(--sp-2); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-xs); font-weight: 400; color: var(--text-dim); }
+.bp-node-toggle:focus-visible, .bp-node-new:focus-visible, .bp-tree-add:focus-visible, .bp-tree-thread:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.bp-node-new { opacity: 0; }
+.bp-node-head:hover .bp-node-new, .bp-node-head:focus-within .bp-node-new, .bp-node.active > .bp-node-head .bp-node-new { opacity: 1; }
+@media (hover: none) { .bp-node-new { opacity: 1; } }
+.bp-node.pending .bp-node-toggle { cursor: default; font-weight: 500; color: var(--text-dim); }
+.bp-node.pending .pill { margin-left: auto; }
+/* a node's sessions: indented one-line titles */
+.bp-node-body { display: none; flex-direction: column; gap: 1px; margin: 1px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--line-soft, var(--bridge-border)); }
+.bp-node.open > .bp-node-body { display: flex; }
+.bp-tree-thread { display: block; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-dim);
+  font: inherit; font-size: var(--fs-md); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.bp-tree-thread:hover { background: var(--bridge-hover); color: var(--text); }
+.bp-tree-thread .pin { margin-right: 4px; }
+.bp-tree-note, .bp-tree-empty { padding: 4px 8px; font-size: var(--fs-sm); color: var(--text-dim); }
+.bp-tree .bridge-thread { padding: 5px 34px 5px 8px; font-size: var(--fs-md); }
+.bp-tree .bridge-thread .p, .bp-tree .bridge-thread .m { display: none; }   /* titles only */
+.bp-tree .bridge-thread:not(.active) .t { color: var(--text-dim); }
+.bp-tree .bridge-thread:hover .t { color: var(--text); }
+.bp-tree .bridge-thread-more { top: 2px; }
+.bp-tree-more > summary { list-style: none; display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 6px; border-radius: var(--r-sm);
+  font-size: var(--fs-sm); color: var(--text-dim); cursor: pointer; }
+.bp-tree-more > summary::-webkit-details-marker { display: none; }
+.bp-tree-more > summary::before { content: "▸"; font-size: .8em; transition: transform var(--dur-fast) var(--ease); }
+.bp-tree-more[open] > summary::before { transform: rotate(90deg); }
+.bp-tree-more > summary:hover { background: var(--bridge-hover); color: var(--text); }
 
 /* your account at the sidebar's foot: avatar · name · one line of use; opens a menu (@szyyw/design .menu) */
 .bp-acct-btn { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: var(--sp-2); border: 0; border-radius: var(--r-sm);
@@ -98,12 +138,6 @@ html[data-vt="back"]::view-transition-new(bp-list), html[data-vt="back"]::view-t
 .bp-projects { margin: var(--sp-3) 0 var(--sp-4); }
 .bp-proj-filter { margin-top: var(--sp-3); }
 .bp-projects .list-row[data-open] { cursor: pointer; }
-/* Code mode: the open project at the top of the session list */
-.bp-side-proj { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--bridge-border); }
-.bp-side-proj .ic { color: var(--bridge-muted); display: flex; font-size: var(--fs-title); }
-.bp-side-proj .who { flex: 1; min-width: 0; }
-.bp-side-proj .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-side-proj .d { font-size: var(--fs-sm); color: var(--bridge-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* full-width bars under the top-right corner tools: make room for them (measured by corner.js, like .corner-clear) */
 .bp-chat .bridge-top { padding-right: max(12px, calc(var(--corner-rail-w, 0px) + var(--corner-gap, 12px))); }

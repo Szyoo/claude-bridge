@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_bridge._version import REPO, __version__
-from claude_bridge.backends import BackendLedger, split_backend
+from claude_bridge.backends import BackendLedger, currency_of, split_backend
 from claude_bridge.broker import Broker
 from claude_bridge.calibration import estimate_capacity
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
@@ -719,6 +719,9 @@ class BridgeService:
         data = {"backends": report.get("backends") or [], "balances": report.get("balances") or {},
                 "reported_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
         self.store.set_meta("agent_backends", json.dumps(data, ensure_ascii=False))
+        for b in data["backends"]:  # a backend switched currency (USD → CNY): its booked rows follow
+            if isinstance(b, dict) and b.get("name"):
+                self.backend_ledger.reprice(b["name"], b)
 
     def _backends_meta(self) -> dict[str, Any]:
         try:
@@ -792,7 +795,7 @@ class BridgeService:
     def backend_usage(self, owner: str) -> list[dict[str, Any]]:
         """Per allowed backend: its own API-priced use (24 h / 7 d / 30 d) and the provider's account balance."""
         meta = self._backends_meta()
-        return [{**b, "usage": self.backend_ledger.totals(owner, b["name"]), "key": self.backend_key_status(b["name"]),
+        return [{**b, "currency": currency_of(self.backend_info(b["name"])), "usage": self.backend_ledger.totals(owner, b["name"]), "key": self.backend_key_status(b["name"]),
                  "balance": (meta.get("balances") or {}).get(b["name"]), "reported_at": meta.get("reported_at")}
                 for b in self.backends_for(owner)]
 

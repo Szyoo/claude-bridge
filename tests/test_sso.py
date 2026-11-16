@@ -8,8 +8,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
-from claude_bridge._version import __version__
 from claude_bridge import accounts as accounts_mod
+from claude_bridge._version import __version__
 from claude_bridge.accounts import Accounts
 from claude_bridge.cli import main
 from claude_bridge.multiuser import create_multiuser_app

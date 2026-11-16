@@ -141,6 +141,13 @@ export function shareLine(w) {
 
 // ---- worker backends (e.g. DeepSeek): their own API-priced use and the provider's account balance ----
 export const fmtUsd = (v) => v == null ? '—' : v > 0 && v < 0.01 ? '<$0.01' : `$${Number(v).toFixed(2)}`;
+// an amount in a backend's pricing currency (DeepSeek: CNY → ¥)
+const CURRENCY_SIGN = { USD: '$', CNY: '¥', JPY: '¥', EUR: '€' };
+export const fmtMoney = (v, currency = 'USD') => {
+  if (v == null) return '—';
+  const sign = CURRENCY_SIGN[currency] ?? `${currency} `;
+  return v > 0 && v < 0.01 ? `<${sign}0.01` : `${sign}${Number(v).toFixed(2)}`;
+};
 export const fmtTok = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n || 0);
 // DeepSeek's /user/balance: {is_available, balance_infos: [{currency, total_balance, …}]}
 export function fmtBalance(b) {

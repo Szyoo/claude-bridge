@@ -29,7 +29,7 @@
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';
-    import { api, esc, fmtPct, fmtSeen, toast, fmtUsd, fmtBalance } from '/static/bridge/bridge-pages.js';
+    import { api, esc, fmtPct, fmtSeen, toast, fmtMoney, fmtBalance } from '/static/bridge/bridge-pages.js';
     import { attachMenu } from '@szyyw/design/menu.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { iconSvg } from '@szyyw/design/icons.js';
@@ -54,17 +54,82 @@
     let backends = [], backend = store.get('bridge_backend', '') || '';
     const sfx = () => backend ? `@${backend}` : '';
     const backendLabel = () => backends.find(b => b.name === backend)?.label || backend;
-    // ---- the sidebar, laid out like claude.ai: the model service on top (the biggest switch: Claude | DeepSeek),
-    // ＋ new, the views (对话 / 项目), the recent list, and your account at the foot. The top bar only names the
-    // open conversation. On the DeepSeek side everything about the account is DeepSeek's own (its use, balance, key).
+    // ---- the sidebar: the model service on top (the biggest switch: Claude | DeepSeek), ＋ new, then a tree —
+    // 对话 and each project are nodes that open to their sessions (titles only) — and your account at the foot. The
+    // top bar only names the open conversation. On the DeepSeek side everything about the account is DeepSeek's own.
     const backendSeg = () => {
       if (!backends.length) return '';
       const opt = (name, label) => `<button type="button" data-backend="${esc(name)}" aria-pressed="${backend === name}"${backend === name ? ' class="active"' : ''}>${esc(label)}</button>`;
       return `<div class="seg bp-backend" role="group" aria-label="模型服务">${opt('', 'Claude')}${backends.map(b => opt(b.name, b.label)).join('')}</div>`;
     };
-    const navItem = (m, icon, label) => `<button type="button" class="bp-nav-item${mode === m ? ' on' : ''}" data-mode="${m}"${mode === m ? ' aria-current="page"' : ''}>${iconSvg(icon)}<span>${label}</span></button>`;
-    const nav = () => `<nav class="bp-nav" aria-label="视图">${navItem('', 'sparkles', '对话')}${navItem('code', 'folder', '项目')}</nav>`;
-    const label = (t) => `<div class="bp-side-label">${esc(t)}</div>`;
+    // The tree. A node's key: "chat" (the plain conversations) or "p:<project>". The open node's session list is the
+    // chat widget's own (moved into its [data-threads-slot]); other opened nodes list their sessions' titles, fetched
+    // when opened. Which nodes are open is remembered per service.
+    const treeKey = () => `bridge_tree_${backend || 'claude'}`;
+    const loadOpen = () => { try { return new Set(JSON.parse(store.get(treeKey(), '[]'))); } catch { return new Set(); } };
+    let openNodes = loadOpen();
+    const saveOpen = () => store.set(treeKey(), JSON.stringify([...openNodes]));
+    const scopeOf = (key) => key === 'chat' ? sfx() : `code:${key.slice(2)}${sfx()}`;
+    const activeKey = () => mode === '' ? 'chat' : (project ? `p:${project}` : null);
+    const CHEVRON = iconSvg('chevron-right'), PLUS = iconSvg('plus');
+    function treeNode(key, icon, name, sub, active) {
+      const isActive = key === active, open = isActive || openNodes.has(key);
+      return `<div class="bp-node${key === 'chat' ? ' chat' : ''}${isActive ? ' active' : ''}${open ? ' open' : ''}" data-node="${esc(key)}">`
+        + `<div class="bp-node-head"><button type="button" class="bp-node-toggle" data-toggle aria-expanded="${open}">${CHEVRON}${icon}`
+        + `<span class="n">${esc(name)}</span>${sub ? `<span class="s">${esc(sub)}</span>` : ''}</button>`
+        + `<button type="button" class="bp-node-new" data-new title="新会话" aria-label="在 ${esc(name)} 里开新会话">${PLUS}</button></div>`
+        + `<div class="bp-node-body">${isActive ? '<div data-threads-slot></div>' : ''}</div></div>`;
+    }
+    function treeHtml(active) {
+      const ready = projects.filter(p => p.status === 'ready');
+      const busyRows = projects.filter(p => p.status === 'creating' || p.status === 'failed');
+      // projects with sessions (and the open / opened ones) up front; on a service whose projects are a whole folder
+      // of repositories, the rest wait under 「其他」 (the search finds them too)
+      const front = ready.filter(p => p.threads || `p:${p.name}` === active || openNodes.has(`p:${p.name}`) || !localProjects);
+      const rest = ready.filter(p => !front.includes(p));
+      const projNode = (p) => treeNode(`p:${p.name}`, FOLDER, p.name, p.info?.branch || '', active);
+      return '<input type="search" class="field small bp-tree-search" placeholder="搜索会话和项目" aria-label="搜索会话和项目" autocomplete="off" data-1p-ignore data-lpignore="true" />'
+        + '<div class="bp-tree">'
+        + treeNode('chat', iconSvg('sparkles'), '对话', '', active)
+        + `<div class="bp-tree-label"><span>项目</span><button type="button" class="bp-tree-add" data-home title="新建、克隆或管理项目" aria-label="新建、克隆或管理项目">${PLUS}</button></div>`
+        + front.map(projNode).join('')
+        + busyRows.map(p => `<div class="bp-node pending"><div class="bp-node-head"><span class="bp-node-toggle">${FOLDER}<span class="n">${esc(p.name)}</span>`
+          + `<span class="pill ${STATUS[p.status]?.[1] || ''}">${STATUS[p.status]?.[0] || ''}</span></span></div></div>`).join('')
+        + (rest.length ? `<details class="bp-tree-more"><summary>其他 ${rest.length} 个${localProjects ? '文件夹' : '项目'}</summary>${rest.map(projNode).join('')}</details>` : '')
+        + (ready.length ? '' : '<p class="bp-tree-empty">还没有项目：点上面的 ＋ 新建或克隆</p>')
+        + '</div>';
+    }
+    // opened nodes other than the active one: their sessions' titles
+    async function fillNode(node) {
+      const body = node.querySelector(':scope > .bp-node-body');
+      if (!body || node.classList.contains('active') || body.dataset.loaded) return;
+      body.dataset.loaded = '1';
+      body.innerHTML = '<div class="bp-tree-note">加载中…</div>';
+      try {
+        const d = await api('GET', `/api/threads?scope=${encodeURIComponent(scopeOf(node.dataset.node))}`);
+        body.innerHTML = d.items.length
+          ? d.items.map(t => `<button type="button" class="bp-tree-thread" data-thread="${esc(t.id)}">${t.pinned ? '<span class="pin">📌</span>' : ''}${esc(t.title || (node.dataset.node === 'chat' ? '新对话' : '新会话'))}</button>`).join('')
+          : '<div class="bp-tree-note">还没有会话</div>';
+      } catch (e) { body.innerHTML = ''; delete body.dataset.loaded; toast(e.message, true); }
+    }
+    const fillOpenNodes = () => { for (const n of app.querySelectorAll('.bp-node.open:not(.active)')) fillNode(n); };
+    // go to a node (and a conversation in it, or a new one there)
+    async function goNode(key, threadId = null, fresh = false) {
+      const same = key === activeKey();
+      if (same && widget) {
+        if (threadId) return widget.openThread(threadId);
+        if (fresh) return app.querySelector('.bridge [data-act="new"]')?.click();
+        return;
+      }
+      const was = activeKey();  // the node being left stays open, like the one being entered
+      if (was) openNodes.add(was);
+      openNodes.add(key); saveOpen();
+      if (threadId) { try { await client.selectThread(threadId, scopeOf(key)); } catch {} }
+      mode = key === 'chat' ? '' : 'code'; project = key === 'chat' ? null : key.slice(2);
+      store.set('bridge_mode', mode); store.set('bridge_project', project);
+      await transition(() => show(), key === 'chat' ? 'back' : 'fwd');
+      if (fresh) app.querySelector('.bridge [data-act="new"]')?.click();
+    }
     const ACCT = '<div class="bp-acct"></div>';
 
     // Swaps views with a View Transition: the sidebar box and the top bar stay, their contents slide in the
@@ -75,7 +140,9 @@
       const html = document.documentElement;
       html.dataset.vt = dir;
       const t = document.startViewTransition(update);
-      try { await t.finished; } catch {} finally { delete html.dataset.vt; }
+      // the update runs only once a frame renders; a page that renders none (a background pane) would wait forever
+      const guard = setTimeout(() => t.skipTransition(), 1500);
+      try { await t.finished; } catch {} finally { clearTimeout(guard); delete html.dataset.vt; }
     }
     // let the new sidebar list arrive before the "after" snapshot, so it slides in instead of popping in later
     const listReady = (ms = 450) => new Promise((resolve) => {
@@ -86,17 +153,11 @@
       setTimeout(() => { mo.disconnect(); resolve(); }, ms);
     });
 
-    async function setMode(next) {
-      if (next === mode) return;
-      for (const b of app.querySelectorAll('.bp-nav [data-mode]')) { const on = b.dataset.mode === next; b.classList.toggle('on', on); on ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'); }
-      mode = next; store.set('bridge_mode', mode);
-      transition(() => show(), next === 'code' ? 'fwd' : 'back');
-    }
 
     async function setBackend(next) {
       if (next === backend) return;
       for (const b of app.querySelectorAll('.bp-backend [data-backend]')) { const on = b.dataset.backend === next; b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); }
-      backend = next; store.set('bridge_backend', backend || null);
+      backend = next; store.set('bridge_backend', backend || null); openNodes = loadOpen();
       if (!reduced()) await new Promise(r => setTimeout(r, 300));
       if (backend === next) transition(() => show(), next ? 'fwd' : 'back');
     }
@@ -104,29 +165,25 @@
 
     function mountChat(scope, proj = null) {
       unmount();
-      // Code: the list is this project's sessions, headed by the project itself
-      const projHead = proj ? `<div class="bp-side-proj"><span class="ic">${FOLDER}</span><div class="who"><div class="n">${esc(proj.name)}</div>`
-          + `<div class="d">${esc([proj.info?.branch, proj.local ? '本机仓库' : (proj.source ? proj.source.replace(/^https?:\/\//, '').replace(/\.git$/, '') : '本地项目')].filter(Boolean).join(' · '))}</div></div>`
-          + `<button type="button" class="bridge-btn bridge-btn-ghost bridge-tiny" data-home title="切换 / 新建项目">切换</button></div>` : '';
       const who = backend ? backendLabel() : 'Claude';
       widget = mountBridgeWidget(app, client, {
         scope, title: 'claude-bridge', fill: true, sideHead: backendSeg() || undefined,
-        sideNav: nav() + (proj ? label('项目') + projHead + label('会话') : label('最近')), sideFoot: ACCT,
+        sideNav: treeHtml(proj ? `p:${proj.name}` : 'chat'), sideFoot: ACCT,
         placeholder: proj ? `让 ${who} 读代码、改文件、跑命令` : (backend ? `给 ${who} 发消息` : '输入消息'),
         assistantName: who,
         ...(proj ? { strings: { newThread: '＋ 新会话', threadTitle: '新会话', del: '删除会话', delConfirm: '删除这个会话？记录会一起删除，项目里的文件不受影响。',
           empty: `在 ${proj.name} 里开始：描述你想让 ${who} 做的事` } } : (backend ? { strings: { empty: `${who} · 问点什么吧` } } : {})),
         openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
       });
-      renderAccount();
+      renderAccount(); fillOpenNodes();
       return listReady();
     }
 
     async function show() {
       const tag = backend ? ` · ${backendLabel()}` : '';
+      await loadProjects();  // the sidebar tree lists the projects in every view
       if (mode === '') { document.title = `claude-bridge · Chat${tag}`; return mountChat(sfx()); }
       if (project) {
-        await loadProjects();
         const p = projects.find(x => x.name === project && x.status === 'ready');
         if (p) {
           document.title = `claude-bridge · ${p.name}${tag}`;
@@ -168,19 +225,10 @@
           ${p.status === 'deleting' || p.local ? '' : `<span class="row-end"><button type="button" class="btn-ghost btn-small danger" data-del="${esc(p.name)}" title="删除项目">删除</button></span>`}
         </div>`;
       }).join('');
-      // same frame as the chat: sidebar (the projects, like the thread list) + top bar + the picker in the main area
-      const side = projects.map(p => {
-        const [st] = STATUS[p.status] || ['', ''];
-        const ready = p.status === 'ready';
-        const meta = [st, p.info?.branch, p.threads ? `${p.threads} 段对话` : '', p.last_used ? fmtSeen(p.last_used) : ''].filter(Boolean).join(' · ');
-        return `<button type="button" class="bridge-thread"${ready ? ` data-open="${esc(p.name)}"` : ' disabled'}>`
-          + `<span class="t">${esc(p.name)}</span><span class="p">${esc(p.source ? p.source.replace(/^https?:\/\//, '') : (p.local ? '本机仓库' : '空项目'))}</span>`
-          + `<span class="m">${esc(meta)}</span></button>`;
-      }).join('');
-      app.innerHTML = `<div class="bridge fill bp-homeview">
+      // same frame as the chat: the sidebar tree + top bar + the picker in the main area
+      app.innerHTML = `<div class="bridge fill bp-homeview tree">
         <aside class="bridge-side">${backends.length ? `<div class="bridge-side-head">${backendSeg()}</div>` : ''}<button type="button" class="bridge-btn bridge-new" data-act="home-new">＋ 新建项目</button>
-          <div class="bridge-side-nav">${nav()}${projects.length ? label('全部项目') : ''}</div>
-          <div class="bridge-threads">${side}</div><div class="bridge-side-foot">${ACCT}</div></aside>
+          <div class="bridge-side-nav">${treeHtml(null)}</div><div class="bridge-side-foot">${ACCT}</div></aside>
         <div class="bridge-side-scrim" data-act="side-close"></div>
         <div class="bridge-main">
           <div class="bridge-top"><button type="button" class="bridge-icon" data-act="side" title="项目列表">${iconSvg('menu')}</button><span class="bridge-title">项目</span></div>
@@ -207,7 +255,7 @@
           </div>
         </main></div></div></div>`;
       applyPrefs(app.firstElementChild, loadPrefs());  // the chat's sidebar on / off and width
-      renderAccount();
+      renderAccount(); fillOpenNodes();
       if (busy || openWhenReady) poll = setTimeout(showHomeIfStill, 2000);
     }
     const showHomeIfStill = () => { if (mode === 'code' && !project) showHome(); };
@@ -218,6 +266,7 @@
       return dir ? ` ${dir.replace(/^\/(Users|home)\/[^/]+/, '~')} ` : '的项目文件夹';
     }
     app.addEventListener('input', (e) => {
+      if (e.target.matches?.('.bp-tree-search')) return filterTree(e.target.value);
       if (!e.target.matches?.('.bp-proj-filter')) return;
       const q = e.target.value.trim().toLowerCase();
       for (const row of app.querySelectorAll('.bp-projects > .list-row, .bp-homeview .bridge-threads > .bridge-thread')) {
@@ -226,9 +275,40 @@
       }
     });
 
+    function filterTree(raw) {
+      const q = raw.trim().toLowerCase(), tree = app.querySelector('.bp-tree');
+      if (!tree) return;
+      const more = tree.querySelector('.bp-tree-more');
+      if (more) { if (q && !more.dataset.was) more.dataset.was = more.open ? '1' : '0'; more.open = q ? true : more.dataset.was === '1'; if (!q) delete more.dataset.was; }
+      // a node shows when its name or one of its sessions' titles matches; its sessions show when the name matches
+      // or they do. Only titles already listed are searched (closed nodes haven't fetched theirs).
+      for (const node of tree.querySelectorAll('.bp-node')) {
+        const nameHit = (node.querySelector('.n')?.textContent || '').toLowerCase().includes(q);
+        let rowHit = false;
+        for (const row of node.querySelectorAll('.bp-tree-thread, .bridge-thread-row')) {
+          const t = (row.querySelector('.t') || row).textContent.toLowerCase().includes(q);
+          row.hidden = !!q && !nameHit && !t;
+          if (q && t) rowHit = true;
+        }
+        node.hidden = !!q && !nameHit && !rowHit;
+        if (rowHit) node.classList.add('open');
+      }
+      for (const lab of tree.querySelectorAll('.bp-tree-label, .bp-tree-empty')) lab.hidden = !!q;
+    }
+
     app.addEventListener('click', async (e) => {
-      const m = e.target.closest('.bp-nav [data-mode]');
-      if (m) return setMode(m.dataset.mode);
+      // the sidebar tree
+      const node = e.target.closest('.bp-node[data-node]');
+      if (node && e.target.closest('[data-toggle]')) {
+        const key = node.dataset.node, open = !node.classList.contains('open');
+        node.classList.toggle('open', open); e.target.closest('[data-toggle]').setAttribute('aria-expanded', String(open));
+        open ? openNodes.add(key) : openNodes.delete(key); saveOpen();
+        if (open) fillNode(node);
+        return;
+      }
+      if (node && e.target.closest('[data-new]')) return goNode(node.dataset.node, null, true);
+      const tt = e.target.closest('.bp-tree-thread[data-thread]');
+      if (tt && node) return goNode(node.dataset.node, tt.dataset.thread);
       const bk = e.target.closest('.bp-backend [data-backend]');
       if (bk) return setBackend(bk.dataset.backend);
       if (e.target.closest('[data-home]')) { project = null; store.set('bridge_project', null); return transition(() => show(), 'back'); }
@@ -282,7 +362,7 @@
       let sub, full = false, items;
       if (bk) {
         const bal = fmtBalance(bk.balance);
-        sub = `${bk.label} 24h ${fmtUsd(bk.usage.day.cost_usd)}${bal ? ` · 余额 ${bal}` : ''}`;
+        sub = `${bk.label} 24h ${fmtMoney(bk.usage.day.cost, bk.currency)}${bal ? ` · 余额 ${bal}` : ''}`;
         items = `<div class="bp-acct-menu-head">${esc(bk.label)} · 按 API 价格计费</div>`
           + `<a class="menu-item" href="/account?svc=${encodeURIComponent(bk.name)}">${iconSvg('settings')}${esc(bk.label)} 用量与 API key</a>`;
       } else {

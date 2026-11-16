@@ -73,7 +73,7 @@ worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏�
 - `models`：切到这个后端时模型菜单里的选项，`id` 即传给 `--model` 的模型名，第一个为默认
 - `env`：这些对话里 `claude` 的环境变量（`ANTHROPIC_BASE_URL` 等）；worker 自身的 Claude 凭据（`CLAUDE_CODE_OAUTH_TOKEN` 等）不会带进这些对话
 - API key：两种放法。一是 owners 在网页「我的账户」里填写：保存在服务端，worker 每 30 秒同步配置时取走，页面上只显示末 4 位；二是写在 `env` 的 `ANTHROPIC_AUTH_TOKEN` 里：只留在 worker 机器上，不上报服务端，此时以它为准、网页不显示填写框。两处都没有 key 时，发送会提示先去填写
-- `pricing` / `peak`：按对方 API 价格记账用（美元 / 百万 token，按模型名匹配；`peak` 为高峰时段与倍数）
+- `pricing` / `peak` / `currency`：按对方 API 价格记账用（每百万 token 的价格，币种由 `currency` 指定，缺省 USD，DeepSeek 用 CNY；按模型名匹配；`peak` 为高峰时段与倍数）。改了币种后，已记的账会按记下的 token 数和高峰标记重新计价
 - `balance_url`：可选，worker 每 10 分钟用 key 查一次账户余额，显示在页面上
 - `projects_root`：可选，例如 `~/Documents/GitHub`。设了以后这个后端的 Code 项目就是该目录下的文件夹（worker 每 30 秒上报一次列表），新建和克隆都放进去，网页上不删除；不设则和 Claude 共用每个账户隔离的项目目录
 - `profile`：可选，这个后端的对话专用的运行参数，键与 `CLAUDE_BRIDGE_PROFILES` 相同（不含 `cwd`，目录仍由 scope 决定），叠加在 scope 的 profile 之上，例如更长的 `chat_timeout` / `idle_timeout` 或它自己的 `system_prompt`

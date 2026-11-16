@@ -87,7 +87,7 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS, fmtUsd, fmtTok, fmtBalance } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS, fmtMoney, fmtTok, fmtBalance } from '/static/bridge/bridge-pages.js';
     import { enhanceIcons } from '@szyyw/design/icons.js';
     import { mountCopy } from '@szyyw/design/copy.js';
     enhanceIcons();
@@ -132,7 +132,7 @@
         const tiles = (bal ? [tile('账户余额', esc(bal), b.balance?.is_available === false ? '<span class="pill err">不足</span>' : '在 DeepSeek 平台充值')] : [])
           .concat(['day', 'week', 'month'].map(k => {
             const u = b.usage[k];
-            return tile(u.label, esc(fmtUsd(u.cost_usd)), `${u.turns} 次 · 输出 ${fmtTok(u.output_tokens)}`,
+            return tile(u.label, esc(fmtMoney(u.cost, b.currency)), `${u.turns} 次 · 输出 ${fmtTok(u.output_tokens)}`,
               `输入 ${fmtTok(u.input_tokens)} · 缓存命中 ${fmtTok(u.cache_read_tokens)}`);
           }));
         const keyPanel = key.source === 'worker'

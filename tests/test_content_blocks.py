@@ -105,7 +105,8 @@ def test_page_reads_only_thinking_streams_and_collapses_finished_ones(tmp_path):
     store = BridgeStore(tmp_path / "b.db")
     th = store.create_thread("t1", owner="1")
     msg = store.add_message(th["id"], "assistant", "", status="streaming")
-    ev = lambda e: store.add_event(msg["id"], "content_stream", {"native_message_id": "m1", "at": 0, "event": e})
+    def ev(e):
+        return store.add_event(msg["id"], "content_stream", {"native_message_id": "m1", "at": 0, "event": e})
     ev({"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 9}}})
     ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
     for part in ("想", "一下"):
@@ -134,7 +135,8 @@ def test_chat_scopes_relay_only_thinking_stream_rows():
     from claude_bridge.stream_json import StreamState
 
     st = StreamState(emit_content_blocks=True, full_stream=False)
-    feed = lambda e: [x for x in st.feed({"type": "stream_event", "event": e}) if x[0] == "event" and x[1]["type"] == "content_stream"]
+    def feed(e):
+        return [x for x in st.feed({"type": "stream_event", "event": e}) if x[0] == "event" and x[1]["type"] == "content_stream"]
     assert not feed({"type": "message_start", "message": {"id": "m1"}})
     assert feed({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
     assert feed({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "x"}})

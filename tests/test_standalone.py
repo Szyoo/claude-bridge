@@ -1,10 +1,9 @@
 import re
 
 import pytest
-
-from claude_bridge._version import __version__
 from fastapi.testclient import TestClient
 
+from claude_bridge._version import __version__
 from claude_bridge.standalone import DESIGN_VERSION, create_standalone_app
 from conftest import CDN, assert_design_refs
 

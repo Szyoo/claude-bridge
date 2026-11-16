@@ -1516,6 +1516,10 @@ export function mountBridgeWidget(el, client, opts = {}) {
       </div>
     </div>`;
   const root = el.firstElementChild;
+  // the host's sideNav may lay the sidebar out as a tree with a [data-threads-slot] under the open node: the
+  // conversation list moves there, and the side nav (not the list) becomes the sidebar's scrolling part
+  const threadsSlot = el.querySelector('.bridge-side-nav [data-threads-slot]');
+  if (threadsSlot) { threadsSlot.appendChild(el.querySelector('.bridge-threads')); root.classList.add('tree'); }
   const pops = { prefs: document.createElement('div'), ctx: document.createElement('div') };
   for (const [k, p] of Object.entries(pops)) { p.className = `bridge-pop bridge-root pop-${k}`; p.hidden = true; document.body.appendChild(p); }
   // 弹层 / 菜单都挂到 body：宿主祖先若有 transform / filter / backdrop-filter，会把 position:fixed 的参照系困在那个祖先里
