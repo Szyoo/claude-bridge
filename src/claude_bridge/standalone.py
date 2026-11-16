@@ -11,6 +11,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
+from claude_bridge._version import __version__
 from claude_bridge.api_mode import create_api_router
 from claude_bridge.auth import COOKIE_NAME, PasswordAuth
 from claude_bridge.callers import Callers, create_caller_router
@@ -31,6 +32,10 @@ SITE_ICONS = {
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
     "/favicon.ico": ("favicon.ico", "image/x-icon"),
     "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+    # "Add to Home Screen": the app's name, icons and standalone display (fetched without cookies: public, like the icons)
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
 }
 
 
@@ -98,7 +103,7 @@ def render_page(page: str, cookies: dict[str, str], portal: str | None) -> str:
     package location into the {{design_base}} / {{design_origin}} placeholders (links + import map)."""
     base = html.escape(design_base(), quote=True)
     page = page.replace("{{design_base}}", base).replace("{{design_origin}}", html.escape(_origin(base), quote=True))
-    attrs = appearance_attrs(cookies)
+    attrs = f' data-version="{html.escape(__version__, quote=True)}"' + appearance_attrs(cookies)
     if portal is not None:
         attrs = f' data-sso="1" data-portal="{html.escape(portal, quote=True)}"' + attrs
     return page.replace('<html lang="zh-CN">', f'<html lang="zh-CN"{attrs}>', 1)

@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
+from claude_bridge._version import __version__
 from claude_bridge import accounts as accounts_mod
 from claude_bridge.accounts import Accounts
 from claude_bridge.cli import main
@@ -275,7 +276,7 @@ def test_sso_pages_load_corner_tools(db, monkeypatch):
         r = c.get(path)
         assert r.status_code == 200, path
         # no appearance cookies: @szyyw/design defaults (nebula / default palette → no data-palette / dark)
-        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-theme-mode="random" data-scheme="dark">' in r.text
+        assert f'<html lang="zh-CN" data-sso="1" data-portal="{PORTAL}" data-version="{__version__}" data-theme-mode="random" data-scheme="dark">' in r.text
         assert_design_refs(r.text)
         assert "/static/bridge/corner-boot.js" in r.text
     assert c.get("/static/bridge/corner-boot.js").status_code == 200
@@ -310,13 +311,13 @@ def test_sso_off_pages_have_no_portal_tools(db):
     app = create_multiuser_app(db_path=db, agent_token="tok", tz="UTC")
     c = TestClient(app, follow_redirects=False)
     login = c.get("/login")
-    assert '<html lang="zh-CN" data-theme-mode="random" data-scheme="dark">' in login.text and "corner-boot" in login.text
+    assert f'<html lang="zh-CN" data-version="{__version__}" data-theme-mode="random" data-scheme="dark">' in login.text and "corner-boot" in login.text
     c.post("/login", data={"username": "szyyw", "password": PW})
     for path in ("/", "/account", "/admin"):
         r = c.get(path)
         assert r.status_code == 200, path
         assert "data-sso" not in r.text and "data-portal" not in r.text
-        assert '<html lang="zh-CN" data-theme-mode="random" data-scheme="dark">' in r.text and "corner-boot" in r.text
+        assert f'<html lang="zh-CN" data-version="{__version__}" data-theme-mode="random" data-scheme="dark">' in r.text and "corner-boot" in r.text
 
 
 def test_accounts_are_created_in_the_portal_not_here(db, monkeypatch):

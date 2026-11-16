@@ -579,7 +579,7 @@ def test_admin_reads_conversations_without_the_user_noticing(app, agent):
 
 def test_site_icons_public_without_login(app):
     c = TestClient(app, follow_redirects=False)
-    for path in ("/favicon.svg", "/favicon.ico", "/apple-touch-icon.png"):
+    for path in ("/favicon.svg", "/favicon.ico", "/apple-touch-icon.png", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"):
         assert c.get(path).status_code == 200
     assert 'href="/favicon.svg"' in c.get("/login").text
 

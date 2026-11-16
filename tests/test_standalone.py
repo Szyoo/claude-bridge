@@ -1,6 +1,8 @@
 import re
 
 import pytest
+
+from claude_bridge._version import __version__
 from fastapi.testclient import TestClient
 
 from claude_bridge.standalone import DESIGN_VERSION, create_standalone_app
@@ -23,7 +25,7 @@ def test_password_login_flow(tmp_path):
     page = c.get("/").text  # @szyyw/design look + 🌗 / appearance, never the portal switcher / account menu
     assert f"{CDN}/components.css" in page and "corner-boot" in page and "data-sso" not in page
     assert_design_refs(page)
-    assert '<html lang="zh-CN" data-theme-mode="random" data-scheme="dark">' in page
+    assert f'<html lang="zh-CN" data-version="{__version__}" data-theme-mode="random" data-scheme="dark">' in page
     assert c.get("/api/status").status_code == 200
     assert c.get("/api/threads?scope=").json()["current"] == "main"
     assert c.get("/static/bridge/bridge-client.js").status_code == 200
@@ -62,6 +64,21 @@ def test_site_icons_public_and_linked(tmp_path):
         assert r.status_code == 200 and r.headers["content-type"].startswith(ctype) and r.content
     login = c.get("/login").text
     assert 'href="/favicon.svg"' in login and 'href="/favicon.ico"' in login and 'href="/apple-touch-icon.png"' in login
+
+
+def test_home_screen_web_app(tmp_path):
+    app = create_standalone_app(db_path=tmp_path / "s.db", password="pw", secret="s")
+    c = TestClient(app, follow_redirects=False)  # iOS fetches the manifest without cookies
+    m = c.get("/manifest.webmanifest")
+    assert m.status_code == 200 and m.headers["content-type"].startswith("application/manifest+json")
+    manifest = m.json()
+    assert manifest["display"] == "standalone" and manifest["start_url"] == "/"
+    for icon in manifest["icons"]:
+        r = c.get(icon["src"])
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    login = c.get("/login").text
+    assert 'rel="manifest"' in login and 'apple-mobile-web-app-capable' in login and "viewport-fit=cover" in login
+    assert f'data-version="{__version__}"' in login  # the chat page compares it with /api/status to pick up a release
 
 
 def test_design_version_and_base(tmp_path, monkeypatch):

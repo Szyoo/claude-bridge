@@ -7,6 +7,12 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="claude-bridge" />
+  <meta name="theme-color" content="#0b1020" />
   <link rel="preconnect" href="{{design_origin}}" crossorigin />
   <link rel="stylesheet" href="{{design_base}}/tokens.css" />
   <link rel="stylesheet" href="{{design_base}}/components.css" />
@@ -50,6 +56,7 @@
     import { attachMenu } from '@szyyw/design/menu.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { iconSvg } from '@szyyw/design/icons.js';
+    const STANDALONE = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
     import { openLightbox } from '@szyyw/design/lightbox.js';
 
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
@@ -242,6 +249,7 @@
     });
 
     app.addEventListener('click', async (e) => {
+      if (e.target.closest('[data-reload]')) return location.reload();
       const m = e.target.closest('.bp-nav [data-mode]');
       if (m) return setMode(m.dataset.mode);
       const bk = e.target.closest('.bp-backend [data-backend]');
@@ -310,6 +318,8 @@
           + (u.role === 'admin' ? `<a class="menu-item" href="/admin">${iconSvg('users')}管理</a>` : '');
       }
       // portal SSO: sign-out lives in the corner account menu (it signs out of the portal)
+      // a home-screen web app has no address bar: give it a way to reload
+      if (STANDALONE) items += `<div class="menu-sep"></div><button type="button" class="menu-item" data-reload>${iconSvg('refresh-cw')}刷新页面</button>`;
       if (!d.sso) items += '<div class="menu-sep"></div><form method="post" action="/logout"><button type="submit" class="menu-item">' + iconSvg('log-out') + '退出登录</button></form>';
       for (const m of acctMenus) m.destroy();
       acctMenus = [];
@@ -326,7 +336,26 @@
     if (backend && !backends.some(b => b.name === backend)) { backend = ''; store.set('bridge_backend', null); }
     show();
     setInterval(renderAccount, 120000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) renderAccount(); });
+    // Keeping up without a reload button (and for tabs left open): a new release is loaded as soon as nothing is being
+    // typed; coming back after a long time away starts afresh, the way a native app is relaunched.
+    const LOADED = document.documentElement.dataset.version || '';
+    const AWAY_MS = 30 * 60 * 1000;
+    let hiddenAt = 0;
+    const idle = () => !(widget?.input?.value || '').trim() && !document.querySelector('dialog[open], .bridge-dlg, .lightbox:not([hidden])');
+    async function checkVersion() {
+      if (document.hidden || !LOADED) return;
+      try {
+        const r = await fetch('/api/status', { cache: 'no-store', credentials: 'same-origin' });
+        const v = r.ok ? (await r.json())?.bridge?.version : '';
+        if (v && v !== LOADED && idle()) location.reload();
+      } catch { /* offline: try again later */ }
+    }
+    setInterval(checkVersion, 10 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > AWAY_MS && idle()) return location.reload();
+      renderAccount(); checkVersion();
+    });
   </script>
 </body>
 </html>
