@@ -1495,12 +1495,12 @@ export function mountBridgeWidget(el, client, opts = {}) {
           ${o.topEnd || ''}
         </div>
         <div class="bridge-list"><div class="bridge-empty">${esc(S.empty)}</div></div>
-        <form class="bridge-form bridge-pb">
+        <div class="bridge-form bridge-pb" role="group" aria-label="输入消息">
           <div class="bridge-pb-menu" id="${menuId}" hidden></div>
           <canvas class="bridge-pb-sparks" aria-hidden="true"></canvas>
           <div class="bridge-queue" hidden></div>
           <div class="bridge-tray" hidden></div>
-          <textarea class="bridge-input" rows="1" autocomplete="off" placeholder="${esc(o.placeholder)}" aria-label="${esc(o.placeholder)}" aria-controls="${menuId}" aria-autocomplete="list"></textarea>
+          <textarea class="bridge-input" rows="1" name="message" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" placeholder="${esc(o.placeholder)}" aria-label="${esc(o.placeholder)}" aria-controls="${menuId}" aria-autocomplete="list"></textarea>
           <div class="bridge-bar">
             <button type="button" class="bridge-icon" data-act="prefs" title="设置" aria-label="设置"><svg viewBox="0 0 16 16" width="1.1em" height="1.1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h7M13 4h1M2 8h2M8 8h6M2 12h8"/><circle cx="11" cy="4" r="1.7"/><circle cx="6" cy="8" r="1.7"/><circle cx="12" cy="12" r="1.7"/></svg></button>
             <button type="button" class="bridge-icon bridge-pb-tool" data-pb="plus" title="${esc(S.attach)}" aria-label="${esc(S.attach)}" aria-expanded="false" hidden>${hugeicon('plus', 16, 2)}</button>
@@ -1510,9 +1510,9 @@ export function mountBridgeWidget(el, client, opts = {}) {
             <span class="grow"></span>
             <button type="button" class="bridge-pill" data-act="ctx" hidden title="当前会话上下文占用，点开看构成与额度"><span class="pct"></span><i class="ring"></i></button>
             ${voiceOn ? '<button type="button" class="bridge-pb-voice"></button>' : ''}
-            <button type="submit" class="bridge-btn bridge-send" title="${esc(S.send)}" aria-label="${esc(S.send)}" disabled><svg class="bridge-pb-glyph" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="${morphPath(0)}"/></svg></button>
+            <button type="button" class="bridge-btn bridge-send" title="${esc(S.send)}" aria-label="${esc(S.send)}" disabled><svg class="bridge-pb-glyph" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="${morphPath(0)}"/></svg></button>
           </div>
-        </form>
+        </div>
       </div>
     </div>`;
   const root = el.firstElementChild;
@@ -2125,10 +2125,11 @@ export function mountBridgeWidget(el, client, opts = {}) {
     });
   }
 
-  form.addEventListener('submit', (e) => { e.preventDefault(); if (sendBtn.dataset.mode === 'stop' && e.submitter === sendBtn) return; send(); });
-  sendBtn.addEventListener('click', async (e) => {
-    if (sendBtn.dataset.mode !== 'stop' || !state.inflight) return;
-    e.preventDefault();       // answering with nothing typed: the same button is 停止
+  // The composer is not a <form>: a lone text field with a submit button reads as a sign-in form to password managers
+  // (iCloud Passwords kept pinning its "allow AutoFill" prompt to it). Enter sends from the keydown handler below.
+  sendBtn.addEventListener('click', async () => {
+    if (sendBtn.dataset.mode !== 'stop') return send();
+    if (!state.inflight) return;  // answering with nothing typed: the same button is 停止
     try { await client.cancel(state.inflight); } catch (err) { toast(err.message, true); }
   });
   sendBtn.addEventListener('pointerdown', (e) => { if (e.button === 0 && sendBtn.dataset.armed != null) sendBtn.dataset.pressed = ''; });
