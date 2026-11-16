@@ -131,6 +131,9 @@
       if (fresh) app.querySelector('.bridge [data-act="new"]')?.click();
     }
     const ACCT = '<div class="bp-acct"></div>';
+    // another provider (DeepSeek): its account balance and spend, a small card linking to its own page; filled by renderAccount
+    const svcCard = () => backend ? `<a class="bp-svc-card" href="/account?svc=${encodeURIComponent(backend)}" aria-label="${esc(backendLabel())} 余额与用量"></a>` : '';
+    const sideHead = () => (backendSeg() + svcCard()) || undefined;
 
     // Swaps views with a View Transition: the sidebar box and the top bar stay, their contents slide in the
     // direction of travel (Chat → Code → a project is "forward"). No animation for reduced motion / old browsers.
@@ -167,10 +170,11 @@
       unmount();
       const who = backend ? backendLabel() : 'Claude';
       widget = mountBridgeWidget(app, client, {
-        scope, title: 'claude-bridge', fill: true, sideHead: backendSeg() || undefined,
+        scope, title: 'claude-bridge', fill: true, sideHead: sideHead(),
         sideNav: treeHtml(proj ? `p:${proj.name}` : 'chat'), sideFoot: ACCT,
         placeholder: proj ? `让 ${who} 读代码、改文件、跑命令` : (backend ? `给 ${who} 发消息` : '输入消息'),
         assistantName: who,
+        emptyThinking: backend ? 'hide' : undefined,  // another provider's empty thinking blocks are just "didn't think"
         ...(proj ? { strings: { newThread: '＋ 新会话', threadTitle: '新会话', del: '删除会话', delConfirm: '删除这个会话？记录会一起删除，项目里的文件不受影响。',
           empty: `在 ${proj.name} 里开始：描述你想让 ${who} 做的事` } } : (backend ? { strings: { empty: `${who} · 问点什么吧` } } : {})),
         openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
@@ -227,7 +231,7 @@
       }).join('');
       // same frame as the chat: the sidebar tree + top bar + the picker in the main area
       app.innerHTML = `<div class="bridge fill bp-homeview tree">
-        <aside class="bridge-side">${backends.length ? `<div class="bridge-side-head">${backendSeg()}</div>` : ''}<button type="button" class="bridge-btn bridge-new" data-act="home-new">＋ 新建项目</button>
+        <aside class="bridge-side">${backends.length ? `<div class="bridge-side-head">${sideHead()}</div>` : ''}<button type="button" class="bridge-btn bridge-new" data-act="home-new">＋ 新建项目</button>
           <div class="bridge-side-nav">${treeHtml(null)}</div><div class="bridge-side-foot">${ACCT}</div></aside>
         <div class="bridge-side-scrim" data-act="side-close"></div>
         <div class="bridge-main">
@@ -362,7 +366,15 @@
       let sub, full = false, items;
       if (bk) {
         const bal = fmtBalance(bk.balance);
-        sub = `${bk.label} 24h ${fmtMoney(bk.usage.day.cost, bk.currency)}${bal ? ` · 余额 ${bal}` : ''}`;
+        sub = `${bk.label} · 按 API 价格计费`;
+        const low = bk.balance?.is_available === false, u3 = bk.usage, cur = bk.currency;
+        for (const card of app.querySelectorAll('.bp-svc-card')) {
+          card.innerHTML = `<span class="top"><span class="lbl">${esc(bk.label)} 余额</span>`
+            + `<b class="${low ? 'low' : ''}">${esc(bal || '—')}</b>${low ? '<span class="pill err">不足</span>' : ''}</span>`
+            + `<span class="spend"><span>24 小时 <b>${esc(fmtMoney(u3.day.cost, cur))}</b></span><span>7 天 <b>${esc(fmtMoney(u3.week.cost, cur))}</b></span>`
+            + `<span>30 天 <b>${esc(fmtMoney(u3.month.cost, cur))}</b></span></span>`;
+          card.title = `${bk.label}：24 小时 ${u3.day.turns} 次、7 天 ${u3.week.turns} 次（按 API 价格估算）`;
+        }
         items = `<div class="bp-acct-menu-head">${esc(bk.label)} · 按 API 价格计费</div>`
           + `<a class="menu-item" href="/account?svc=${encodeURIComponent(bk.name)}">${iconSvg('settings')}${esc(bk.label)} 用量与 API key</a>`;
       } else {

@@ -89,6 +89,20 @@ test('signature-only thinking shows an honest placeholder without exposing the s
     ev({ type: 'content_block_stop', index: 0 })]), [{ kind: 'text', text: 'answer' }]);
 });
 
+test('emptyThinking hide leaves out a signed thinking block that has no text', () => {
+  const ev = event => ({ type: 'content_stream', data: { native_message_id: 'm1', event } });
+  const empty = [ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'opaque' } }),
+    ev({ type: 'content_block_stop', index: 0 })];
+  const items = splitTurn('answer', empty)[0].items;
+  assert.ok(stepsHtml(items).includes('未返回思考文本'));  // default: the honest placeholder
+  const hidden = stepsHtml(items, { emptyThinking: 'hide' });
+  assert.ok(!hidden.includes('未返回思考文本') && !hidden.includes('opaque'));
+  const withText = splitTurn('answer', [ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '想一下' } }), empty[1], empty[2]])[0].items;
+  assert.ok(stepsHtml(withText, { emptyThinking: 'hide' }).includes('想一下'));  // real thinking stays
+});
+
 test('partial reconnect snapshots and duplicate live events retain exactly one thinking stream', () => {
   let snapshot, delivered = 0;
   const sub = Object.create(Subscription.prototype);

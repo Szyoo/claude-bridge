@@ -97,6 +97,20 @@
 .bp-tree-more[open] > summary::before { transform: rotate(90deg); }
 .bp-tree-more > summary:hover { background: var(--bridge-hover); color: var(--text); }
 
+/* another provider's balance and spend, a small card above ＋ 新对话 (links to its own account page) */
+.bp-svc-card { display: flex; flex-direction: column; gap: 6px; margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
+  border: 1px solid var(--glass-border); background: var(--inner-bg, var(--bridge-hover)); color: var(--text); text-decoration: none;
+  transition: border-color var(--dur-fast) var(--ease); }
+.bp-svc-card:empty { display: none; }
+.bp-svc-card:hover { border-color: var(--hover-border, var(--glass-border)); }
+.bp-svc-card:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset, 2px); }
+.bp-svc-card .top { display: flex; align-items: baseline; gap: var(--sp-2); }
+.bp-svc-card .lbl { font-size: var(--fs-xs); color: var(--text-dim); letter-spacing: .06em; }
+.bp-svc-card .top b { margin-left: auto; font-size: var(--fs-title); font-variant-numeric: tabular-nums; }
+.bp-svc-card .top b.low { color: var(--err, var(--danger)); }
+.bp-svc-card .spend { display: flex; justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-xs); color: var(--text-dim); }
+.bp-svc-card .spend b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+
 /* your account at the sidebar's foot: avatar · name · one line of use; opens a menu (@szyyw/design .menu) */
 .bp-acct-btn { display: flex; align-items: center; gap: var(--sp-2); width: 100%; padding: var(--sp-2); border: 0; border-radius: var(--r-sm);
   background: none; color: var(--bridge-fg); font: inherit; text-align: left; cursor: pointer; }

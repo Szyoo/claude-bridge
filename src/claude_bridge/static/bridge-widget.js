@@ -495,6 +495,8 @@ export function stepsHtml(items, opts = {}) {
     if (it.kind === 'thinking') {
       const running = !!it.streaming && o.streaming;
       const signatureOnly = it.signed && !it.text && !running;
+      // DeepSeek opens a (signed) thinking block on steps it doesn't think about: nothing to show, not a withheld text
+      if (signatureOnly && !it.redacted && o.emptyThinking === 'hide') { i++; continue; }
       const label = it.redacted ? '思考内容未公开' : signatureOnly ? '未返回思考文本' : running ? '正在思考' : '思考过程';
       const text = it.redacted ? '模型未公开这段思考内容。' : signatureOnly ? '上游只提供了思考块签名，没有提供可显示的思考文本。' : it.text;
       const st = running ? 'running' : 'done';
@@ -609,7 +611,7 @@ export function renderTurn(el, m, opts = {}) {
     const segs = splitTurn(m.content || '', m.events || []);
     body = segs.map((s, i) => s.kind === 'text'
       ? `<div class="bridge-md">${o.markdown(s.text)}</div>`
-      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, open: o.open, key: `s${i}`, expected: o.expected, strings: S, now: o.now, fileUrl: o.fileUrl })}</div>`).join('');
+      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, open: o.open, key: `s${i}`, expected: o.expected, strings: S, now: o.now, fileUrl: o.fileUrl, emptyThinking: o.emptyThinking })}</div>`).join('');
     const think = latticeHtml(turnTiming(m, o.now), S, o.now);
     if (streaming && !segs.length) body = `<div class="bridge-wait">${think}</div>`;
     else if (think) body = `<div class="bridge-think-row">${think}</div>` + body;
@@ -1584,7 +1586,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const m = state.msgs.get(id); if (!m) return;
     const b = list.querySelector(`.bridge-turn[data-id="${id}"]`); if (!b) return;
     const follow = nearBottom();
-    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, fileUrl: (id) => client.fileUrl(id), lang: o.lang, expected: o.toolExpected,
+    renderTurn(b, m, { markdown: o.markdown, timestamps: prefs.timestamps, open: prefs.toolsOpen, fileUrl: (id) => client.fileUrl(id), lang: o.lang, expected: o.toolExpected, emptyThinking: o.emptyThinking,
       strings: { me: S.me, assistant: S.assistant, ...(o.strings.waitingHelper && { waitingHelper: o.strings.waitingHelper }), ...(o.strings.thinking && { thinking: o.strings.thinking }), ...(o.strings.thought && { thought: o.strings.thought }), ...(o.strings.stopped && { stopped: o.strings.stopped }) } });
     if (follow) scrollBottom();
     syncTicker();
