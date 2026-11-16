@@ -2,6 +2,13 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.26.0 — 2026-11-16
+
+- **后端用量页**（点 DeepSeek 余额卡片打开，`/account?svc=<后端名>`）参照 DeepSeek 开放平台重做：充值余额（附充值入口）与累计消费；24 小时 / 7 天 / 30 天切换，显示消费金额、回合数、Tokens；按模型堆叠的消费柱状图（24 小时按小时，其余按天，按浏览器时区）；按模型的输入 / 缓存命中 / 输出 / 命中率 / 金额；各模型定价表（空闲价与高峰价，高峰时段换算成你的时区）
+- **换模型模拟**：选「这些回合」（某个模型或全部）和「全部换成」的模型，按同样的 token 数和每条记录自己的高峰 / 空闲时段重新计价，显示差额和比例
+- 新接口 `GET /api/backends/<名字>/usage?days=1..90&as_model=<模型>`：后端的价格、余额、累计消费与这段时间的逐条记录；带 `as_model` 时每条另给 `sim_cost`（与记账同一个计价函数）
+- 组件：`static/backend-usage.js`（`mountBackendUsage(el, name, { topUpUrl })`）
+
 ## v0.25.0 — 2026-11-16
 
 - **DeepSeek 看图**：DeepSeek V4 Pro 不处理图片（会被换成 `[Unsupported Image]`），Flash 可以。后端模型可标 `"images": false`；带图片的回合若当前模型看不了图，自动改用能看图的模型，并在回答里提示一句（组件新增 `notice` 步骤）。示例配置里 Task 子任务用的模型改为 Flash（`CLAUDE_CODE_SUBAGENT_MODEL`），V4 Pro 在任务中途要看图片时可以派一个 Task 子任务去读

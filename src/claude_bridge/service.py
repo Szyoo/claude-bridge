@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_bridge._version import REPO, __version__
-from claude_bridge.backends import BackendLedger, currency_of, split_backend
+from claude_bridge.backends import BackendLedger, currency_of, price_for, split_backend, turn_cost
 from claude_bridge.broker import Broker
 from claude_bridge.calibration import estimate_capacity
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
@@ -751,6 +751,34 @@ class BridgeService:
             keys.pop(name, None)
         self.store.set_meta("backend_keys", json.dumps(keys))
         return self.backend_key_status(name)
+
+    def backend_usage_detail(self, name: str, owner: str, principal: Principal | None, days: int = 1,
+                             as_model: str = "") -> dict[str, Any]:
+        """A backend's own usage page: its prices, balance, lifetime spend and every booked row of the last `days`
+        days (the page buckets them in the viewer's time zone). With `as_model`, each row also carries what it would
+        have cost on that model (`sim_cost`): same tokens, same peak / off-peak, the provider's prices."""
+        self.check_backend(name, owner, principal)
+        info = self.backend_info(name) or {}
+        days = max(1, min(int(days), 90))
+        model_ids = [m.get("id") for m in info.get("models") or []]
+        if as_model and as_model not in model_ids:
+            raise BadRequest(f"{info.get('label') or name} 没有模型 {as_model}")
+        rows = []
+        for r in self.backend_ledger.rows(owner, name, utc_text(time.time() - days * 86400)):
+            row = {"at": r["created_at"], "model": r["model"] or "", "job": r["job_id"], "peak": bool(r["peak"]),
+                   "input": r["input_tokens"], "cache_read": r["cache_read_tokens"], "cache_write": r["cache_write_tokens"],
+                   "output": r["output_tokens"], "cost": round(float(r["cost"] or 0), 6)}
+            if as_model:
+                usage = {"input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"],
+                         "cache_read_input_tokens": r["cache_read_tokens"], "cache_creation_input_tokens": r["cache_write_tokens"]}
+                row["sim_cost"] = round(turn_cost(info, as_model, usage, None, peak=bool(r["peak"]))[0], 6)
+            rows.append(row)
+        prices = [{"model": m.get("id"), "name": m.get("name") or m.get("id"), "images": m.get("images", True),
+                   "price": price_for(info.get("pricing") or {}, m.get("id"))} for m in info.get("models") or []]
+        return {"name": name, "label": info.get("label") or name, "currency": currency_of(info), "peak": info.get("peak") or {},
+                "models": prices, "balance": (self._backends_meta().get("balances") or {}).get(name),
+                "lifetime_cost": self.backend_ledger.lifetime(owner, name), "days": days, "as_model": as_model or None,
+                "rows": rows}
 
     def backend_key_status(self, name: str) -> dict[str, Any]:
         """{"source": "page" | "worker" | None, "hint": last 4 chars of a page key}; the key itself never leaves."""

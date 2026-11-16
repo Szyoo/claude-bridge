@@ -87,9 +87,10 @@
   </div>
 
   <script type="module">
-    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS, fmtMoney, fmtTok, fmtBalance } from '/static/bridge/bridge-pages.js';
+    import { api, esc, toast, sheet, armWithWarning, fmtWhen, fmtSeen, userMeter, shareLine, WINDOWS } from '/static/bridge/bridge-pages.js';
     import { enhanceIcons } from '@szyyw/design/icons.js';
     import { mountCopy } from '@szyyw/design/copy.js';
+    import { mountBackendUsage } from '/static/bridge/backend-usage.js';
     enhanceIcons();
     const $ = (s) => document.querySelector(s);
     const profile = $('#profile'), pw = $('#password');
@@ -120,21 +121,14 @@
       const bk = svc ? (d.backends || []).filter(b => b.name === svc) : [];  // each side keeps to its own
       if (svc && bk.length) {
         for (const el of document.querySelectorAll('main > *')) el.hidden = el.id !== 'backends';
+        document.querySelector('main').classList.remove('narrow');  // the usage dashboard wants the page's full width
         $('[data-admin]').hidden = true;
         $('.app-title').textContent = bk[0].label;
         document.title = `claude-bridge · ${bk[0].label}`;
       }
       $('#backends').hidden = !bk.length;
       $('#backends').innerHTML = bk.map(b => {
-        const bal = fmtBalance(b.balance), key = b.key || {};
-        const tile = (label, value, ...subs) => `<div class="stat inner"><div class="stat-label">${esc(label)}</div>`
-          + `<div class="stat-value">${value}</div>${subs.map(t => `<div class="stat-sub">${t}</div>`).join('')}</div>`;
-        const tiles = (bal ? [tile('账户余额', esc(bal), b.balance?.is_available === false ? '<span class="pill err">不足</span>' : '在 DeepSeek 平台充值')] : [])
-          .concat(['day', 'week', 'month'].map(k => {
-            const u = b.usage[k];
-            return tile(u.label, esc(fmtMoney(u.cost, b.currency)), `${u.turns} 次 · 输出 ${fmtTok(u.output_tokens)}`,
-              `输入 ${fmtTok(u.input_tokens)} · 缓存命中 ${fmtTok(u.cache_read_tokens)}`);
-          }));
+        const key = b.key || {};
         const keyPanel = key.source === 'worker'
           ? '<p class="muted small">API key 已在 helper 的配置文件里设置。</p>'
           : `<form data-backend-key="${esc(b.name)}">`
@@ -142,9 +136,7 @@
             + ` aria-label="API key" placeholder="${key.source === 'page' ? '输入新的 key 替换' : `粘贴 ${esc(b.label)} 的 API key`}" />`
             + `<button type="submit" class="btn">保存</button></div>`
             + `<p class="tiny muted bp-gap">保存在服务器上，只交给运行 helper 的电脑使用，页面上不会再显示。</p></form>`;
-        return `<section class="glass panel"><h2 class="panel-title">用量</h2>`
-          + `<p class="muted small bp-lead">按 ${esc(b.label)} 的 API 价格估算（区分缓存命中与高峰时段）。</p>`
-          + `<div class="stat-grid bp-stats">${tiles.join('')}</div></section>`
+        return `<div class="bp-u" data-usage="${esc(b.name)}"></div>`
           + `<section class="glass panel"><div class="bp-key-head"><h2 class="panel-title">API key</h2>`
           + (key.source === 'page' ? `<span class="pill">已设置 …${esc(key.hint)}</span><button type="button" class="btn-ghost btn-small" data-clear-key>清除</button>` : '')
           + (key.source === 'worker' ? '<span class="pill">helper 配置</span>' : '')
@@ -152,6 +144,10 @@
           + (key.source ? '' : `<div class="callout warn bp-gap">还没有 API key：填写后才能和 ${esc(b.label)} 对话。</div>`)
           + keyPanel + `</section>`;
       }).join('');
+      // the provider's own usage page: balance, spend over time and by model, prices, what-if on another model
+      for (const box of document.querySelectorAll('[data-usage]')) {
+        mountBackendUsage(box, box.dataset.usage, { topUpUrl: box.dataset.usage === 'deepseek' ? 'https://platform.deepseek.com/top_up' : '' });
+      }
     }
 
     // a backend's API key: saved on the server for the helper; the page only ever sees its last 4 characters

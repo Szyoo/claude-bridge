@@ -145,6 +145,19 @@ class BackendLedger:
                  currency_of(info), utc_text(now.timestamp())),
             )
 
+    def rows(self, owner: str, backend: str, since: str) -> list[dict[str, Any]]:
+        """The owner's booked rows on `backend` since a UTC text time, oldest first (one per turn and model)."""
+        return self.store._q(
+            "SELECT created_at, model, job_id, peak, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost "
+            "FROM bridge_backend_usage WHERE owner=? AND backend=? AND created_at >= ? ORDER BY id",
+            (owner, backend, since),
+        )
+
+    def lifetime(self, owner: str, backend: str) -> float:
+        r = self.store._one("SELECT COALESCE(SUM(cost), 0) AS c FROM bridge_backend_usage WHERE owner=? AND backend=?",
+                            (owner, backend)) or {}
+        return round(float(r.get("c") or 0), 6)
+
     def totals(self, owner: str, backend: str, now: float | None = None) -> dict[str, dict[str, Any]]:
         now = time.time() if now is None else now
         out = {}

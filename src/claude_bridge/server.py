@@ -318,6 +318,12 @@ def create_bridge(
     def put_settings(body: SettingsIn, scope: str = Query("", max_length=200), p: Principal = Depends(who)):
         return {"chat": _svc(service.save_settings, body.model_dump(exclude_unset=True), p.owner, scope, p)}
 
+    # a backend's own usage page: rows of the last `days` days, optionally re-priced on another of its models
+    @browser.get("/backends/{name}/usage")
+    def get_backend_usage(name: str, days: int = Query(1, ge=1, le=90), as_model: str = Query("", max_length=100),
+                          p: Principal = Depends(who)):
+        return _svc(service.backend_usage_detail, name, p.owner, p, days, as_model)
+
     # a backend's API key, entered by one of its owners (admins); {"key": null} clears it
     @browser.put("/backends/{name}/key")
     def put_backend_key(name: str, body: BackendKeyIn, p: Principal = Depends(who)):

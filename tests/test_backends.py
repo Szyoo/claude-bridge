@@ -379,3 +379,21 @@ def test_old_ledger_column_is_migrated(tmp_path):
     ledger = BackendLedger(BridgeStore(db))
     row = ledger.store._one("SELECT cost, currency FROM bridge_backend_usage", ())
     assert row == {"cost": 0.5, "currency": "USD"}
+
+
+def test_backend_usage_page_rows_prices_and_simulation(env):
+    b, client, agent = env
+    me = client()
+    b.service.backend_ledger.add("1", "ds", INFO, {"input_tokens": 1_000_000, "output_tokens": 1_000_000,
+                                                   "cache_read_input_tokens": 1_000_000, "model": "deepseek-flash"}, job_id=9)
+    d = me.get("/api/backends/ds/usage", params={"days": 7}).json()
+    assert d["currency"] == "USD" and d["days"] == 7 and d["lifetime_cost"] == pytest.approx(d["rows"][0]["cost"])
+    assert [m["model"] for m in d["models"]] == ["deepseek-flash[1m]", "deepseek-v4-pro"]
+    assert d["models"][0]["price"] == PRICING["flash"] and d["balance"]["is_available"] is True
+    row = d["rows"][0]
+    assert row["model"] == "deepseek-flash" and row["input"] == 1_000_000 and "sim_cost" not in row
+    sim = me.get("/api/backends/ds/usage", params={"days": 7, "as_model": "deepseek-flash[1m]"}).json()["rows"][0]
+    assert sim["sim_cost"] == pytest.approx(row["cost"])  # same model: same cost
+    assert me.get("/api/backends/ds/usage", params={"as_model": "gpt-9"}).status_code == 400
+    assert client("other-admin").get("/api/backends/ds/usage").status_code == 400  # not an owner
+    assert client("user").get("/api/backends/ds/usage").status_code == 400
