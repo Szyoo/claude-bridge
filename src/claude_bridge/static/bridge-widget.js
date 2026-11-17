@@ -583,6 +583,13 @@ export function renderTurn(el, m, opts = {}) {
   if (m.role === 'system') { el.textContent = m.content || ''; return; }
   const opened = new Set(), closed = new Set();
   for (const d of el.querySelectorAll('details[data-k]')) (d.open ? opened : closed).add(d.dataset.k);
+  // a step's body scrolls on its own (max-height); innerHTML would reset it to the top on every streamed frame,
+  // so keep where the reader left it — or keep following the tail if they were at the end
+  const scrolls = new Map();
+  for (const b of el.querySelectorAll('details[data-k] > .bridge-step-body')) {
+    if (b.scrollHeight <= b.clientHeight) continue;
+    scrolls.set(b.parentElement.dataset.k, { top: b.scrollTop, tail: b.scrollHeight - b.scrollTop - b.clientHeight < 8 });
+  }
   // rows that just left 'running' replay their finish animation once (kept for a moment across the re-renders streaming causes)
   const settling = el._settling ||= new Map();
   for (const n of el.querySelectorAll('[data-k][data-st]')) {
@@ -620,6 +627,11 @@ export function renderTurn(el, m, opts = {}) {
   }
   el.innerHTML = head + `<div class="bridge-turn-body">${body}</div>`;
   for (const d of el.querySelectorAll('details[data-k]')) { const k = d.dataset.k; if (opened.has(k)) d.open = true; else if (closed.has(k)) d.open = false; }
+  for (const b of el.querySelectorAll('details[data-k] > .bridge-step-body')) {
+    const d = b.parentElement, saved = scrolls.get(d.dataset.k);
+    if (saved) b.scrollTop = saved.tail ? b.scrollHeight : saved.top;
+    else if (d.dataset.st === 'running') b.scrollTop = b.scrollHeight;  // a step still being written shows its newest lines
+  }
   for (const n of el.querySelectorAll('[data-k][data-st]')) {
     const k = n.dataset.k;
     if (n.dataset.st === 'running') { settling.set(k, null); continue; }
