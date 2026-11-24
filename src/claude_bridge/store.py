@@ -8,6 +8,7 @@ no PRAGMAs, no ``row_factory`` — every query sets ``sqlite3.Row`` on its own c
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -280,6 +281,26 @@ def _event(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+log = logging.getLogger(__name__)
+
+class _Done:
+    """A finished statement: its rows (sqlite3.Row), rowcount and lastrowid; the cursor is already closed."""
+
+    __slots__ = ("_rows", "rowcount", "lastrowid")
+
+    def __init__(self, rows: list[sqlite3.Row], rowcount: int, lastrowid: int | None) -> None:
+        self._rows, self.rowcount, self.lastrowid = rows, rowcount, lastrowid
+
+    def fetchone(self) -> sqlite3.Row | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[sqlite3.Row]:
+        return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class BridgeStore:
     def __init__(
         self,
@@ -301,6 +322,7 @@ class BridgeStore:
                 conn.execute("PRAGMA journal_mode=WAL")
         self.conn = conn
         self.lock = lock or threading.RLock()
+        self._tx_depth = 0  # transaction() nesting on this store (the lock keeps it to one thread at a time)
         self._job_cond = threading.Condition()
         with self.lock:
             self.conn.executescript(SCHEMA)
@@ -345,36 +367,72 @@ class BridgeStore:
 
     # ---------------- plumbing ----------------
 
+    def _heal(self) -> None:
+        """Outside any transaction() of ours the connection must be in autocommit. If it isn't, a transaction was
+        left open (a statement nobody stepped to the end, a failed COMMIT): every later write would pile up in it,
+        visible on this connection only and rolled back when the process exits. Commit it now instead."""
+        if self._owns_conn and not self._tx_depth and self.conn.in_transaction:
+            log.error("store: a transaction was left open outside transaction(); committing it")
+            self.conn.execute("COMMIT")
+
     def _q(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         with self.lock:
+            self._heal()
             cur = self.conn.cursor()
             cur.row_factory = sqlite3.Row
-            return [dict(r) for r in cur.execute(sql, params).fetchall()]
+            try:
+                return [dict(r) for r in cur.execute(sql, params).fetchall()]
+            finally:
+                cur.close()
 
     def _one(self, sql: str, params: tuple = ()) -> dict[str, Any] | None:
         rows = self._q(sql, params)
         return rows[0] if rows else None
 
-    def _x(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _x(self, sql: str, params: tuple = ()) -> _Done:
+        """Run one statement to the end and hand back its rows / rowcount / lastrowid. The cursor is closed here:
+        a live cursor (an INSERT … RETURNING read with fetchone(), kept alive by a traceback) would hold the
+        autocommit transaction open, and everything written after it would never reach the file."""
         with self.lock:
+            self._heal()
             cur = self.conn.cursor()
             cur.row_factory = sqlite3.Row
-            return cur.execute(sql, params)
+            try:
+                cur.execute(sql, params)
+                rows = cur.fetchall() if cur.description else []
+                return _Done(rows, cur.rowcount, cur.lastrowid)
+            finally:
+                cur.close()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
         """Group statements atomically; safe to nest inside a host transaction."""
         with self.lock:
-            if self.conn.in_transaction:
-                yield
+            if self._tx_depth or (self.conn.in_transaction and not self._owns_conn):  # nested, or the host's transaction
+                self._tx_depth += 1
+                try:
+                    yield
+                finally:
+                    self._tx_depth -= 1
                 return
+            self._heal()
             self.conn.execute("BEGIN")
+            self._tx_depth = 1
             try:
                 yield
             except BaseException:
-                self.conn.execute("ROLLBACK")
+                self._tx_depth = 0
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
                 raise
-            self.conn.execute("COMMIT")
+            self._tx_depth = 0
+            try:
+                self.conn.execute("COMMIT")
+            except BaseException:
+                # never leave it open: later writes would silently join it and be lost on exit
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
 
     # ---------------- meta ----------------
 
