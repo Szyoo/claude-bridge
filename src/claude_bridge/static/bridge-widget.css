@@ -125,7 +125,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 @keyframes bridge-dlg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .bridge-dlg { animation: none; } }
-@media (max-width: 720px) { .bridge-dlg-scrim { place-items: end center; padding: 0; } .bridge-dlg { width: 100%; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); } }
+@media (max-width: 720px) { .bridge-dlg-scrim { place-items: end center; padding: 0; } .bridge-dlg { width: 100%; border-radius: 14px 14px 0 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); } .bridge-dlg-scrim.kb .bridge-dlg { padding-bottom: 14px; } }
 
 /* ---------- transcript ---------- */
 .bridge-list { overflow-y: auto; overflow-x: hidden; padding: var(--chat-turn-gap) var(--chat-gutter); min-height: 0;

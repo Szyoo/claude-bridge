@@ -1006,8 +1006,19 @@ export function promptDialog({ title, label = '', value = '', placeholder = '', 
   const form = wrap.firstElementChild, input = form.querySelector('input');
   input.value = value;
   document.body.appendChild(wrap);
+  // the scrim covers the *visible* viewport: with an on-screen keyboard up (phones, home-screen apps) a fixed
+  // inset:0 box reaches under the keyboard and the bottom sheet would sit behind it
+  const vv = window.visualViewport;
+  const fit = () => {
+    if (!vv) return;
+    const kb = window.innerHeight - vv.height > 80;
+    wrap.style.top = `${vv.offsetTop}px`; wrap.style.bottom = 'auto'; wrap.style.height = `${vv.height}px`;
+    wrap.classList.toggle('kb', kb);
+  };
+  fit(); vv?.addEventListener('resize', fit); vv?.addEventListener('scroll', fit);
   return new Promise((resolve) => {
     const done = (v) => {
+      vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit);
       wrap.remove();
       if (back && typeof back.focus === 'function' && back.isConnected) back.focus();
       resolve(v);
