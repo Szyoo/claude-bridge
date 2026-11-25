@@ -78,6 +78,12 @@ worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏�
 - `projects_root`：可选，例如 `~/Documents/GitHub`。设了以后这个后端的 Code 项目就是该目录下的文件夹（worker 每 30 秒上报一次列表），新建和克隆都放进去，网页上不删除；不设则和 Claude 共用每个账户隔离的项目目录
 - `profile`：可选，这个后端的对话专用的运行参数，键与 `CLAUDE_BRIDGE_PROFILES` 相同（不含 `cwd`，目录仍由 scope 决定），叠加在 scope 的 profile 之上，例如更长的 `chat_timeout` / `idle_timeout` 或它自己的 `system_prompt`
 
+**本地模型（Ollama）**：Ollama 自带 Anthropic 兼容接口（`/v1/messages`，含 thinking 与工具调用），`ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:11434` 即可，`ANTHROPIC_AUTH_TOKEN` 随便填；示例见 `backends.example.json` 的 `local`。模型名不在 Claude Code 的已知列表里时它只打警告，照常工作；`ANTHROPIC_DEFAULT_*_MODEL` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 都要指向本地模型，否则子任务和后台请求会去找不存在的 Claude 模型。小上下文的本地模型要省着用：
+- `profile.tools` 只留需要的内置工具、`strict_mcp: true` 不带本机 MCP 配置——完整工具集光系统提示就要 8k～13k token，精简后约 5k；
+- 模型的 `num_ctx`（Modelfile 里 `PARAMETER num_ctx`）与 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 设成一样，超出前由 Claude Code 自己压缩，而不是被服务端从头截断（截掉的是系统提示）；
+- `permission_mode` 用默认值时，网页对话里写文件和跑命令都会被拒绝（没有人在终端里点允许）；
+- 内存吃紧的机器上，Ollama 服务开 `OLLAMA_FLASH_ATTENTION=1`、`OLLAMA_KV_CACHE_TYPE=q8_0`（KV 缓存减半）、`OLLAMA_NUM_PARALLEL=1`（并行数会成倍占 KV 缓存）、`OLLAMA_MAX_LOADED_MODELS=1`、`OLLAMA_KEEP_ALIVE=10m`（空闲卸载）；它内部 llama-server 的内存提示词缓存默认可涨到 8 GiB，可用 `LLAMA_ARG_CACHE_RAM=<MiB>` 限制。
+
 切到这个后端后，对话列表、模型菜单和设置都是它自己的（对话的 scope 是 `<原 scope>@<后端名>`，Code 模式下用同一个项目目录）。它的用量单独记账，按对方的 API 价格估算（区分缓存命中、未命中和高峰时段；节假日不识别，按高峰价估，宁高勿低），显示在 DeepSeek 一侧的账户行与它自己的账户页（`/account?svc=<后端名>`），不计入 Claude 额度，也不参与额度标定。
 
 ### Docker

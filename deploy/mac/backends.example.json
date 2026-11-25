@@ -66,5 +66,46 @@
     },
     "projects_root": "~/Documents/GitHub",
     "currency": "CNY"
+  },
+  "local": {
+    "label": "本地模型",
+    "owners": [
+      "1"
+    ],
+    "models": [
+      {
+        "id": "qwen3:8b",
+        "name": "Qwen3 8B（本地）",
+        "images": false
+      }
+    ],
+    "projects_root": "~/Documents/GitHub",
+    "env": {
+      "ANTHROPIC_BASE_URL": "http://127.0.0.1:11434",
+      "ANTHROPIC_AUTH_TOKEN": "ollama",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3:8b",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3:8b",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3:8b",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "qwen3:8b",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "32768",
+      "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"
+    },
+    "profile": {
+      "chat_timeout": 7200,
+      "idle_timeout": 900,
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Edit",
+        "Write",
+        "Bash",
+        "TodoWrite",
+        "Task"
+      ],
+      "strict_mcp": true,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "上下文只有约 32k token：先 Grep/Glob 定位，再按行读需要的片段；大范围探索交给 Task 子任务；阶段结论写进项目的 NOTES.md。"
+    }
   }
 }
