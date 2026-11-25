@@ -83,6 +83,8 @@ worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏�
 - `profile.tools` 只留需要的内置工具、`strict_mcp: true` 不带本机 MCP 配置——完整工具集光系统提示就要 8k～13k token，精简后约 5k；
 - 模型的 `num_ctx`（Modelfile 里 `PARAMETER num_ctx`）与 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 设成一样，超出前由 Claude Code 自己压缩，而不是被服务端从头截断（截掉的是系统提示）；
 - `permission_mode` 用默认值时，网页对话里写文件和跑命令都会被拒绝（没有人在终端里点允许）；
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`：不然每轮答完 Claude Code 还会再发一个数千 token 的后台请求，本地模型要多算二三十秒，还会挤掉主对话的缓存；`CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS` / `BASH_MAX_OUTPUT_LENGTH` 限制一次读文件和命令输出的大小；
+- `models[].context`：模型的上下文窗口（token），页面的上下文占用按它计算；
 - 内存吃紧的机器上，Ollama 服务开 `OLLAMA_FLASH_ATTENTION=1`、`OLLAMA_KV_CACHE_TYPE=q8_0`（KV 缓存减半）、`OLLAMA_NUM_PARALLEL=1`（并行数会成倍占 KV 缓存）、`OLLAMA_MAX_LOADED_MODELS=1`、`OLLAMA_KEEP_ALIVE=10m`（空闲卸载）；它内部 llama-server 的内存提示词缓存默认可涨到 8 GiB，可用 `LLAMA_ARG_CACHE_RAM=<MiB>` 限制。
 
 切到这个后端后，对话列表、模型菜单和设置都是它自己的（对话的 scope 是 `<原 scope>@<后端名>`，Code 模式下用同一个项目目录）。它的用量单独记账，按对方的 API 价格估算（区分缓存命中、未命中和高峰时段；节假日不识别，按高峰价估，宁高勿低），显示在 DeepSeek 一侧的账户行与它自己的账户页（`/account?svc=<后端名>`），不计入 Claude 额度，也不参与额度标定。

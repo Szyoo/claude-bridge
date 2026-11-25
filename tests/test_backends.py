@@ -440,3 +440,15 @@ def test_worker_local_backend_stats(tmp_path, monkeypatch):
     assert seen == ["http://127.0.0.1:11434/api/ps"]
     assert st["loaded"] == [{"model": "m-local", "size": 123, "context": 32768, "until": "x"}]
     assert "mem_total" in st or st.keys() == {"at", "loaded"}
+
+
+def test_backend_model_context_window_reaches_the_page(env):
+    b, client, agent = env
+    local = {"name": "lm", "label": "本地", "owners": ["1"], "has_key": True, "local": True,
+             "models": [{"id": "m-local", "name": "本地模型", "images": False, "context": 32768}]}
+    assert agent.post("/api/agent/backends", json={"backends": [INFO, local], "balances": {}}).status_code == 200
+    assert b.service.model_choices("@lm") == [{"id": "m-local", "label": "本地模型", "context": 32768}]
+    assert "context" not in b.service.model_choices("@ds")[0]
+    be = Backend.from_dict("lm", {"env": {"ANTHROPIC_BASE_URL": "http://x"}, "owners": ["1"],
+                                  "models": [{"id": "m", "context": 32768}, {"id": "n"}]})
+    assert be.models[0]["context"] == 32768 and "context" not in be.models[1]

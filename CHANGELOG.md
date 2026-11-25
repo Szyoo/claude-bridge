@@ -2,6 +2,11 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.27.2 — 2026-11-25
+
+- 后端模型可以写 `context`（上下文窗口，token）：页面的上下文占用按它计算，本地模型不再按 200k 显示
+- 示例与 README：本地模型建议开 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`（省掉每轮答完后的后台请求）、限制读文件与命令输出的大小
+
 ## v0.27.1 — 2026-11-25
 
 - 本机状态在 launchd 下也能读到内存余量与 swap（`sysctl` / `memory_pressure` 改用绝对路径，launchd 的 PATH 里没有 /usr/sbin）

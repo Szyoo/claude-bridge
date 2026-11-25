@@ -158,7 +158,8 @@ class Backend:
         if unknown:
             raise ValueError(f"backend {name!r}: unknown keys {sorted(unknown)}")
         env = {str(k): str(v) for k, v in (d.get("env") or {}).items()}
-        models = [{"id": str(m["id"]), "name": str(m.get("name") or m["id"]), "images": bool(m.get("images", True))}
+        models = [{"id": str(m["id"]), "name": str(m.get("name") or m["id"]), "images": bool(m.get("images", True)),
+                   **({"context": int(m["context"])} if m.get("context") else {})}
                   for m in d.get("models") or [] if m.get("id")]
         owners = [str(o) for o in d.get("owners") or [] if str(o)]
         if not env.get("ANTHROPIC_BASE_URL") or not models or not owners:

@@ -703,7 +703,8 @@ class BridgeService:
         else the host's static list. A backend scope gets that backend's models instead."""
         backend = split_backend(scope)[1]
         if backend:
-            return [{"id": m["id"], "label": m.get("name") or m["id"]} for m in (self.backend_info(backend) or {}).get("models") or []]
+            return [{"id": m["id"], "label": m.get("name") or m["id"], **({"context": m["context"]} if m.get("context") else {})}
+                    for m in (self.backend_info(backend) or {}).get("models") or []]
         rep = self.agent_models()
         if not rep:
             return [dict(m) for m in self.config.model_choices]

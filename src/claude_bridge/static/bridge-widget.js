@@ -161,7 +161,8 @@ export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS, con
   const used = context?.used ?? usage?.context_tokens ?? null;
   let pct = null;
   if (used) {
-    const win = context?.window || contextWindow(model, contextWindows, used);
+    // a window the host states for this exact model (a local model's num_ctx) beats what the CLI guesses for it
+    const win = (model && contextWindows[model]) || context?.window || contextWindow(model, contextWindows, used);
     pct = Math.min(100, Math.round(used / win * 100));
     const thr = context?.autocompact_pct;
     parts.push({
@@ -1725,7 +1726,11 @@ export function mountBridgeWidget(el, client, opts = {}) {
     if (!existed) scrollBottom();
   }
 
-  function summary() { return sessionSummary([...state.msgs.values()], { contextWindows: o.contextWindows, context: state.threadRow?.context }); }
+  function summary() {
+    const wins = { ...o.contextWindows };
+    for (const m of state.settings?.models || []) if (m.id && m.context) wins[m.id] = m.context;  // e.g. a local model's 32k
+    return sessionSummary([...state.msgs.values()], { contextWindows: wins, context: state.threadRow?.context });
+  }
   function renderSession() {
     const s = summary(), job = jobActive(state.job) ? state.job : null, compacting = job?.kind === 'compact';
     pill.hidden = s.pct == null && !compacting;
