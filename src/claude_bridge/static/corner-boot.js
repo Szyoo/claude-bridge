@@ -6,7 +6,6 @@
 // cb_theme / cb_palette / cb_scheme cookies this writes, so the first paint is already right.
 // The embedded widget (create_bridge + bridge-widget.*) never loads this.
 import { mountChrome } from '@szyyw/design/chrome.js';
-import { syncCornerRail } from '@szyyw/design/corner.js';
 
 const root = document.documentElement;
 const sso = root.dataset.sso === '1';
@@ -20,11 +19,3 @@ mountChrome({
   },
 });
 
-// Full-width bars make room for the corner tools by their measured width (--corner-rail-w). A home-screen app can be
-// measured while the page has no width yet (cold start); the rail's own size never changes after that, so nothing
-// re-measures and the bar's right end (status dot, ⋯) stays under the buttons. Re-measure when the page's size
-// settles or the app comes back to the foreground.
-if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => syncCornerRail()).observe(root);
-addEventListener('pageshow', () => syncCornerRail());
-document.addEventListener('visibilitychange', () => { if (!document.hidden) syncCornerRail(); });
-requestAnimationFrame(() => syncCornerRail());
