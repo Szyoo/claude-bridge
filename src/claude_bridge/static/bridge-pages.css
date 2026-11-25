@@ -202,6 +202,7 @@ body.bp-chat .bridge-turn, body.bp-chat .bridge-empty, body.bp-chat .bridge-skel
 body.bp-chat .bridge-turn, body.bp-chat .bridge-skel-turn { padding: var(--sp-3) var(--sp-4); }
 body.bp-chat .bridge-empty { width: fit-content; margin: 40px auto 0; padding: var(--sp-2) var(--sp-4); }
 body.bp-chat .bridge-form { background: color-mix(in srgb, var(--bg) 66%, var(--glass-bg)); }
+body.bp-chat .bridge-tobottom { background: var(--sheet-bg); border-color: var(--glass-border); }  /* opaque enough over the text it floats on */
 body.bp-chat .bp-home { background: transparent; }
 body.bp-chat #app { position: relative; z-index: 1; }
 /* the phone drawer overlaps the transcript: keep it opaque enough to read */

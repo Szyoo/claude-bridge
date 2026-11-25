@@ -94,7 +94,15 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-side-foot { margin-top: auto; border-top: 1px solid var(--bridge-border); padding-top: 8px; }
 
 /* ---------- main column ---------- */
-.bridge-main { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
+.bridge-main { position: relative; display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; }
+/* 回到最新: a round ↓ centred just above the composer while the reader is scrolled up (bottom set by the widget) */
+.bridge-tobottom { position: absolute; left: 50%; bottom: 96px; z-index: 3; width: 36px; height: 36px; padding: 0; display: grid; place-items: center;
+  border: 1px solid var(--bridge-border); border-radius: 50%; background: var(--bridge-panel); color: var(--bridge-fg); box-shadow: var(--bridge-shadow-pop);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); cursor: pointer; transform: translateX(-50%); animation: bridge-tobottom-in .16s ease-out; }
+.bridge-tobottom:hover { border-color: var(--bridge-accent); }
+.bridge-tobottom[hidden] { display: none; }
+@keyframes bridge-tobottom-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+@media (prefers-reduced-motion: reduce) { .bridge-tobottom { animation: none; } }
 .bridge-top { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--bridge-border); background: var(--bridge-panel); min-height: calc(var(--chat-control) + 12px); }
 .bridge-title { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bridge-agent { display: inline-flex; align-items: center; gap: 6px; color: var(--bridge-muted); font-size: .857em; }
