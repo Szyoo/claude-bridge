@@ -1340,6 +1340,8 @@ class ChatRunner:
             env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = str(settings['max_output_tokens'])
         if settings.get('effort'):
             env['CLAUDE_CODE_EFFORT_LEVEL'] = settings['effort']
+        if settings.get('compact_window'):  # the user's own auto-compact window beats the backend's env
+            env['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = str(int(settings['compact_window']))
         if settings.get('thinking') is not None:
             env['CLAUDE_CODE_DISABLE_THINKING'] = '0' if settings['thinking'] else '1'
         self.state = StreamState(

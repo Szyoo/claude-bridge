@@ -90,6 +90,8 @@ if (typeof document !== 'undefined' && !globalThis.__bridgeCopy) {
 }
 
 const CONTEXT_WINDOWS = { default: 200000 };
+// choices for the auto-compact window setting (0 = the backend's / CLI's own)
+const COMPACT_WINDOWS = [0, 100000, 150000, 200000, 300000, 400000, 600000, 800000];
 function contextWindow(model, table, used = 0) {
   if (model && /\[1m\]/i.test(model)) return 1_000_000;
   if (model) for (const [k, v] of Object.entries(table)) if (k !== 'default' && model.includes(k)) return v;
@@ -1860,6 +1862,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     const opt = (v, t, cur) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(t)}</option>`;
     return `<div class="bridge-prefs bridge-prefs-chat"><div class="bridge-pref-row"><span class="bridge-pref-label">模型</span><select class="bridge-pick" data-set="model">${modelOptionsHtml(s.models, s.chat.model)}</select></div>`
       + `<div class="bridge-pref-row"><span class="bridge-pref-label">思考深度</span><select class="bridge-pick" data-set="effort">${s.efforts.map(e => opt(e, e || '默认', s.chat.effort)).join('')}</select></div>`
+      + `<div class="bridge-pref-row"><span class="bridge-pref-label">自动压缩阈值<span class="bridge-pref-hint">上下文涨到约九成时自动压缩；越小越省 token，压缩越频繁</span></span><select class="bridge-pick" data-set="compact_window" data-num>${COMPACT_WINDOWS.map(n => opt(String(n), n ? fmtTokens(n) : '默认（服务配置）', String(Number(s.chat.compact_window) || 0))).join('')}</select></div>`
       + `<div class="bridge-pref-row"><span class="bridge-pref-label">单次最多工具轮数</span><input type="number" class="bridge-num" data-set="max_turns" min="1" max="300" value="${Number(s.chat.max_turns) || 40}" /></div>`
       + `<label class="bridge-pref-row"><span class="bridge-pref-label">${esc(S.ctx)}<span class="bridge-pref-hint">新对话第一条自动附上宿主提供的背景</span></span><input type="checkbox" class="bridge-switch" data-set="auto_context"${s.chat.auto_context ? ' checked' : ''} /></label></div>`;
   }
@@ -2359,7 +2362,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   el.addEventListener('click', onClick); menu?.addEventListener('click', onClick);
   const onSet = (e) => {
     const key = e.target.dataset.set; if (!key) return;
-    const v = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'number' ? Number(e.target.value) : e.target.value;
+    const v = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'number' || 'num' in e.target.dataset ? Number(e.target.value) : e.target.value;
     saveSetting({ [key]: v });
   };
   el.addEventListener('change', onSet); pops.prefs.addEventListener('change', onSet);

@@ -30,7 +30,15 @@ from claude_bridge.store import EPHEMERAL_KEY_PREFIX, INFLIGHT, BridgeStore, aut
 log = logging.getLogger(__name__)
 
 BACKEND_DENIED = "这个后端只对指定的管理员开放"
-DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
+DEFAULT_SETTINGS: dict[str, Any] = {"model": "", "effort": "", "max_turns": 40, "auto_context": True, "compact_window": 0}
+COMPACT_WINDOW_MIN = 50_000  # below this the CLI would compact almost every step
+
+
+def check_compact_window(v: Any) -> int:
+    n = int(v)
+    if n and not COMPACT_WINDOW_MIN <= n <= 1_000_000:
+        raise BadRequest(f"自动压缩阈值需为 0（默认）或 {COMPACT_WINDOW_MIN}..1000000 tokens")
+    return n
 DEFAULT_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"]
 SESSION_JOB_KINDS = ("context", "compact")  # jobs that act on a thread's Claude session; the page shows their progress
 # "usage": a finished turn (the CLI's result); "partial_usage": a cancelled / timed-out / failed one, read from its transcript
@@ -332,6 +340,8 @@ class BridgeService:
                 patch['effort'] = patch['effort'].strip().lower()
                 if patch['effort'] and patch['effort'] not in self.config.effort_choices:
                     raise BadRequest('unsupported effort')
+            if 'compact_window' in patch:
+                patch['compact_window'] = check_compact_window(patch['compact_window'])
             if 'model' in patch:
                 patch['model'] = self._backend_model(backend, patch['model']) if backend else \
                     self.config.model_aliases.get(patch['model'].strip(),patch['model'].strip())
@@ -671,6 +681,8 @@ class BridgeService:
             cur["max_turns"] = n
         if "auto_context" in patch and patch["auto_context"] is not None:
             cur["auto_context"] = bool(patch["auto_context"])
+        if "compact_window" in patch and patch["compact_window"] is not None:
+            cur["compact_window"] = check_compact_window(patch["compact_window"])
         self.store.set_meta(self.meta_key(owner, self._settings_key(backend)), json.dumps(cur, ensure_ascii=False))
         return self.settings(owner, scope)
 

@@ -15,6 +15,7 @@ class TurnOptions(BaseModel):
     effort: str | None = Field(None, max_length=20)
     max_turns: int | None = Field(None, ge=1, le=300)
     auto_context: bool | None = None
+    compact_window: int | None = Field(None, ge=0, le=1_000_000)
     max_output_tokens: int | None = Field(None, ge=1, le=128000)
     thinking: bool | None = None
     instructions: str | None = Field(None, max_length=16000)
@@ -91,6 +92,8 @@ class SettingsIn(BaseModel):
     effort: str | None = None
     max_turns: int | None = Field(None, ge=1, le=300)
     auto_context: bool | None = None
+    # the CLI's auto-compact window in tokens (CLAUDE_CODE_AUTO_COMPACT_WINDOW); 0 = the backend's / CLI's own
+    compact_window: int | None = Field(None, ge=0, le=1_000_000)
 
 
 # ---------------- agent ----------------

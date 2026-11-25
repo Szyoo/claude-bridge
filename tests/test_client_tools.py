@@ -277,3 +277,15 @@ def test_mcp_relay_polls_existing_call_and_does_not_execute_inputs():
     assert (
         len(relay.requests) == 2 and relay.requests[0][2]["input"]["value"] == "do not run this as a command"
     )
+
+
+def test_compact_window_setting_is_saved_and_reaches_the_job(runtime):
+    b, web = runtime
+    r = web.put("/api/settings", json={"compact_window": 300000})
+    assert r.status_code == 200, r.text
+    assert r.json()["chat"]["compact_window"] == 300000
+    r = web.post("/api/send", json={"text": "hello", "new_thread": True})
+    assert r.status_code == 201, r.text
+    assert b.store.get_job(r.json()["job_id"])["payload"]["settings"]["compact_window"] == 300000
+    assert web.put("/api/settings", json={"compact_window": 1000}).status_code == 400
+    assert web.put("/api/settings", json={"compact_window": 0}).json()["chat"]["compact_window"] == 0

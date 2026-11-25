@@ -149,7 +149,7 @@ def test_threads_scopes_select_patch_delete(web, bridge):
 
 def test_settings_validation_and_aliases(web, bridge):
     s = web.get("/api/settings").json()
-    assert s["chat"] == {"model": "", "effort": "", "max_turns": 40, "auto_context": True}
+    assert s["chat"] == {"model": "", "effort": "", "max_turns": 40, "auto_context": True, "compact_window": 0}
     assert s["models"][1]["id"] == "sonnet" and "" in s["efforts"]
     assert web.put("/api/settings", json={"effort": "turbo"}).status_code == 400
     assert web.put("/api/settings", json={"max_turns": 0}).status_code == 422
