@@ -2,6 +2,8 @@
 // 7 d / 30 d (stacked by model, in the viewer's time zone), the spend by model, the provider's price list, and a
 // what-if: the same turns priced on another of its models. Rows come from GET /api/backends/<name>/usage; the server
 // prices the what-if (`as_model`) with the same rule it bills with, each row keeping its own peak / off-peak.
+// A local backend (a model on the worker's machine) has nothing to price: its page shows the machine instead —
+// memory, swap, the loaded model — and the tokens and output speed over time.
 import { api, esc, toast, fmtMoney, fmtTok, fmtBalance } from '/static/bridge/bridge-pages.js';
 
 const RANGES = [[1, '24 小时'], [7, '7 天'], [30, '30 天']];
@@ -42,6 +44,27 @@ function buckets(days) {
   return out;
 }
 
+const GB = (b) => b ? `${(b / 1073741824).toFixed(1)} GB` : '—';
+const speed = (rows) => { const t = rows.filter(r => r.api_ms > 0); const ms = sum(t, r => r.api_ms); return ms ? sum(t, r => r.output) / (ms / 1000) : null; };
+const fmtSpeed = (v) => v == null ? '—' : `${v.toFixed(1)}`;
+
+// the worker machine as of its last check-in (every ~30 s): memory, swap and what the model server holds
+export function machineHtml(st) {
+  if (!st) return '<p class="muted small">worker 还没有上报这台机器的状态。</p>';
+  const age = Math.max(0, Math.round(Date.now() / 1000 - (st.at || 0)));
+  const swapPct = st.swap_total ? st.swap_used / st.swap_total : 0;
+  const loaded = st.loaded == null ? '<span class="err-text">模型服务没有响应</span>'
+    : st.loaded.length ? st.loaded.map(m => `${esc(m.model)} · ${GB(m.size)}${m.context ? ` · 上下文 ${fmtTok(m.context)}` : ''}`).join('<br>')
+    : '未加载<span class="stat-sub">（空闲时自动卸载，下次发送时载入）</span>';
+  return `<div class="stat-grid bp-u-top">
+      <div class="stat glass"><div class="stat-label">已加载模型</div><div class="stat-value bp-u-small">${loaded}</div></div>
+      <div class="stat glass"><div class="stat-label">内存余量</div><div class="stat-value${st.mem_free_pct != null && st.mem_free_pct < 10 ? ' err-text' : ''}">${st.mem_free_pct ?? '—'}<span class="stat-unit">%</span></div>
+        <div class="stat-foot"><span class="stat-sub">共 ${GB(st.mem_total)}，含可回收的缓存</span></div></div>
+      <div class="stat glass"><div class="stat-label">swap 已用</div><div class="stat-value${swapPct > 0.8 ? ' err-text' : ''}">${GB(st.swap_used)}</div>
+        <div class="stat-foot"><span class="stat-sub">共 ${GB(st.swap_total)}；常年用满说明内存不够，写硬盘多</span></div></div>
+    </div><p class="tiny muted">${age < 90 ? `${age} 秒前` : `${Math.round(age / 60)} 分钟前`}上报</p>`;
+}
+
 export function mountBackendUsage(el, name, { topUpUrl = '' } = {}) {
   let days = 1, data = null, simFrom = '', simTo = '', sim = null, seq = 0;
   const cur = () => data?.currency || 'USD';
@@ -56,7 +79,7 @@ export function mountBackendUsage(el, name, { topUpUrl = '' } = {}) {
       data = d; sim = null;
       if (!simTo || !data.models.some(m => m.model === simTo)) simTo = data.models.find(m => !bare(simFrom) || bare(m.model) !== bare(simFrom))?.model || '';
       render();
-      if (simTo) runSim();
+      if (simTo && !data.local) runSim();
     } catch (e) { toast(e.message, true); }
   }
   async function runSim() {
@@ -69,6 +92,7 @@ export function mountBackendUsage(el, name, { topUpUrl = '' } = {}) {
   }
 
   function render() {
+    if (data.local) { renderLocal(); return; }
     const rows = data.rows, total = sum(rows, r => r.cost), bal = fmtBalance(data.balance);
     const models = [...new Set(rows.map(r => bare(r.model)))];
     const color = (m) => `bp-u-c${Math.max(0, models.indexOf(bare(m))) % 4}`;
@@ -145,6 +169,49 @@ export function mountBackendUsage(el, name, { topUpUrl = '' } = {}) {
     renderSim();
   }
 
+  // a local model: the machine, then tokens (stacked by model) and output speed over the range
+  function renderLocal() {
+    const rows = data.rows, models = [...new Set(rows.map(r => bare(r.model)))];
+    const color = (m) => `bp-u-c${Math.max(0, models.indexOf(bare(m))) % 4}`;
+    const bks = buckets(days).map(b => {
+      const inb = rows.filter(r => { const t = utc(r.at).getTime(); return t >= b.start && t < b.end; });
+      return { ...b, total: sum(inb, tokens), out: sum(inb, r => r.output), tps: speed(inb), parts: models.map(m => [m, sum(inb.filter(r => bare(r.model) === m), tokens)]) };
+    });
+    const max = Math.max(...bks.map(b => b.total), 0), step = Math.max(1, Math.ceil(bks.length / 6));
+    const bars = bks.map((b, i) => `<div class="bp-u-col" title="${esc(`${b.tip}  ${count(b.total)} tokens（输出 ${count(b.out)}）${b.tps != null ? `\n输出 ${fmtSpeed(b.tps)} tok/s` : ''}${b.parts.filter(p => p[1]).map(p => `\n${nameOf(p[0])} ${count(p[1])}`).join('')}`)}">`
+      + `<div class="bp-u-stack">${b.parts.filter(p => p[1] > 0).map(([m, v]) => `<i class="${color(m)}" style="height:${max ? (v / max * 100).toFixed(2) : 0}%"></i>`).join('')}</div>`
+      + `<span class="bp-u-x">${i % step === 0 || i === bks.length - 1 ? esc(b.label) : ''}</span></div>`).join('');
+    const inp = sum(rows, r => r.input + r.cache_write), hit = sum(rows, r => r.cache_read);
+    const byModel = models.map(m => {
+      const rs = rows.filter(r => bare(r.model) === m);
+      const i = sum(rs, r => r.input + r.cache_write), h = sum(rs, r => r.cache_read);
+      return `<tr><td><span class="bp-u-dot ${color(m)}"></span>${esc(nameOf(m))}</td><td class="n">${count(turns(rs))}</td>`
+        + `<td class="n">${fmtTok(i)}</td><td class="n">${fmtTok(h)}</td><td class="n">${fmtTok(sum(rs, r => r.output))}</td>`
+        + `<td class="n">${i + h ? `${Math.round(h / (i + h) * 100)}%` : '—'}</td><td class="n"><b>${fmtSpeed(speed(rs))}</b></td></tr>`;
+    }).join('');
+    el.innerHTML = machineHtml(data.stats) + `
+      <div class="bp-u-bar">
+        <div class="seg" role="group" aria-label="时间范围">${RANGES.map(([d, t]) => `<button type="button" data-days="${d}"${d === days ? ' class="active" aria-pressed="true"' : ' aria-pressed="false"'}>${t}</button>`).join('')}</div>
+        <span class="tiny muted">本地模型不计费；时间按你设备的时区显示</span>
+      </div>
+      <div class="stat-grid bp-u-sum">
+        <div class="stat glass"><div class="stat-label">回合数</div><div class="stat-value">${count(turns(rows))}<span class="stat-unit">次</span></div></div>
+        <div class="stat glass"><div class="stat-label">Tokens</div><div class="stat-value">${fmtTok(sum(rows, tokens))}</div>
+          <div class="stat-foot"><span class="stat-sub">输出 ${fmtTok(sum(rows, r => r.output))} · 缓存命中 ${inp + hit ? Math.round(hit / (inp + hit) * 100) : 0}%</span></div></div>
+        <div class="stat glass"><div class="stat-label">输出速度</div><div class="stat-value">${fmtSpeed(speed(rows))}<span class="stat-unit">tok/s</span></div>
+          <div class="stat-foot"><span class="stat-sub">输出 token ÷ 模型用时（含读入提示词）</span></div></div>
+      </div>
+      <section class="glass panel">
+        <div class="bp-u-head"><h2 class="panel-title">Tokens ${esc(fmtTok(sum(rows, tokens)))}</h2>
+          <div class="bp-u-legend">${models.map(m => `<span><span class="bp-u-dot ${color(m)}"></span>${esc(nameOf(m))}</span>`).join('')}</div></div>
+        ${rows.length ? `<div class="bp-u-chart" style="--cols:${bks.length}"><div class="bp-u-ymax tiny muted">${esc(fmtTok(max))}</div>${bars}</div>`
+          : '<p class="muted small">这段时间没有用量。</p>'}
+      </section>
+      ${rows.length ? `<section class="glass panel"><h2 class="panel-title">按模型</h2>
+        <div class="table-wrap"><table class="tbl bp-u-table"><thead><tr><th>模型</th><th class="n">回合</th><th class="n">输入（未命中）</th><th class="n">缓存命中</th><th class="n">输出</th><th class="n">命中率</th><th class="n">tok/s</th></tr></thead>
+        <tbody>${byModel}</tbody></table></div></section>` : ''}`;
+  }
+
   function renderSim() {
     const out = el.querySelector('.bp-u-simout');
     if (!out || !data) return;
@@ -174,5 +241,7 @@ export function mountBackendUsage(el, name, { topUpUrl = '' } = {}) {
     simTo = s.value; sim = null; renderSim(); runSim();
   });
   load();
-  return { reload: load };
+  // a local backend's machine state changes by the minute: refresh while the page is in view
+  const timer = setInterval(() => { if (data?.local && !document.hidden) load(); }, 30000);
+  return { reload: load, stop: () => clearInterval(timer) };
 }

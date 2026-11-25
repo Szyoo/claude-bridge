@@ -397,3 +397,46 @@ def test_backend_usage_page_rows_prices_and_simulation(env):
     assert me.get("/api/backends/ds/usage", params={"as_model": "gpt-9"}).status_code == 400
     assert client("other-admin").get("/api/backends/ds/usage").status_code == 400  # not an owner
     assert client("user").get("/api/backends/ds/usage").status_code == 400
+
+
+def test_local_backend_reports_machine_stats_and_speed(env):
+    b, client, agent = env
+    local = {"name": "lm", "label": "本地", "owners": ["1"], "models": [{"id": "m-local", "name": "本地模型"}],
+             "has_key": True, "local": True}
+    assert agent.post("/api/agent/backends", json={"backends": [INFO, local], "balances": {}}).status_code == 200
+    stats = {"at": 1.0, "loaded": [{"model": "m-local", "size": 7_500_000_000, "context": 32768, "until": ""}],
+             "mem_total": 17179869184, "mem_free_pct": 19, "swap_used": 9 << 30, "swap_total": 10 << 30}
+    assert agent.post("/api/agent/config", json={"worker": "w", "backend_stats": {"lm": stats}}).status_code == 200
+    me = client()
+    me.post("/api/send", json={"text": "hi", "scope": "@lm", "new_thread": True})
+    job = agent.post("/api/agent/jobs/next", json={"worker": "w", "kinds": ["chat"], "wait": 0}).json()["job"]
+    usage = {"model": "m-local", "input_tokens": 5000, "output_tokens": 360, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 0, "duration_api_ms": 20_000}
+    agent.post(f"/api/agent/jobs/{job['id']}/events", json={"events": [{"type": "usage", "data": usage}]})
+    lm = next(x for x in b.service.backend_usage("1") if x["name"] == "lm")
+    assert lm["local"] is True and lm["stats"]["loaded"][0]["context"] == 32768
+    day = lm["usage"]["day"]
+    assert day["cost"] == 0 and day["output_tokens"] == 360 and day["tok_s"] == 18.0
+    detail = b.service.backend_usage_detail("lm", "1", WHO["me"])
+    assert detail["local"] is True and detail["stats"]["mem_free_pct"] == 19 and detail["rows"][0]["api_ms"] == 20_000
+    ds = next(x for x in b.service.backend_usage("1") if x["name"] == "ds")
+    assert ds["local"] is False and ds["usage"]["day"]["tok_s"] is None
+
+
+def test_worker_local_backend_stats(tmp_path, monkeypatch):
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"models": [{"name": "m-local", "size": 123, "context_length": 32768, "expires_at": "x"}]}
+
+    seen = []
+    monkeypatch.setattr("claude_bridge.worker.requests.get", lambda url, timeout: seen.append(url) or R())
+    be = Backend.from_dict("lm", {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:11434/"}, "models": [{"id": "m"}],
+                                  "owners": ["1"], "local": True})
+    assert be.public("lm")["local"] is True
+    st = be.local_stats()
+    assert seen == ["http://127.0.0.1:11434/api/ps"]
+    assert st["loaded"] == [{"model": "m-local", "size": 123, "context": 32768, "until": "x"}]
+    assert "mem_total" in st or st.keys() == {"at", "loaded"}

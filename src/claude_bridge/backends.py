@@ -111,6 +111,8 @@ class BackendLedger:
                 store.conn.execute("ALTER TABLE bridge_backend_usage RENAME COLUMN cost_usd TO cost")
             if "currency" not in cols:
                 store.conn.execute("ALTER TABLE bridge_backend_usage ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'")
+            if "api_ms" not in cols:  # the turn's model time (duration_api_ms): output speed of local models
+                store.conn.execute("ALTER TABLE bridge_backend_usage ADD COLUMN api_ms INTEGER NOT NULL DEFAULT 0")
             store.conn.commit()
 
     def reprice(self, backend: str, info: dict[str, Any]) -> int:
@@ -129,6 +131,7 @@ class BackendLedger:
             message_id: int | None = None, job_id: int | None = None, kind: str = "chat") -> None:
         now = datetime.now(UTC)
         parts = [m for m in data.get("by_model") or [] if isinstance(m, dict)] or [data]
+        api_ms = _int(data.get("duration_api_ms"))  # one per turn: booked on its first row
         for part in parts:
             tokens = {k: _int(part.get(k)) for k in
                       ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
@@ -138,17 +141,18 @@ class BackendLedger:
             cost, peak = turn_cost(info, model, tokens, now)
             self.store._x(
                 "INSERT INTO bridge_backend_usage(owner, backend, model, thread, message_id, job_id, kind, input_tokens, "
-                "output_tokens, cache_read_tokens, cache_write_tokens, peak, cost, currency, created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "output_tokens, cache_read_tokens, cache_write_tokens, peak, cost, currency, api_ms, created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (owner, backend, model, thread, message_id, job_id, kind, tokens["input_tokens"], tokens["output_tokens"],
                  tokens["cache_read_input_tokens"], tokens["cache_creation_input_tokens"], 1 if peak else 0, cost,
-                 currency_of(info), utc_text(now.timestamp())),
+                 currency_of(info), api_ms, utc_text(now.timestamp())),
             )
+            api_ms = 0
 
     def rows(self, owner: str, backend: str, since: str) -> list[dict[str, Any]]:
         """The owner's booked rows on `backend` since a UTC text time, oldest first (one per turn and model)."""
         return self.store._q(
-            "SELECT created_at, model, job_id, peak, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost "
+            "SELECT created_at, model, job_id, peak, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, api_ms "
             "FROM bridge_backend_usage WHERE owner=? AND backend=? AND created_at >= ? ORDER BY id",
             (owner, backend, since),
         )
@@ -165,11 +169,14 @@ class BackendLedger:
             r = self.store._one(
                 "SELECT COUNT(DISTINCT COALESCE(job_id, id)) AS turns, COALESCE(SUM(cost), 0) AS cost, "
                 "COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o, "
-                "COALESCE(SUM(cache_read_tokens), 0) AS r FROM bridge_backend_usage "
+                "COALESCE(SUM(cache_read_tokens), 0) AS r, COALESCE(SUM(api_ms), 0) AS ms, "
+                "COALESCE(SUM(CASE WHEN api_ms > 0 THEN output_tokens END), 0) AS timed FROM bridge_backend_usage "
                 "WHERE owner=? AND backend=? AND created_at >= ?",
                 (owner, backend, utc_text(now - seconds)),
             ) or {}
             out[key] = {"label": label, "turns": int(r.get("turns") or 0), "cost": round(float(r.get("cost") or 0), 6),
                         "input_tokens": int(r.get("i") or 0), "output_tokens": int(r.get("o") or 0),
-                        "cache_read_tokens": int(r.get("r") or 0)}
+                        "cache_read_tokens": int(r.get("r") or 0),
+                        # output tokens per second of model time, over the turns that report it (None: none did)
+                        "tok_s": round(int(r.get("timed") or 0) / (int(r["ms"]) / 1000), 1) if r.get("ms") else None}
         return out

@@ -767,7 +767,7 @@ class BridgeService:
         for r in self.backend_ledger.rows(owner, name, utc_text(time.time() - days * 86400)):
             row = {"at": r["created_at"], "model": r["model"] or "", "job": r["job_id"], "peak": bool(r["peak"]),
                    "input": r["input_tokens"], "cache_read": r["cache_read_tokens"], "cache_write": r["cache_write_tokens"],
-                   "output": r["output_tokens"], "cost": round(float(r["cost"] or 0), 6)}
+                   "output": r["output_tokens"], "cost": round(float(r["cost"] or 0), 6), "api_ms": r.get("api_ms") or 0}
             if as_model:
                 usage = {"input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"],
                          "cache_read_input_tokens": r["cache_read_tokens"], "cache_creation_input_tokens": r["cache_write_tokens"]}
@@ -776,6 +776,7 @@ class BridgeService:
         prices = [{"model": m.get("id"), "name": m.get("name") or m.get("id"), "images": m.get("images", True),
                    "price": price_for(info.get("pricing") or {}, m.get("id"))} for m in info.get("models") or []]
         return {"name": name, "label": info.get("label") or name, "currency": currency_of(info), "peak": info.get("peak") or {},
+                "local": bool(info.get("local")), "stats": self.backend_stats(name) if info.get("local") else None,
                 "models": prices, "balance": (self._backends_meta().get("balances") or {}).get(name),
                 "lifetime_cost": self.backend_ledger.lifetime(owner, name), "days": days, "as_model": as_model or None,
                 "rows": rows}
@@ -824,8 +825,18 @@ class BridgeService:
         """Per allowed backend: its own API-priced use (24 h / 7 d / 30 d) and the provider's account balance."""
         meta = self._backends_meta()
         return [{**b, "currency": currency_of(self.backend_info(b["name"])), "usage": self.backend_ledger.totals(owner, b["name"]), "key": self.backend_key_status(b["name"]),
-                 "balance": (meta.get("balances") or {}).get(b["name"]), "reported_at": meta.get("reported_at")}
+                 "balance": (meta.get("balances") or {}).get(b["name"]), "reported_at": meta.get("reported_at"),
+                 "local": bool((self.backend_info(b["name"]) or {}).get("local")), "stats": self.backend_stats(b["name"])}
                 for b in self.backends_for(owner)]
+
+    def backend_stats(self, name: str) -> dict[str, Any] | None:
+        """A local backend's machine state as of the worker's last config sync (memory, swap, loaded model)."""
+        try:
+            rep = json.loads(self.store.get_meta("agent_config") or "{}")
+        except json.JSONDecodeError:
+            return None
+        st = ((rep.get("backend_stats") or {}) if isinstance(rep, dict) else {}).get(name)
+        return st if isinstance(st, dict) else None
 
     def versions(self) -> dict[str, Any]:
         """claude-bridge on the server, and on the worker as of its last model report (None until it reports)."""

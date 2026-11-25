@@ -69,6 +69,7 @@
   },
   "local": {
     "label": "本地模型",
+    "local": true,
     "owners": [
       "1"
     ],

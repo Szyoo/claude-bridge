@@ -156,6 +156,7 @@ class BackendInfo(BaseModel):
     has_key: bool = False  # the worker's backends file carries the key itself
     currency: str = Field("USD", pattern=r"^[A-Z]{3}$")  # what `pricing` is in (DeepSeek: CNY)
     local_projects: bool = False  # its Code projects are the folders of a directory on the worker's machine
+    local: bool = False  # a model on the worker's machine: not priced; the worker reports memory / loaded model
 
 
 class BackendKeyIn(BaseModel):
@@ -203,6 +204,8 @@ class AgentConfigIn(BaseModel):
     running: int = Field(0, ge=0, le=64)
     # {backend: [{name, path, git, branch, mtime}]}: the folders of backends with local projects
     backend_projects: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    # {backend: {at, loaded: [{model, size, context, until}] | None, mem_total, mem_free_pct, swap_used, swap_total}}
+    backend_stats: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class AgentChatIn(BaseModel):

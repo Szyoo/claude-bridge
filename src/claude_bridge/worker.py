@@ -54,6 +54,30 @@ PROJECT_KIND = "project"  # create (git init / git clone) or delete a Code-mode 
 PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
+def machine_memory() -> dict[str, Any]:
+    """This machine's memory in bytes — total, swap used / total — and macOS's free percentage (which counts what it
+    could reclaim). Empty where it can't be read; Linux from /proc/meminfo."""
+    out: dict[str, Any] = {}
+    try:
+        if sys.platform == "darwin":
+            run = lambda *a: subprocess.run(a, capture_output=True, text=True, timeout=3).stdout  # noqa: E731
+            out["mem_total"] = int(run("sysctl", "-n", "hw.memsize").strip() or 0)
+            sw = dict(re.findall(r"(total|used) = ([\d.]+)M", run("sysctl", "-n", "vm.swapusage")))
+            out["swap_total"], out["swap_used"] = (int(float(sw.get(k, 0)) * 1048576) for k in ("total", "used"))
+            m = re.search(r"free percentage: (\d+)%", run("memory_pressure", "-Q"))
+            if m:
+                out["mem_free_pct"] = int(m.group(1))
+        elif os.path.exists("/proc/meminfo"):
+            kb = {k: int(v) * 1024 for k, v in re.findall(r"^(\w+):\s+(\d+) kB", Path("/proc/meminfo").read_text(), re.M)}
+            out.update(mem_total=kb.get("MemTotal", 0), swap_total=kb.get("SwapTotal", 0),
+                       swap_used=kb.get("SwapTotal", 0) - kb.get("SwapFree", 0))
+            if kb.get("MemTotal"):
+                out["mem_free_pct"] = round(100 * kb.get("MemAvailable", 0) / kb["MemTotal"])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return out
+
+
 @dataclass
 class WorkerProfile:
     """Per-scope overrides (e.g. a "chat" scope without tools, a "code" scope with a sandbox). None = inherit.
@@ -123,6 +147,9 @@ class Backend:
     # per-owner project directories shared with Claude.
     projects_root: str = ""
     currency: str = "USD"  # what `pricing` is in: DeepSeek's price list is in yuan ("CNY")
+    # a model served on this machine (Ollama …): nothing to price or top up; instead the worker reports the
+    # machine's memory and what the model server has loaded, every config sync
+    local: bool = False
 
     @classmethod
     def from_dict(cls, name: str, d: dict[str, Any]) -> Backend:
@@ -143,7 +170,8 @@ class Backend:
         return cls(env=env, models=models, owners=owners, label=str(d.get("label") or name), pricing=pricing,
                    peak=dict(d.get("peak") or {}), balance_url=str(d.get("balance_url") or ""),
                    profile=WorkerProfile.from_dict(prof) if prof else None,
-                   projects_root=str(d.get("projects_root") or ""), currency=str(d.get("currency") or "USD").upper())
+                   projects_root=str(d.get("projects_root") or ""), currency=str(d.get("currency") or "USD").upper(),
+                   local=bool(d.get("local")))
 
     @property
     def has_key(self) -> bool:
@@ -157,7 +185,22 @@ class Backend:
         """What the server may know: no env (the API key)."""
         return {"name": name, "label": self.label, "owners": list(self.owners), "models": list(self.models),
                 "pricing": self.pricing, "peak": self.peak, "has_key": self.has_key,
-                "currency": self.currency, "local_projects": bool(self.projects_root)}
+                "currency": self.currency, "local_projects": bool(self.projects_root), "local": self.local}
+
+    def local_stats(self) -> dict[str, Any]:
+        """A local backend's state for the page: what its model server has loaded (Ollama's /api/ps; None when it
+        doesn't answer) and the machine's memory / swap."""
+        out: dict[str, Any] = {"at": time.time(), "loaded": None}
+        try:
+            r = requests.get(self.env["ANTHROPIC_BASE_URL"].rstrip("/") + "/api/ps", timeout=3)
+            r.raise_for_status()
+            out["loaded"] = [{"model": str(m.get("name") or m.get("model") or ""), "size": int(m.get("size") or 0),
+                              "context": int(m.get("context_length") or 0), "until": str(m.get("expires_at") or "")}
+                             for m in (r.json().get("models") or []) if isinstance(m, dict)]
+        except (requests.RequestException, ValueError, AttributeError):
+            pass
+        out.update(machine_memory())
+        return out
 
     def image_model_for(self, model: str) -> str | None:
         """A model of this backend that sees images, to use instead of `model` for a turn with images; None when
@@ -463,7 +506,9 @@ class Worker:
                                            "local_concurrency": max(1, self.config.max_concurrent),
                                            "running": self.running_jobs(),
                                            "backend_projects": {n: b.list_projects() for n, b in self.config.backends.items()
-                                                                if b.projects_root}})
+                                                                if b.projects_root},
+                                           "backend_stats": {n: b.local_stats() for n, b in self.config.backends.items()
+                                                             if b.local}})
         except BridgeClientError as e:
             if e.status == 404:  # an older server: keep our own value, ask again much later
                 self._next_config_sync = now + 3600

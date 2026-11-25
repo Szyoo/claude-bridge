@@ -29,7 +29,7 @@
   <script type="module">
     import { BridgeClient } from '/static/bridge/bridge-client.js';
     import { mountBridgeWidget, loadPrefs, savePrefs, applyPrefs } from '/static/bridge/bridge-widget.js';
-    import { api, esc, fmtPct, fmtSeen, toast, fmtMoney, fmtBalance } from '/static/bridge/bridge-pages.js';
+    import { api, esc, fmtPct, fmtSeen, toast, fmtMoney, fmtBalance, fmtTok } from '/static/bridge/bridge-pages.js';
     import { attachMenu } from '@szyyw/design/menu.js';
     import { confirm } from '@szyyw/design/confirm.js';
     import { iconSvg } from '@szyyw/design/icons.js';
@@ -59,7 +59,8 @@
     // top bar only names the open conversation. On the DeepSeek side everything about the account is DeepSeek's own.
     const backendSeg = () => {
       if (!backends.length) return '';
-      const opt = (name, label) => `<button type="button" data-backend="${esc(name)}" aria-pressed="${backend === name}"${backend === name ? ' class="active"' : ''}>${esc(label)}</button>`;
+      // the tab shows the short name ("Qwen（本地）" → "Qwen"); the full one is its tooltip
+      const opt = (name, label) => `<button type="button" data-backend="${esc(name)}" aria-pressed="${backend === name}"${backend === name ? ' class="active"' : ''} title="${esc(label)}">${esc(String(label).replace(/\s*[（(].*[）)]\s*$/, '') || label)}</button>`;
       return `<div class="seg bp-backend" role="group" aria-label="模型服务">${opt('', 'Claude')}${backends.map(b => opt(b.name, b.label)).join('')}</div>`;
     };
     // The tree. A node's key: "chat" (the plain conversations) or "p:<project>". The open node's session list is the
@@ -364,7 +365,24 @@
       const u = d.user, us = d.usage, name = (d.sso && d.sso.portal_user) || u.display_name || u.username;
       const bk = backend && (d.backends || []).find(b => b.name === backend);
       let sub, full = false, items;
-      if (bk) {
+      if (bk && bk.local) {
+        // a model on this machine: no money — its tokens and speed, and the machine's memory / loaded model
+        const u3 = bk.usage, st = bk.stats || {}, lm = (st.loaded || [])[0];
+        const gb = (b) => `${(b / 1073741824).toFixed(1)}G`;
+        const tok = (p) => fmtTok(p.input_tokens + p.cache_read_tokens + p.output_tokens);
+        const state = !bk.stats ? '未上报' : st.loaded == null ? '服务无响应' : lm ? `已加载 ${gb(lm.size)}` : '空闲';
+        sub = `${bk.label} · 本地模型`;
+        for (const card of app.querySelectorAll('.bp-svc-card')) {
+          card.innerHTML = `<span class="top"><span class="lbl">${esc(bk.label)}</span><b class="${st.loaded == null && bk.stats ? 'low' : ''}">${esc(state)}</b></span>`
+            + `<span class="spend"><span>24 小时 <b>${esc(tok(u3.day))}</b></span><span>7 天 <b>${esc(tok(u3.week))}</b></span>`
+            + `<span>速度 <b>${u3.day.tok_s != null ? `${u3.day.tok_s} t/s` : u3.week.tok_s != null ? `${u3.week.tok_s} t/s` : '—'}</b></span></span>`
+            + (bk.stats ? `<span class="spend"><span>内存余量 <b>${st.mem_free_pct ?? '—'}%</b></span><span>swap <b>${st.swap_used != null ? gb(st.swap_used) : '—'}</b></span></span>` : '');
+          card.title = `${bk.label}：24 小时 ${u3.day.turns} 次、7 天 ${u3.week.turns} 次（tokens，不计费）`;
+          card.setAttribute('aria-label', `${bk.label} 用量与本机状态`);
+        }
+        items = `<div class="bp-acct-menu-head">${esc(bk.label)} · 本地模型</div>`
+          + `<a class="menu-item" href="/account?svc=${encodeURIComponent(bk.name)}">${iconSvg('settings')}${esc(bk.label)} 用量与本机状态</a>`;
+      } else if (bk) {
         const bal = fmtBalance(bk.balance);
         sub = `${bk.label} · 按 API 价格计费`;
         const low = bk.balance?.is_available === false, u3 = bk.usage, cur = bk.currency;

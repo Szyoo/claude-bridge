@@ -76,6 +76,7 @@ worker 可以给指定的管理员一个「Claude | DeepSeek」切换（侧栏�
 - `pricing` / `peak` / `currency`：按对方 API 价格记账用（每百万 token 的价格，币种由 `currency` 指定，缺省 USD，DeepSeek 用 CNY；按模型名匹配；`peak` 为高峰时段与倍数）。改了币种后，已记的账会按记下的 token 数和高峰标记重新计价
 - `balance_url`：可选，worker 每 10 分钟用 key 查一次账户余额，显示在页面上
 - `projects_root`：可选，例如 `~/Documents/GitHub`。设了以后这个后端的 Code 项目就是该目录下的文件夹（worker 每 30 秒上报一次列表），新建和克隆都放进去，网页上不删除；不设则和 Claude 共用每个账户隔离的项目目录
+- `local`：可选，`true` 表示模型跑在 worker 这台机器上（如 Ollama）：不计价、不要 API key、页面不显示余额与金额，改为显示 token 用量、输出速度（输出 token ÷ 模型用时）和本机状态（内存余量、swap、模型服务当前加载的模型与上下文，worker 每次配置同步时上报，约 30 秒一次）
 - `profile`：可选，这个后端的对话专用的运行参数，键与 `CLAUDE_BRIDGE_PROFILES` 相同（不含 `cwd`，目录仍由 scope 决定），叠加在 scope 的 profile 之上，例如更长的 `chat_timeout` / `idle_timeout` 或它自己的 `system_prompt`
 
 **本地模型（Ollama）**：Ollama 自带 Anthropic 兼容接口（`/v1/messages`，含 thinking 与工具调用），`ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:11434` 即可，`ANTHROPIC_AUTH_TOKEN` 随便填；示例见 `backends.example.json` 的 `local`。模型名不在 Claude Code 的已知列表里时它只打警告，照常工作；`ANTHROPIC_DEFAULT_*_MODEL` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 都要指向本地模型，否则子任务和后台请求会去找不存在的 Claude 模型。小上下文的本地模型要省着用：

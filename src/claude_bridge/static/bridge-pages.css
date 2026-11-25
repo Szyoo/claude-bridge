@@ -44,7 +44,7 @@
 
 /* the model service: a full-width segmented control heading the sidebar (@szyyw/design .seg) */
 .bp-backend { display: flex; width: 100%; }
-.bp-backend > button { flex: 1; }
+.bp-backend > button { flex: 1 1 0; min-width: 0; padding-inline: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* the sidebar tree: 对话 and each project are nodes that open to their sessions (titles only). The side nav holds the
    whole tree and is the part that scrolls; the open node's session list is the chat widget's own (.bridge-threads). */
@@ -242,6 +242,7 @@ body.bp-chat .bridge-top { padding-left: max(12px, env(safe-area-inset-left, 0px
 .bp-u { display: flex; flex-direction: column; gap: var(--sp-4); margin-bottom: var(--sp-4); }
 .bp-u > .glass.panel { margin: 0; }
 .bp-u-top, .bp-u-sum { --stat-min: 180px; }
+.bp-u-small { font-size: var(--fs-md, 1rem); line-height: 1.45; overflow-wrap: anywhere; }
 .bp-u-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); }
 .bp-u-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .bp-u-head .panel-title { margin: 0; }

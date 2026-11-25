@@ -136,6 +136,7 @@
             + ` aria-label="API key" placeholder="${key.source === 'page' ? '输入新的 key 替换' : `粘贴 ${esc(b.label)} 的 API key`}" />`
             + `<button type="submit" class="btn">保存</button></div>`
             + `<p class="tiny muted bp-gap">保存在服务器上，只交给运行 helper 的电脑使用，页面上不会再显示。</p></form>`;
+        if (b.local) return `<div class="bp-u" data-usage="${esc(b.name)}"></div>`;  // a local model: no key, no money
         return `<div class="bp-u" data-usage="${esc(b.name)}"></div>`
           + `<section class="glass panel"><div class="bp-key-head"><h2 class="panel-title">API key</h2>`
           + (key.source === 'page' ? `<span class="pill">已设置 …${esc(key.hint)}</span><button type="button" class="btn-ghost btn-small" data-clear-key>清除</button>` : '')
