@@ -573,8 +573,10 @@ export function stepsHtml(items, opts = {}) {
       const label = it.redacted ? '思考内容未公开' : signatureOnly ? '未返回思考文本' : running ? '正在思考' : '思考过程';
       const text = it.redacted ? '模型未公开这段思考内容。' : signatureOnly ? '上游只提供了思考块签名，没有提供可显示的思考文本。' : it.text;
       const st = running ? 'running' : 'done';
-      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}" data-st="${st}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i>${running ? markHtml(st, { now: o.now, label: markLabel(st, o.S) }) : '<i class="bridge-think-ic" aria-hidden="true">✻</i>'}<span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text))}</span></summary>`
-        + `<div class="bridge-step-body">${esc(text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`);
+      out.push(`<details class="bridge-step thinking${running ? ' running' : ''}" data-k="${esc(it.key || `${o.key}-t${i}`)}" data-st="${st}"${o.open || running ? ' open' : ''}><summary><i class="bridge-caret"></i>${running ? markHtml(st, { now: o.now, label: markLabel(st, o.S) }) : '<i class="bridge-think-ic" aria-hidden="true">✻</i>'}<span class="bridge-step-name">${label}</span><span class="bridge-step-desc">${esc(firstLine(text).replace(/\*\*|__|`/g, '').replace(/^\s*(?:#{1,6}|[-*+>]|\d+\.)\s+/, ''))}</span></summary>`
+        + (o.markdown && it.text && !it.redacted
+          ? `<div class="bridge-step-body bridge-md">${o.markdown(text)}${it.truncated ? '<p>…（已截断）</p>' : ''}</div></details>`
+          : `<div class="bridge-step-body">${esc(text)}${it.truncated ? '\n…（已截断）' : ''}</div></details>`));
     } else if (it.kind === 'trace') {
       out.push(`<details class="bridge-step trace" data-k="${o.key}-r${i}"><summary><i class="bridge-caret"></i><span class="bridge-step-name">执行轨迹</span></summary><div class="bridge-term"><pre class="out">${esc(it.text)}</pre></div></details>`);
     } else if (it.kind === 'note' && it.sub === 'user') {
@@ -691,7 +693,7 @@ export function renderTurn(el, m, opts = {}) {
     const segs = splitTurn(m.content || '', m.events || []);
     body = segs.map((s, i) => s.kind === 'text'
       ? `<div class="bridge-md">${o.markdown(s.text)}</div>`
-      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, open: o.open, key: `s${i}`, expected: o.expected, strings: S, now: o.now, fileUrl: o.fileUrl, emptyThinking: o.emptyThinking })}</div>`).join('');
+      : `<div class="bridge-steps">${stepsHtml(s.items, { streaming, markdown: o.markdown, open: o.open, key: `s${i}`, expected: o.expected, strings: S, now: o.now, fileUrl: o.fileUrl, emptyThinking: o.emptyThinking })}</div>`).join('');
     const think = latticeHtml(turnTiming(m, o.now), S, o.now);
     if (streaming && !segs.length) body = `<div class="bridge-wait">${think}</div>`;
     else if (think) body = `<div class="bridge-think-row">${think}</div>` + body;

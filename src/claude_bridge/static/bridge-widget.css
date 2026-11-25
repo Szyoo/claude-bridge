@@ -236,6 +236,7 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-step-body { margin: 4px 0 6px 1.3em; padding: .3em .8em; border-left: 2px solid var(--bridge-border); white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; border-left-style: dashed; color: var(--bridge-muted); line-height: 1.6;
   max-height: none; overflow: visible; }  /* thinking reads like prose: as tall as it is, no inner scroll box */
+.bridge-step.thinking .bridge-step-body.bridge-md { white-space: normal; }
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
 /* a message the user sent mid-turn, at the point Claude got it */
