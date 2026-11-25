@@ -60,11 +60,12 @@ def machine_memory() -> dict[str, Any]:
     out: dict[str, Any] = {}
     try:
         if sys.platform == "darwin":
+            # absolute paths: a launchd job's PATH has no /usr/sbin
             run = lambda *a: subprocess.run(a, capture_output=True, text=True, timeout=3).stdout  # noqa: E731
-            out["mem_total"] = int(run("sysctl", "-n", "hw.memsize").strip() or 0)
-            sw = dict(re.findall(r"(total|used) = ([\d.]+)M", run("sysctl", "-n", "vm.swapusage")))
+            out["mem_total"] = int(run("/usr/sbin/sysctl", "-n", "hw.memsize").strip() or 0)
+            sw = dict(re.findall(r"(total|used) = ([\d.]+)M", run("/usr/sbin/sysctl", "-n", "vm.swapusage")))
             out["swap_total"], out["swap_used"] = (int(float(sw.get(k, 0)) * 1048576) for k in ("total", "used"))
-            m = re.search(r"free percentage: (\d+)%", run("memory_pressure", "-Q"))
+            m = re.search(r"free percentage: (\d+)%", run("/usr/bin/memory_pressure", "-Q"))
             if m:
                 out["mem_free_pct"] = int(m.group(1))
         elif os.path.exists("/proc/meminfo"):

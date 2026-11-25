@@ -2,6 +2,10 @@
 
 版本号遵循 semver；宿主按 tag 更新（安装方式见 README「安装」）。
 
+## v0.27.1 — 2026-11-25
+
+- 本机状态在 launchd 下也能读到内存余量与 swap（`sysctl` / `memory_pressure` 改用绝对路径，launchd 的 PATH 里没有 /usr/sbin）
+
 ## v0.27.0 — 2026-11-25
 
 - 本地模型后端（`backends.json` 里 `"local": true`）：不计价、不要 API key；侧栏卡片与用量页不再显示余额和金额，改为 token 用量、输出速度和本机状态（内存余量、swap、当前加载的模型与上下文）。worker 每次配置同步时上报本机状态（`backend_stats`），用量页在打开期间每 30 秒刷新
