@@ -27,8 +27,12 @@ function markdownParser() {
       name: 'cjkStrong', level: 'inline',
       start: (src) => src.indexOf('**'),
       tokenizer(src) {
-        const m = /^\*\*(?![\s*])([^\n]*?[^\s*])\*\*/.exec(src);
+        // a closing `**` after a stray space (`副本？ **`) still closes
+        const m = /^\*\*(?![\s*])([^\n]*?[^\s*]) ?\*\*/.exec(src);
         if (m) return { type: 'strong', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+        // models (DeepSeek's thinking most of all) open `**` and never close it on the line: drop the lone stars
+        const lone = /^\*\*(?![\s*])(?![^\n]*\*\*)/.exec(src);
+        if (lone) return { type: 'text', raw: lone[0], text: '' };
       },
     }],
     renderer: {
