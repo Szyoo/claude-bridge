@@ -34,10 +34,14 @@
     import { mountBridgeWidget } from '/static/bridge/bridge-widget.js';
     import { openLightbox } from '@szyyw/design/lightbox.js';
     const client = new BridgeClient({ baseUrl: '/api', onAuthLost: () => { location.href = '/login'; } });
+    const QWEN_URL = {{qwen_url_js}};
+    const qwenLink = QWEN_URL
+      ? `<a class="bridge-btn bridge-btn-ghost bridge-tiny" href="${QWEN_URL}" target="_blank" rel="noopener">Qwen 本地</a> `
+      : '';
     mountBridgeWidget(document.getElementById('app'), client, {
       scope: '', title: 'claude-bridge', fill: true,
       openImage: (items, start, link) => openLightbox({ items, start, returnFocus: link }),
-      sideFoot: '<form method="post" action="/logout" class="bp-me"><span class="grow"></span><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny">退出</button></form>',
+      sideFoot: qwenLink + '<form method="post" action="/logout" class="bp-me"><span class="grow"></span><button type="submit" class="bridge-btn bridge-btn-ghost bridge-tiny">退出</button></form>',
     });
   </script>
 </body>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 from pathlib import Path
@@ -152,7 +153,11 @@ def create_standalone_app(
     def index(request: Request):
         if not authed(request):
             return RedirectResponse("/login", status_code=303)
-        return HTMLResponse(render_page((pages / "index.html").read_text(encoding="utf-8"), request.cookies, None))
+        page = render_page((pages / "index.html").read_text(encoding="utf-8"), request.cookies, None)
+        # An optional shortcut to an external local-model UI (e.g. Qwen Code's Web Shell). Kept out of the repo: the
+        # deployment sets CLAUDE_BRIDGE_QWEN_URL, usually with a fragment token; unset hides the button.
+        qwen = os.environ.get("CLAUDE_BRIDGE_QWEN_URL", "").strip()
+        return HTMLResponse(page.replace("{{qwen_url_js}}", json.dumps(qwen)))
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, err: str = ""):

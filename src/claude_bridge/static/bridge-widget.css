@@ -168,6 +168,22 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-md li { margin: .15em 0; }
 .bridge-md li, .bridge-md blockquote, .bridge-md td, .bridge-md th, .bridge-md details { padding-inline-start: 0; }
 .bridge-md blockquote { border-left: 2px solid var(--bridge-border); padding: .1em .8em; color: var(--bridge-muted); }
+/* code block: language tag + copy button over the top-right corner */
+.bridge-code { position: relative; margin: 0 0 var(--chat-item-gap); }
+.bridge-code > pre { margin: 0; }
+.bridge-code-lang { position: absolute; top: .35em; left: .8em; font-family: var(--bridge-mono); font-size: .75em; color: var(--bridge-term-fg); opacity: .5; pointer-events: none; }
+.bridge-code-lang + .bridge-copy + pre { padding-top: 1.9em; }
+.bridge-copy { font: inherit; font-size: .75em; line-height: 1; padding: .35em .6em; border: 1px solid var(--bridge-border); border-radius: 6px; background: var(--bridge-panel); color: var(--bridge-muted); cursor: pointer; }
+.bridge-copy:hover { color: var(--bridge-fg); border-color: var(--bridge-accent); }
+.bridge-copy.done { color: var(--bridge-accent); border-color: var(--bridge-accent); }
+.bridge-code > .bridge-copy { position: absolute; top: .35em; right: .4em; opacity: .7; background: color-mix(in srgb, var(--bridge-term-bg) 70%, var(--bridge-panel)); color: var(--bridge-term-fg); border-color: color-mix(in srgb, var(--bridge-term-fg) 25%, transparent); }
+.bridge-code:hover > .bridge-copy, .bridge-code > .bridge-copy:focus-visible, .bridge-code > .bridge-copy.done { opacity: 1; }
+/* message footer: copy the whole message; quiet until the message is hovered (always shown on touch screens) */
+.bridge-turn-foot { display: flex; justify-content: flex-end; margin-top: calc(var(--chat-item-gap) * .5); }
+.bridge-turn.user .bridge-turn-foot { justify-content: flex-end; }
+.bridge-turn-foot .bridge-copy { opacity: 0; transition: opacity .15s; }
+.bridge-turn:hover .bridge-turn-foot .bridge-copy, .bridge-turn-foot .bridge-copy:focus-visible, .bridge-turn-foot .bridge-copy.done { opacity: 1; }
+@media (hover: none) { .bridge-turn-foot .bridge-copy { opacity: .75; } }
 .bridge-md pre { margin: 0 0 var(--chat-item-gap); background: var(--bridge-term-bg); color: var(--bridge-term-fg); padding: .6em .8em; border-radius: var(--chat-radius); overflow: auto; font-family: var(--bridge-mono); font-size: .857em; line-height: 1.55; }
 .bridge-md code { font-family: var(--bridge-mono); font-size: .9em; background: var(--bridge-user); padding: .05em .3em; border-radius: 4px; }
 .bridge-md pre code { background: none; padding: 0; font-size: inherit; }
@@ -210,7 +226,8 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-term pre.cmd { color: var(--bridge-term-dim); }
 .bridge-term pre.cmd + pre.out { border-top: 1px solid var(--bridge-term-border); }
 .bridge-step-body { margin: 4px 0 6px 1.3em; padding: .3em .8em; border-left: 2px solid var(--bridge-border); white-space: pre-wrap; max-height: 320px; overflow: auto; }
-.bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; border-left-style: dashed; color: var(--bridge-muted); line-height: 1.6; }
+.bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; border-left-style: dashed; color: var(--bridge-muted); line-height: 1.6;
+  max-height: none; overflow: visible; }  /* thinking reads like prose: as tall as it is, no inner scroll box */
 .bridge-note { font-size: .928em; color: var(--bridge-muted); padding: .15em .35em; }
 .bridge-note.error { color: var(--bridge-err); }
 /* a message the user sent mid-turn, at the point Claude got it */

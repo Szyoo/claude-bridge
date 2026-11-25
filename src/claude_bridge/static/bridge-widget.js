@@ -9,10 +9,80 @@
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Markdown → HTML with the page's `marked` (loaded by the host). The raw text goes to the parser — escaping it first
+// would double-escape code (`'` shown as &#39;) and kill `>` quotes — and safety lives in the renderer instead:
+// raw HTML is shown as text, links / images only with http(s), mailto, relative or # targets.
+const SAFE_URL = /^(?:https?:|mailto:|\/|#|\.|[^:/?#]*(?:[/?#]|$))/i;
+const safeUrl = (u) => typeof u === 'string' && SAFE_URL.test(u.trim());
+let mdParser = null;
+function markdownParser() {
+  const M = globalThis.marked;
+  if (!M?.Marked) return null;
+  if (mdParser) return mdParser;
+  const md = new M.Marked({ gfm: true, breaks: true });
+  md.use({
+    // CommonMark won't close `**` next to CJK punctuation (`**注意：**后面`), leaving the stars on screen; take a
+    // `**…**` on one line as bold wherever it stands
+    extensions: [{
+      name: 'cjkStrong', level: 'inline',
+      start: (src) => src.indexOf('**'),
+      tokenizer(src) {
+        const m = /^\*\*(?![\s*])([^\n]*?[^\s*])\*\*/.exec(src);
+        if (m) return { type: 'strong', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+      },
+    }],
+    renderer: {
+      html({ text }) { return esc(text); },
+      link({ href, title, tokens }) {
+        const inner = this.parser.parseInline(tokens);
+        if (!safeUrl(href)) return inner;
+        return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ''} target="_blank" rel="noopener noreferrer">${inner}</a>`;
+      },
+      image({ href, title, text }) {
+        if (!safeUrl(href)) return esc(text);
+        return `<img src="${esc(href)}" alt="${esc(text)}"${title ? ` title="${esc(title)}"` : ''} loading="lazy">`;
+      },
+      // a fenced / indented block gets its own copy button (handled by the document-wide [data-copy] listener)
+      code({ text, lang }) {
+        const l = (lang || '').trim().split(/\s+/)[0];
+        return `<div class="bridge-code">${l ? `<span class="bridge-code-lang">${esc(l)}</span>` : ''}`
+          + `<button type="button" class="bridge-copy" data-copy="code" title="复制代码" aria-label="复制代码">复制</button>`
+          + `<pre><code${l ? ` class="language-${esc(l)}"` : ''}>${esc(text)}</code></pre></div>`;
+      },
+    },
+  });
+  return (mdParser = md);
+}
 function defaultMarkdown(text) {
-  const safe = esc(text || '');
-  if (globalThis.marked?.parse) return globalThis.marked.parse(safe, { breaks: true, gfm: true });
-  return safe.replace(/\n/g, '<br>');
+  const md = markdownParser();
+  if (md) return md.parse(text || '');
+  return esc(text || '').replace(/\n/g, '<br>');
+}
+export { defaultMarkdown };
+
+// Copy buttons ([data-copy]): "code" copies its block, "turn" the message's raw text (renderTurn keeps it on the
+// .bridge-turn). One listener for the whole document, so it covers every widget and page.
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back below */ }
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove(); return ok;
+}
+if (typeof document !== 'undefined' && !globalThis.__bridgeCopy) {
+  globalThis.__bridgeCopy = true;
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest?.('[data-copy]');
+    if (!b) return;
+    e.preventDefault();
+    const text = b.dataset.copy === 'code'
+      ? (b.closest('.bridge-code')?.querySelector('pre')?.textContent ?? '')
+      : (b.closest('.bridge-turn')?._raw ?? '');
+    const ok = await copyText(text);
+    b.classList.add('done'); b.textContent = ok ? '已复制' : '复制失败';
+    clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('done'); b.textContent = '复制'; }, 1400);
+  });
 }
 
 const CONTEXT_WINDOWS = { default: 200000 };
@@ -625,7 +695,12 @@ export function renderTurn(el, m, opts = {}) {
     if (streaming && !segs.length) body = `<div class="bridge-wait">${think}</div>`;
     else if (think) body = `<div class="bridge-think-row">${think}</div>` + body;
   }
-  el.innerHTML = head + `<div class="bridge-turn-body">${body}</div>`;
+  // copy the whole message (what was sent / the reply's text as markdown), once it has settled
+  el._raw = m.content || '';
+  const settled = !(m.status === 'pending' || m.status === 'streaming');
+  const foot = settled && el._raw.trim()
+    ? `<div class="bridge-turn-foot"><button type="button" class="bridge-copy" data-copy="turn" title="复制这条消息" aria-label="复制这条消息">复制</button></div>` : '';
+  el.innerHTML = head + `<div class="bridge-turn-body">${body}</div>` + foot;
   for (const d of el.querySelectorAll('details[data-k]')) { const k = d.dataset.k; if (opened.has(k)) d.open = true; else if (closed.has(k)) d.open = false; }
   for (const b of el.querySelectorAll('details[data-k] > .bridge-step-body')) {
     const d = b.parentElement, saved = scrolls.get(d.dataset.k);
