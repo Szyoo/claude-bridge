@@ -581,17 +581,21 @@ class BridgeStore:
         return row
 
     def messages(
-        self, thread: str, after_id: int = 0, limit: int = 200, *, with_events: bool = True, tail: bool = False
+        self, thread: str, after_id: int = 0, limit: int = 200, *, with_events: bool = True, tail: bool = False,
+        before_id: int = 0,
     ) -> list[dict[str, Any]]:
-        """`tail=True` returns the newest `limit` rows (still ascending) instead of the oldest."""
+        """`tail=True` returns the newest `limit` rows (still ascending) instead of the oldest; `before_id` keeps
+        only rows older than that message (a page further up a long thread)."""
+        upper = " AND id<?" if before_id else ""
+        params: tuple = (thread, after_id, *((before_id,) if before_id else ()), limit)
         if tail:
             sql = (
-                "SELECT * FROM (SELECT * FROM bridge_messages WHERE thread=? AND id>? ORDER BY id DESC LIMIT ?) "
+                f"SELECT * FROM (SELECT * FROM bridge_messages WHERE thread=? AND id>?{upper} ORDER BY id DESC LIMIT ?) "
                 "ORDER BY id"
             )
         else:
-            sql = "SELECT * FROM bridge_messages WHERE thread=? AND id>? ORDER BY id LIMIT ?"
-        rows = self._q(sql, (thread, after_id, limit))
+            sql = f"SELECT * FROM bridge_messages WHERE thread=? AND id>?{upper} ORDER BY id LIMIT ?"
+        rows = self._q(sql, params)
         if with_events and rows:
             ids = [r["id"] for r in rows]
             evs = self._q(
@@ -610,6 +614,70 @@ class BridgeStore:
             for r in rows:
                 r["files"] = files.get(r["id"], [])
         return rows
+
+    def _compact_quietly(self, message_id: int) -> None:
+        try:
+            self.compact_message_stream(message_id)
+        except Exception:  # an optimisation: never let it fail anything
+            log.exception("compacting the stream of message %s failed", message_id)
+
+    def has_older(self, thread: str, message_id: int) -> bool:
+        return self._one("SELECT 1 AS x FROM bridge_messages WHERE thread=? AND id<? LIMIT 1", (thread, message_id)) is not None
+
+    def compact_message_stream(self, message_id: int, min_rows: int = 50) -> int:
+        """Once a message is finished, its raw `content_stream` rows (one per streamed token) are only read for
+        thinking blocks: keep one start row carrying the whole thinking text, one signature marker and the stop
+        row per thinking block, drop the rest. What a page renders stays the same (see compact_stream_events);
+        reopening a long thread no longer re-assembles hundreds of thousands of deltas. Returns rows deleted."""
+        rows = self._q("SELECT id, data FROM bridge_events WHERE message_id=? AND type='content_stream' ORDER BY id",
+                       (message_id,))
+        if len(rows) < min_rows:
+            return 0
+        keep: dict[int, str | None] = {}  # id → new data (None = unchanged)
+        open_: dict[tuple[str, int], tuple[int, dict[str, Any], dict[str, Any]]] = {}
+        signed: set[tuple[str, int]] = set()
+
+        def start_data(d: dict[str, Any], block: dict[str, Any]) -> str:
+            return json.dumps({**d, "event": {**d["event"], "content_block": block}}, ensure_ascii=False)
+
+        for r in rows:
+            try:
+                d = json.loads(r["data"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            e = d.get("event") or {}
+            key = (d.get("native_message_id") or "", int(e.get("index", 0) or 0))
+            kind = e.get("type")
+            if kind == "content_block_start" and (e.get("content_block") or {}).get("type") in _THINKING_BLOCKS:
+                block = dict(e["content_block"])
+                block.pop("signature", None)
+                open_[key] = (r["id"], d, block)
+                keep[r["id"]] = None
+            elif kind == "content_block_delta" and key in open_:
+                delta = e.get("delta") or {}
+                if delta.get("type") == "thinking_delta":
+                    open_[key][2]["thinking"] = (open_[key][2].get("thinking") or "") + (delta.get("thinking") or "")
+                elif delta.get("type") == "signature_delta" and delta.get("signature") and key not in signed:
+                    signed.add(key)
+                    keep[r["id"]] = json.dumps({**d, "event": {**e, "delta": {"type": "signature_delta", "signature": "1"}}},
+                                               ensure_ascii=False)
+            elif kind == "content_block_stop" and key in open_:
+                sid, d0, block = open_.pop(key)
+                keep[sid] = start_data(d0, block)
+                keep[r["id"]] = None
+        for sid, d0, block in open_.values():  # a block the stream never closed keeps what it got
+            keep[sid] = start_data(d0, block)
+        drop = [r["id"] for r in rows if r["id"] not in keep]
+        if not drop:
+            return 0
+        with self.transaction():
+            for eid, data in keep.items():
+                if data is not None:
+                    self._x("UPDATE bridge_events SET data=? WHERE id=?", (data, eid))
+            for i in range(0, len(drop), 500):
+                part = drop[i:i + 500]
+                self._x(f"DELETE FROM bridge_events WHERE id IN ({','.join('?' * len(part))})", tuple(part))
+        return len(drop)
 
     # ---------------- files ----------------
 
@@ -739,6 +807,9 @@ class BridgeStore:
             sql = "UPDATE bridge_messages SET status=?, updated_at=? WHERE id=? RETURNING rev"
             params = (status, _now(), message_id)
         row = self._x(sql, params).fetchone()
+        if status in ("done", "error", "cancelled"):
+            threading.Thread(target=self._compact_quietly, args=(message_id,), daemon=True,
+                             name=f"compact-{message_id}").start()
         return int(row["rev"]) if row else 0
 
     def message_by_job(self, job_id: int) -> dict[str, Any] | None:

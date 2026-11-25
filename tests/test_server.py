@@ -46,7 +46,7 @@ def test_send_stream_events_finish_roundtrip(web, agent, bridge):
     m = web.get(f"/api/threads/{th}/messages?after={mid - 1}").json()["items"][0]
     assert m["status"] == "done"
     assert web.get(f"/api/threads/{th}").json()["thread"]["session_id"] == "sess-1"
-    assert web.get(f"/api/threads/{th}/messages?after={mid}").json() == {"items": [], "inflight": None}
+    assert web.get(f"/api/threads/{th}/messages?after={mid}").json() == {"items": [], "inflight": None, "has_more": False}
 
     # second turn carries the session id; a bad-session failure resets it
     jid2 = web.post("/api/send", json={"text": "再问", "scope": "stock"}).json()["job_id"]

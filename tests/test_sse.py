@@ -121,7 +121,7 @@ async def test_stream_heartbeat_and_last_event_id_trims_snapshot(bridge, web, ag
 async def test_stream_after_cursor_tail_and_overflow(bridge):
     bridge.store.create_thread("main", scope="stock")
     ids = [bridge.store.add_message("main", "user", f"m{i}")["id"] for i in range(5)]
-    bridge.config.messages_limit = 2
+    bridge.config.messages_limit = bridge.config.messages_page = 2
     frames = await collect(event_stream(bridge.service, bridge.broker, "main", heartbeat=0.1), until="ping", timeout=3)
     assert [m["id"] for m in frames[0][2]["messages"]] == ids[-2:]  # newest N when after=0
     frames = await collect(

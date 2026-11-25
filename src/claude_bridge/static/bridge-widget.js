@@ -1647,7 +1647,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
   if (o.openImage) enhanceTurnImages(list, o.openImage);
   const form = $('.bridge-form'), pbMenu = $('.bridge-pb-menu'), fileInput = $('.bridge-file'), plusBtn = $('[data-pb="plus"]');
   let voice = null;      // Voice Pill api (set up with the composer below)
-  const state = { thread: null, threadRow: null, msgs: new Map(), order: [], sub: null, inflight: null, queue: [], settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null, job: null, ticker: null };
+  const state = { thread: null, threadRow: null, msgs: new Map(), order: [], hasMore: false, loadingOlder: false, sub: null, inflight: null, queue: [], settings: null, raf: null, dirty: new Set(), ctxBusy: false, agent: null, job: null, ticker: null };
   // the ＋ button opens the file picker itself (or the sources menu when the host gave sources), so no `button` here
   const att = mountAttachments({
     input: fileInput, tray: $('.bridge-tray'), textarea: input, dropZone: form, client,
@@ -1769,8 +1769,13 @@ export function mountBridgeWidget(el, client, opts = {}) {
     $('.bridge-agent .txt').textContent = (a.online ? '' : S.helperOff) + (fallback ? (a.online ? S.polling : ` · ${S.polling}`) : '');
   }
   function applySnapshot(snap) {
+    // a reconnect snapshot of the same thread carries only its newest page: keep the older pages already loaded
+    const first = snap.messages[0]?.id;
+    const keep = first && snap.thread?.id === state.thread ? state.order.filter(id => id < first).map(id => state.msgs.get(id)).filter(Boolean) : [];
+    state.hasMore = keep.length ? state.hasMore : !!snap.has_more;
     list.innerHTML = '';
     state.msgs.clear(); state.order = [];
+    for (const m of keep) upsert(m);
     state.threadRow = snap.thread;
     state.job = (snap.jobs || []).find(j => j.kind === 'compact') || (snap.jobs || [])[0] || null;
     if (!snap.messages.length) list.innerHTML = `<div class="bridge-empty">${esc(S.empty)}</div>`;
@@ -1781,7 +1786,42 @@ export function mountBridgeWidget(el, client, opts = {}) {
     $('.bridge-title').textContent = snap.thread?.title || S.threadTitle;
     renderAgent(snap.agent);
     renderSession();
+    renderOlder();
     scrollBottom();
+  }
+
+  // ---------- older messages: a long thread opens on its newest page; scrolling to the top loads the one before ----------
+  const OLDER_PAGE = 20;
+  const olderObs = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((es) => { if (es.some(e => e.isIntersecting)) loadOlder(); }, { root: list, rootMargin: '400px 0px 0px 0px' }) : null;
+  function renderOlder() {
+    let b = list.querySelector('.bridge-older');
+    if (!state.hasMore) { if (b) { olderObs?.unobserve(b); b.remove(); } return; }
+    if (!b) {
+      b = document.createElement('button'); b.type = 'button'; b.className = 'bridge-older';
+      b.addEventListener('click', loadOlder);
+      list.prepend(b); olderObs?.observe(b);
+    } else if (b !== list.firstChild) list.prepend(b);
+    b.textContent = state.loadingOlder ? '加载中…' : '加载更早的消息';
+    b.disabled = state.loadingOlder;
+  }
+  async function loadOlder() {
+    const tid = state.thread, first = state.order[0];
+    if (state.loadingOlder || !state.hasMore || !tid || !first) return;
+    state.loadingOlder = true; renderOlder();
+    try {
+      const r = await client.messages(tid, { before: first, limit: OLDER_PAGE });
+      if (tid !== state.thread) return;
+      const anchor = list.querySelector(`.bridge-turn[data-id="${first}"]`);
+      const h0 = list.scrollHeight, t0 = list.scrollTop;
+      const fresh = (r.items || []).filter(m => !state.msgs.has(m.id));
+      for (const m of fresh) { state.msgs.set(m.id, m); list.insertBefore(turnEl(m), anchor); }
+      state.order = [...fresh.map(m => m.id), ...state.order];
+      for (const m of fresh) paint(m.id);
+      list.scrollTop = t0 + (list.scrollHeight - h0);  // stay on what was being read
+      state.hasMore = !!r.has_more;
+    } catch (e) { toast(e.message, true); }
+    finally { state.loadingOlder = false; if (tid === state.thread) renderOlder(); }
   }
 
   // ---------- subscription ----------
@@ -1791,7 +1831,7 @@ export function mountBridgeWidget(el, client, opts = {}) {
     for (const b of el.querySelectorAll('.bridge-thread')) b.classList.toggle('active', b.dataset.id === threadId);
     const row = [...el.querySelectorAll('.bridge-thread')].find(b => b.dataset.id === threadId);
     $('.bridge-title').textContent = row?.querySelector('.t')?.textContent.replace(/^📌/, '') || S.threadTitle;
-    state.msgs.clear(); state.order = []; state.queue = []; state.inflight = null; state.threadRow = null; state.job = null;
+    state.msgs.clear(); state.order = []; state.queue = []; state.inflight = null; state.threadRow = null; state.job = null; state.hasMore = false;
     renderQueue(); setPending(false);
     list.innerHTML = '<div class="bridge-skel" aria-busy="true" aria-label="加载中">'
       + '<div class="bridge-skel-turn user"><i></i></div>'

@@ -233,6 +233,11 @@ body.bridge-dragging { user-select: none; cursor: grabbing; }
 .bridge-term pre { margin: 0; padding: .5em .8em; white-space: pre-wrap; word-break: break-word; font: inherit; }
 .bridge-term pre.cmd { color: var(--bridge-term-dim); }
 .bridge-term pre.cmd + pre.out { border-top: 1px solid var(--bridge-term-border); }
+/* the top of a long thread: older messages load as it comes into view (or on click) */
+.bridge-older { display: block; margin: 0 auto var(--chat-turn-gap); padding: .3em 1em; font: inherit; font-size: .857em; color: var(--bridge-muted);
+  background: none; border: 1px solid var(--bridge-border); border-radius: 999px; cursor: pointer; }
+.bridge-older:hover:not(:disabled) { color: var(--bridge-fg); }
+.bridge-older:disabled { cursor: default; opacity: .7; }
 .bridge-step-body { margin: 4px 0 6px 1.3em; padding: .3em .8em; border-left: 2px solid var(--bridge-border); white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .bridge-step.thinking .bridge-step-body { overflow-wrap: anywhere; border-left-style: dashed; color: var(--bridge-muted); line-height: 1.6;
   max-height: none; overflow: visible; }  /* thinking reads like prose: as tall as it is, no inner scroll box */

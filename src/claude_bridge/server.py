@@ -205,14 +205,17 @@ def create_bridge(
     def list_messages(
         thread_id: str,
         after: int = Query(0, ge=0),
+        before: int = Query(0, ge=0),
         limit: int = Query(200, ge=1, le=1000),
         events: int = Query(1),
         p: Principal = Depends(who),
     ):
         _svc(service.own_thread, thread_id, p.owner)
-        items = store.messages(thread_id, after_id=after, limit=limit, with_events=bool(events), tail=after == 0)
+        items = store.messages(thread_id, after_id=after, limit=limit, with_events=bool(events), tail=after == 0,
+                               before_id=before)
         inflight = store.inflight(thread_id)
-        return {"items": items, "inflight": inflight["id"] if inflight else None}
+        return {"items": items, "inflight": inflight["id"] if inflight else None,
+                "has_more": bool(items) and store.has_older(thread_id, items[0]["id"])}
 
     @browser.post("/threads/{thread_id}/messages", status_code=201)
     def send_to_thread(thread_id: str, body: ThreadMessageIn, p: Principal = Depends(who)):

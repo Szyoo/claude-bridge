@@ -72,8 +72,9 @@ export class BridgeClient {
     const q = scope == null ? '' : `?scope=${encodeURIComponent(scope)}`;
     return this.request('DELETE', `/threads/${encodeURIComponent(id)}${q}`);
   }
-  messages(id, { after = 0, limit = 200, events = true } = {}) {
-    return this.request('GET', `/threads/${encodeURIComponent(id)}/messages?after=${after}&limit=${limit}&events=${events ? 1 : 0}`);
+  // `before`: the page of messages just older than that id (newest first within the page, returned ascending)
+  messages(id, { after = 0, before = 0, limit = 200, events = true } = {}) {
+    return this.request('GET', `/threads/${encodeURIComponent(id)}/messages?after=${after}${before ? `&before=${before}` : ''}&limit=${limit}&events=${events ? 1 : 0}`);
   }
 
   // ---- chat ----

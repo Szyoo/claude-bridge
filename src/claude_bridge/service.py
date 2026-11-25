@@ -111,6 +111,7 @@ class BridgeConfig:
     stale_seconds: int = 120
     heartbeat_seconds: float = 15.0
     messages_limit: int = 200
+    messages_page: int = 20  # a thread opens on its newest N messages; older ones load as the page scrolls up
     on_thread_deleted: Callable[[str], None] | None = None
     on_chat_started: Callable[[dict[str, Any]], None] | None = None
     # image uploads: None disables them. 7 MB raw ≈ the API's 10 MB-per-image limit once base64-encoded.
@@ -624,7 +625,8 @@ class BridgeService:
             raise NotFound("没有这个对话")
         th["context"] = self.thread_context(thread_id)
         cursor = self.store.last_event_id()
-        msgs = self.store.messages(thread_id, after_id=after, limit=self.config.messages_limit, tail=after == 0)
+        limit = self.config.messages_page if after == 0 else self.config.messages_limit
+        msgs = self.store.messages(thread_id, after_id=after, limit=limit, tail=after == 0)
         inflight = self.store.inflight(thread_id)
         if inflight and last_event_id:
             for m in msgs:
@@ -633,6 +635,7 @@ class BridgeService:
         return {
             "thread": th,
             "messages": msgs,
+            "has_more": bool(msgs) and self.store.has_older(thread_id, msgs[0]["id"]),
             "inflight": inflight["id"] if inflight else None,
             "agent": self.agent_status(),
             "cursor": cursor,
