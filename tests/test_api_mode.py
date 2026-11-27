@@ -286,3 +286,74 @@ def test_finished_turns_do_not_count_against_the_key_limit(env):
                 break
             time.sleep(0.05)
     assert env["mgr"].live == {}
+
+
+def test_suggestion_requests_get_no_suggestion_without_the_model(env):
+    body = {"model": "claude-opus-5-5", "max_tokens": 4096, "messages": [
+        {"role": "user", "content": "修一下登录"}, {"role": "assistant", "content": "好了"},
+        {"role": "user", "content": "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]"}]}
+    r = env["api"].post("/v1/messages", json=body, headers=hdr(env["key"]))
+    assert r.status_code == 200 and r.json()["content"] == [{"type": "text", "text": ""}] and r.json()["stop_reason"] == "end_turn"
+    r = env["api"].post("/v1/messages", json={**body, "stream": True}, headers=hdr(env["key"]))
+    assert [n for n, _ in sse_events(r)][-1] == "message_stop"
+    assert env["b"].store.count_jobs("queued") == 0
+
+
+def test_a_repeated_request_gets_the_first_answer_and_runs_once(env):
+    w, release, claimed = Worker(env["agent"]), threading.Event(), []
+
+    def turn(w):
+        claimed.append(w.claim()["id"])
+        release.wait(5)
+        w.events(native_turn(("text", "答案只有一份")))
+        w.finish()
+
+    t = w.run(turn)
+    body = {"model": "claude-sonnet-5-5", "max_tokens": 2048, "messages": [{"role": "user", "content": "算一下"}]}
+    out: dict[str, object] = {}
+
+    def post(name, **extra):
+        out[name] = env["api"].post("/v1/messages", json={**body, **extra}, headers=hdr(env["key"]))
+
+    first = threading.Thread(target=post, args=("first",))
+    first.start()
+    end = time.time() + 5
+    while not claimed and time.time() < end:
+        time.sleep(0.02)
+    retry = threading.Thread(target=post, args=("retry",), kwargs={"stream": True})  # the client gave up and retried
+    retry.start()
+    time.sleep(0.2)
+    release.set()
+    first.join(5), retry.join(5), t.join(5)
+    assert not w.errors and len(claimed) == 1
+    assert out["first"].json()["content"][0]["text"] == "答案只有一份"
+    evs = sse_events(out["retry"])
+    assert "".join(d["delta"].get("text", "") for n, d in evs if n == "content_block_delta") == "答案只有一份"
+    # once answered, the same request again within two minutes: the same answer, still no new turn
+    again = env["api"].post("/v1/messages", json=body, headers=hdr(env["key"]))
+    assert again.json()["content"][0]["text"] == "答案只有一份" and again.json()["id"] != out["first"].json()["id"]
+    assert env["b"].store.count_jobs("queued") == 0
+
+
+def test_a_failed_request_is_not_replayed_to_a_later_retry(env):
+    w = Worker(env["agent"])
+
+    def failing(w):
+        w.claim()
+        w.finish(ok=False, error="claude 未返回 result（exit 1）")
+
+    t = w.run(failing)
+    body = {"model": "claude-sonnet-5-5", "max_tokens": 2048, "messages": [{"role": "user", "content": "再试一次"}]}
+    assert env["api"].post("/v1/messages", json=body, headers=hdr(env["key"])).status_code == 500
+    t.join(5)
+    w2, seen = Worker(env["agent"]), []
+
+    def ok(w):
+        seen.append(w.claim()["id"])
+        w.events(native_turn(("text", "这次成了")))
+        w.finish()
+
+    t = w2.run(ok)
+    r = env["api"].post("/v1/messages", json=body, headers=hdr(env["key"]))
+    t.join(5)
+    assert r.status_code == 200 and r.json()["content"][0]["text"] == "这次成了" and seen

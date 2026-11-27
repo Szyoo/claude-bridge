@@ -32,6 +32,7 @@ from claude_bridge.auth import COOKIE_NAME, LoginLimiter
 from claude_bridge.callers import Callers, create_caller_router
 from claude_bridge.errors import BridgeError
 from claude_bridge.ipgeo import IpGeo
+from claude_bridge.plugins import load_plugin
 from claude_bridge.principal import Principal
 from claude_bridge.server import create_bridge, static_dir
 from claude_bridge.service import PROJECT_SCOPE_PREFIX, BridgeConfig
@@ -44,6 +45,25 @@ NOT_PROVISIONED = "此账号尚未在 claude-bridge 开通，请联系管理员"
 SSO_NO_PASSWORD = "门户登录模式下密码由门户管理"
 SSO_ACCOUNTS = "账户由门户统一管理：请在门户「管理 › 用户」新建账户或重置密码，对方第一次登录后会自动出现在这里"
 _TRUE = ("1", "true", "yes", "on")
+
+API_HISTORY_TAG, API_HISTORY_END = "<此前的对话>", "</此前的对话>"  # how API mode prefixes the history it was sent
+
+
+def bark_notifier(base: str, public_url: str = ""):
+    """(title, body) → a Bark push (https://bark.example.com/<key>), opening the admin page when tapped; None if unset."""
+    base = base.strip().rstrip("/")
+    if not base:
+        return None
+    from urllib.parse import quote, urlencode
+    from urllib.request import urlopen
+
+    def send(title: str, body: str) -> None:
+        q = {"group": "claude-bridge", "level": "timeSensitive"}
+        if public_url:
+            q["url"] = public_url.rstrip("/") + "/admin"
+        with urlopen(f"{base}/{quote(title, safe='')}/{quote(body, safe='')}?{urlencode(q)}", timeout=10) as r:
+            r.read()
+    return send
 
 
 def _flag(*names: str) -> bool:
@@ -196,6 +216,12 @@ def create_multiuser_app(
         files_dir=files_dir or Path(db_path).resolve().parent / "claude-bridge-files",
     )
     cfg.check_quota = accounts.check_quota
+    cfg.quota_block = accounts.quota_block
+    cfg.quota_view = accounts.owner_view
+    cfg.quota_allowance = accounts.allowance_usd
+    cfg.owner_name = accounts.name_of
+    cfg.sandboxed = accounts.is_ordinary
+    cfg.notify = bark_notifier(os.environ.get("CLAUDE_BRIDGE_BARK_URL", ""), os.environ.get("CLAUDE_BRIDGE_PUBLIC_URL", ""))
     cfg.cap_override = accounts.cap_override
     if client_tools_enabled:
         cfg.client_tools_enabled = True
@@ -266,6 +292,7 @@ def create_multiuser_app(
 
     app = FastAPI(title="claude-bridge", docs_url=None, redoc_url=None)
     app.state.bridge = bridge
+    cfg.plugin = cfg.plugin or load_plugin(os.environ.get("CLAUDE_BRIDGE_PLUGIN", ""), bridge.service)
     app.state.accounts = accounts
     app.state.ipgeo = ipgeo
     bridge.mount(app, browser_prefix="/api", agent_prefix="/api/agent", static_prefix="/static/bridge")
@@ -420,7 +447,11 @@ def create_multiuser_app(
 
     @app.get("/api/me")
     def me(user: dict[str, Any] = Depends(api_user)):
-        out = {"user": public_user(user), "usage": accounts.usage_for(user)}
+        if user["role"] == "admin":
+            out = {"user": public_user(user), "usage": accounts.usage_for(user)}
+        else:  # ordinary users: windows relative to their own allowance
+            pub = {k: v for k, v in public_user(user).items() if k not in ("limit_5h_pct", "limit_7d_pct")}
+            out = {"user": pub, "usage": accounts.self_usage(user)}
         backends = bridge.service.backend_usage(str(user["id"])) if user["role"] == "admin" else []
         if backends:
             out["backends"] = backends
@@ -478,7 +509,14 @@ def create_multiuser_app(
     @app.get("/api/admin/users/{uid}/threads")
     def admin_user_threads(uid: int, admin: dict[str, Any] = Depends(api_admin)):
         u = target_user(uid)
-        return {"user": public_user(u, admin_view=True), "items": store.threads(None, str(uid)),
+        items = []
+        for t in store.threads(None, str(uid)):
+            first = t.pop("first_user", None) or ""  # whole first messages (API history dumps) never go to the page
+            if (t.get("title") or "").startswith(API_HISTORY_TAG):  # an API request that carried history: its own ask
+                ask = first.rsplit(API_HISTORY_END, 1)[-1].strip()
+                t["title"] = (ask.splitlines() or [""])[0][:60] or t.get("preview") or t["title"]
+            items.append(t)
+        return {"user": public_user(u, admin_view=True), "items": items,
                 "projects": store.projects(str(uid))}
 
     @app.get("/api/admin/users/{uid}/threads/{thread_id}/messages")
@@ -547,6 +585,26 @@ def create_multiuser_app(
     def admin_quota(body: QuotaIn, admin: dict[str, Any] = Depends(api_admin)):
         quota = _svc(accounts.save_quota_config, body.model_dump(exclude_unset=True))
         return {"quota": quota, "account": accounts.account_status()}
+
+    # ---------------- spend watch: who is burning the quota fast, and the emergency stop ----------------
+
+    @app.get("/api/admin/guard")
+    def admin_guard(admin: dict[str, Any] = Depends(api_admin)):
+        svc = bridge.service
+        hot = [{"uid": int(o) if o.isdigit() else o, "name": accounts.name_of(o), **s,
+                "recent_usd": round(svc.heat.recent(o), 2), "allowance_usd": accounts.allowance_usd(o)}
+               for o, s in svc.heat.hot().items()]
+        return {"emergency": svc.emergency(), "hot": hot, "notify": cfg.notify is not None}
+
+    @app.put("/api/admin/emergency")
+    def admin_emergency(body: dict[str, Any], admin: dict[str, Any] = Depends(api_admin)):
+        out = bridge.service.set_emergency(bool(body.get("on")))
+        return {**out, **admin_guard(admin)}
+
+    @app.delete("/api/admin/guard/hot/{uid}")
+    def admin_cool(uid: int, admin: dict[str, Any] = Depends(api_admin)):
+        bridge.service.heat.clear(str(uid))
+        return admin_guard(admin)
 
     @app.put("/api/admin/worker")
     def admin_worker(body: WorkerSettingsIn, admin: dict[str, Any] = Depends(api_admin)):

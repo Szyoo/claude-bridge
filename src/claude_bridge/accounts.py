@@ -28,8 +28,9 @@ from claude_bridge.store import BridgeStore, utc_text
 
 ROLES = ("admin", "user")
 WINDOW_LABELS = {"five_hour": "5 小时", "seven_day": "本周"}
-SHARE_TEXT = {"five_hour": "你的 5 小时份额", "seven_day": "你的本周份额"}
-ACCOUNT_TEXT = {"five_hour": "整个账户的 5 小时额度", "seven_day": "整个账户的本周额度"}
+# the message when a window is used up (relative to the user's own allowance)
+FULL_TEXT = {"five_hour": "5 小时额度已满", "seven_day": "本周额度已满"}
+VIEW_TTL = 10  # seconds an ordinary user's scaled view is reused (rate_limit events arrive many times per turn)
 PBKDF2_ITERATIONS = 390_000
 USERNAME_RE = re.compile(r"^[\w.@-]{2,32}$")
 MIN_PASSWORD = 8
@@ -184,6 +185,7 @@ class Accounts:
         self.tz = ZoneInfo(tz) if tz else None
         self.service: BridgeService | None = None  # set by the app once the bridge exists (quota needs its windows)
         self._seen: dict[int, float] = {}
+        self._views: dict[str, tuple[float, dict[str, Any] | None, tuple[Any, str]]] = {}
         self._access_seen: dict[tuple[int, str, str], float] = {}
         self._access_pruned = 0.0
         with store.lock:
@@ -570,14 +572,100 @@ class Accounts:
                 continue
             when = self.fmt_time(acc["resets_at"])
             again = f"，{when} 重置" if when else ""
+            if name == "five_hour" and svc.emergency():  # the admin's emergency stop: said the same way as a full window
+                out["blocked"] = f"{FULL_TEXT[name]}{again}"
+                continue
             guard, util = acc["guard_pct"], acc["utilization_pct"]
-            if guard is not None and util is not None and util >= guard:
-                out["blocked"] = f"{ACCOUNT_TEXT[name]}已用 {util:.0f}%，暂停普通用户使用{again}"
-            elif limit is not None and pct is not None and pct >= limit:
-                out["blocked"] = f"{SHARE_TEXT[name]}已用完（{pct:.0f}% / {limit:g}%）{again}"
+            if (guard is not None and util is not None and util >= guard) or \
+                    (limit is not None and limit > 0 and pct is not None and pct >= limit):
+                out["blocked"] = f"{FULL_TEXT[name]}{again}"
             elif limit is not None and limit <= 0:
                 out["blocked"] = f"管理员没有给你分配{WINDOW_LABELS[name]}额度"
         return out
+
+    @staticmethod
+    def open_used_pct(window: dict[str, Any], guard: float | None) -> float | None:
+        """How full an ordinary user's own window is, where 100% = what the admin opened to them: the account
+        guard and their own share, whichever is nearer. None = neither applies (no limit)."""
+        ratios = []
+        if guard is not None and guard > 0 and window["account_pct"] is not None:
+            ratios.append(window["account_pct"] / guard)
+        limit = window["limit_pct"]
+        if limit is not None and limit > 0 and window["used_pct"] is not None:
+            ratios.append(window["used_pct"] / limit)
+        if limit is not None and limit <= 0:
+            ratios.append(1.0)
+        return round(min(100.0, max(ratios) * 100), 1) if ratios else None
+
+    def self_usage(self, user: dict[str, Any]) -> dict[str, Any]:
+        """/api/me for an ordinary user: only their own windows, scaled to what they were given (no account-wide figures)."""
+        account = self.account_status()
+        raw = self.usage_for(user, account)
+        out: dict[str, Any] = {"blocked": raw["blocked"]}
+        for name in LIMIT_WINDOWS:
+            w = raw[name]
+            used = self.open_used_pct(w, account[name]["guard_pct"])
+            out[name] = {"turns": w["turns"], "used_pct": used, "limit_pct": None, "open": used is not None,
+                         "resets_at": w["resets_at"], "window_start": w["window_start"]}
+        return out
+
+    def owner_view(self, owner: str) -> dict[str, Any] | None:
+        """`BridgeConfig.quota_view`: an ordinary owner's windows as rate_limit-shaped data scaled to their own
+        allowance (utilization 0..1, `mine` marks it), or None for an admin / unknown owner (who see the raw account)."""
+        if not owner or not owner.isdigit():
+            return None
+        # reused for a few seconds, but never across a new utilization reading or an admin change
+        stamp = (self.store.get_meta("account_limits"), json.dumps(self.quota_config()), self.store.get_meta("quota_emergency"))
+        hit = self._views.get(owner)
+        if hit and hit[2] == stamp and time.monotonic() - hit[0] < VIEW_TTL:
+            return hit[1]
+        user = self.get(int(owner))
+        view: dict[str, Any] | None = None
+        blocked: str | None = None
+        if user and user["role"] != "admin":
+            if user["disabled"]:
+                blocked = "账户已停用"
+            mine = self.self_usage({**user, "role": "user"})
+            blocked = blocked or mine["blocked"]
+            view = {name: {"utilization": w["used_pct"] / 100, "resets_at": w["resets_at"], "mine": True}
+                    for name in LIMIT_WINDOWS if (w := mine[name])["used_pct"] is not None}
+            view["blocked"] = blocked
+            # the weekly allowance in % of the account (guard / own share, whichever is lower): thread list scaling
+            acc7 = self.account_status()["seven_day"]
+            caps = [c for c in (acc7["guard_pct"], user.get("limit_7d_pct")) if c is not None and c > 0]
+            view["week_open_pct"] = min(caps) if caps else None
+        self._views[owner] = (time.monotonic(), view, stamp)
+        return view
+
+    def allowance_usd(self, owner: str) -> float | None:
+        """`BridgeConfig.quota_allowance`: an ordinary owner's 5h allowance in list-price USD (the guard or their
+        own share, whichever is lower; the whole window when neither is set). None for admins or before calibration."""
+        if not owner or not owner.isdigit():
+            return None
+        user = self.get(int(owner))
+        if not user or user["role"] == "admin":
+            return None
+        cap = self._svc().effective_cap("five_hour")
+        if not cap:
+            return None
+        caps = [c for c in (self.quota_config()["guard_5h_pct"], user.get("limit_5h_pct")) if c is not None and c > 0]
+        return cap * (min(caps) if caps else 100.0) / 100
+
+    def is_ordinary(self, owner: str) -> bool:
+        """`BridgeConfig.sandboxed`: every account but the admins' (unknown owners included) runs confined."""
+        user = self.get(int(owner)) if owner and owner.isdigit() else None
+        return not (user and user["role"] == "admin")
+
+    def name_of(self, owner: str) -> str:
+        user = self.get(int(owner)) if owner and owner.isdigit() else None
+        if not user:
+            return owner
+        return f"{user.get('note') or user.get('display_name') or user['username']}（{user['username']}）"
+
+    def quota_block(self, owner: str) -> str | None:
+        """`BridgeConfig.quota_block`: why an ordinary owner's running turn must stop now (None = carry on)."""
+        view = self.owner_view(owner)
+        return view.get("blocked") if view else None
 
     def check_quota(self, principal: Principal) -> None:
         """`BridgeConfig.check_quota`: admins are never limited; users by their share and the account guard."""

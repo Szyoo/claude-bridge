@@ -400,7 +400,7 @@
           .filter(([k]) => us[k].used_pct != null)
           .map(([k, l]) => `${l} ${fmtPct(us[k].used_pct)}${us[k].limit_pct != null ? `/${fmtPct(us[k].limit_pct)}` : ''}`);
         full = !!us.blocked;
-        sub = us.blocked ? '额度已用完' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
+        sub = us.blocked ? '额度已满' : (parts.join(' · ') || (u.role === 'admin' ? '管理员' : '账户设置'));
         items = `<a class="menu-item" href="/account">${iconSvg('user')}账户与用量</a>`
           + (u.role === 'admin' ? `<a class="menu-item" href="/admin">${iconSvg('users')}管理</a>` : '');
       }

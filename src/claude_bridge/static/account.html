@@ -35,7 +35,7 @@
     <main class="app-main bp-wrap narrow">
       <section class="glass panel">
         <h2 class="panel-title">用量</h2>
-        <p class="muted small bp-lead">按你在这个订阅里的份额计算，窗口与 Claude 账户的 5 小时 / 每周额度同步重置。</p>
+        <p class="muted small bp-lead">5 小时额度和本周额度各自到点重置；用满后要等重置才能继续。</p>
         <div class="bp-grid" id="usage"></div>
         <div id="blocked"></div>
       </section>
@@ -113,7 +113,7 @@
       $('#usage').innerHTML = (u.role === 'admin' ? '<p class="muted small">管理员不受额度限制；整个账户的用量在「管理」页。</p>' : '')
         + WINDOWS.map(([k, label]) => {
           const w = us[k], reset = fmtWhen(w.resets_at), share = shareLine(w);
-          return `<div>${userMeter(w, `你在${label}额度里用了`)}${share ? `<div class="tiny muted">${esc(share)}</div>` : ''}`
+          return `<div>${userMeter(w, 'open' in w ? `${label}额度` : `你在${label}额度里用了`)}${share ? `<div class="tiny muted">${esc(share)}</div>` : ''}`
             + `${reset ? `<div class="tiny muted">重置：${esc(reset)}</div>` : ''}</div>`;
         }).join('');
       $('#blocked').innerHTML = us.blocked ? `<div class="callout err bp-gap">${esc(us.blocked)}</div>` : '';

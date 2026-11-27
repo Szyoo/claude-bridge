@@ -54,6 +54,8 @@ PROBE_MAX_TOKENS = 1  # max_tokens at or below this, no tools: answered without 
 SMALL_MAX_TOKENS = 1024  # no tools and at most this: a one-off turn on SMALL_MODEL
 SMALL_MODEL = "haiku"
 KEEPALIVE_SECONDS = 8.0
+REPEAT_SECONDS = 120.0  # an identical request this soon after another (a client retrying) gets that one's answer
+SUGGESTION_PREFIX = "[SUGGESTION MODE:"  # Claude Code's "what might the user type next": answered with no suggestion
 TOOL_WAIT_SECONDS = 3600.0  # a turn whose client never sends the tool results back is cancelled after this
 TURN_TIMEOUT_SECONDS = 4 * 3600.0
 CONVO_SCHEMA = """
@@ -315,8 +317,23 @@ class ApiManager:
         self.tools = tools
         self.turns: dict[str, Turn] = {}  # toolu id → the turn waiting on it
         self.live: dict[int, Turn] = {}  # job id → turn
+        # request key → (first seen, its final message once answered): repeats of a request still running or just answered
+        self.recent: dict[str, tuple[float, asyncio.Future[dict[str, Any]]]] = {}
         with self.store.lock:
             self.store.conn.executescript(CONVO_SCHEMA)
+
+    def repeat_of(self, key: str) -> asyncio.Future[dict[str, Any]] | None:
+        now = time.monotonic()
+        for k in [k for k, (at, _) in self.recent.items() if now - at > REPEAT_SECONDS]:
+            del self.recent[k]
+        hit = self.recent.get(key)
+        return hit[1] if hit else None
+
+    def first_of(self, key: str) -> asyncio.Future[dict[str, Any]]:
+        fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)  # never "exception never retrieved"
+        self.recent[key] = (time.monotonic(), fut)
+        return fut
 
     # ---------------- conversations ----------------
 
@@ -486,12 +503,23 @@ def create_api_router(
         if max_tokens <= PROBE_MAX_TOKENS and not req_tools:
             return local_reply(body, model_echo, stream)
 
+        # 1b. Claude Code's next-message suggestion: no suggestion, no model
+        text_now, _ = mx.user_text_and_images(msgs[-1])
+        if text_now.lstrip().startswith(SUGGESTION_PREFIX):
+            return local_reply(body, model_echo, stream, stop="end_turn")
+
         # 2. the client is sending back tool results for a turn that is waiting on them
         results = mx.tool_results(msgs[-1])
         turn = next((mgr.turns[r["tool_use_id"]] for r in results if r["tool_use_id"] in mgr.turns), None)
         if turn is not None and turn.owner == owner and not turn.done:
             await turn.deliver(results)
             return await respond(turn, msgs, stream)
+
+        # 2b. the same request again (a client retrying after its own timeout): the first one's answer, run once
+        key = request_key(owner, body)
+        first = mgr.repeat_of(key)
+        if first is not None:
+            return await replay(first, model_echo, stream)
 
         if mgr.inflight_for(row["id"]) >= int(row.get("max_inflight") or 2):
             raise ApiError(429, f"这个密钥同时进行的请求已达上限（{row.get('max_inflight')}）")
@@ -549,10 +577,23 @@ def create_api_router(
         turn = Turn(mgr, owner=owner, caller_id=row["id"], thread=thread, model=model_echo, names=names, queue=queue)
         turn.message_id, turn.job_id = started["message_id"], started["job_id"]
         mgr.live[turn.job_id] = turn
-        return await respond(turn, msgs, stream, remember=not small)
+        return await respond(turn, msgs, stream, remember=not small, answer=mgr.first_of(key))
 
-    async def respond(turn: Turn, msgs: list[dict[str, Any]], stream: bool, remember: bool = True) -> Any:
+    async def respond(turn: Turn, msgs: list[dict[str, Any]], stream: bool, remember: bool = True,
+                      answer: asyncio.Future[dict[str, Any]] | None = None) -> Any:
         msg_id = mx.new_message_id()
+
+        def settle(message: dict[str, Any] | None, error: ApiError | None = None) -> None:
+            """Hand the final message (or the error) to repeats of this request waiting on it."""
+            if answer is None or answer.done():
+                return
+            if error is not None or message is None:
+                # repeats already waiting get the error; a later retry runs again rather than replaying a failure
+                for k in [k for k, (_, f) in mgr.recent.items() if f is answer]:
+                    del mgr.recent[k]
+                answer.set_exception(error or ApiError(500, "上一次相同的请求没有完成"))
+            else:
+                answer.set_result(message)
 
         def after(content: list[dict[str, Any]]) -> None:
             for tid in turn.pending:
@@ -565,6 +606,8 @@ def create_api_router(
         if stream:
             async def gen() -> AsyncIterator[bytes]:
                 content: list[dict[str, Any]] = []
+                final = mx.message_shell(msg_id, turn.model)
+                finished = False
                 async with turn.lock:
                     try:
                         async for item in turn.events(msg_id):
@@ -572,12 +615,17 @@ def create_api_router(
                                 yield b": keep-alive\n\n"
                                 continue
                             _collect(content, *item)
+                            _note(final, *item)
+                            finished = finished or item[0] == "message_stop"
                             yield mx.sse(*item)
                     except ApiError as e:
+                        settle(None, e)
                         yield mx.sse("error", mx.error_body(e.status, e.message))
                         turn.done = True
                     finally:  # also when the client hangs up: the next request must still find this turn
                         after(content)
+                        final["content"] = content
+                        settle(final if finished else None)
             return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
         message = mx.message_shell(msg_id, turn.model)
@@ -589,18 +637,37 @@ def create_api_router(
                         continue
                     name, data = item
                     _collect(content, name, data)
-                    if name == "message_start":
-                        message["usage"].update(data["message"]["usage"])
-                    elif name == "message_delta":
-                        message["stop_reason"] = data["delta"]["stop_reason"]
-                        message["usage"]["output_tokens"] = data["usage"].get("output_tokens", 0)
-            except ApiError:
+                    _note(message, name, data)
+            except ApiError as e:
                 turn.done = True
                 after(content)
+                settle(None, e)
                 raise
         after(content)
         message["content"] = content
+        settle(message)
         return message
+
+    async def replay(first: asyncio.Future[dict[str, Any]], model: str, stream: bool) -> Any:
+        """A repeat of a request: wait for the first one's answer and send it again (same content, same tool ids)."""
+        if not stream:
+            message = await asyncio.shield(first)
+            return {**message, "id": mx.new_message_id(), "model": model}
+
+        async def gen() -> AsyncIterator[bytes]:
+            while not first.done():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(asyncio.shield(first), timeout=KEEPALIVE_SECONDS)
+                if not first.done():
+                    yield b": keep-alive\n\n"
+            err = first.exception()
+            if err is not None:
+                e = err if isinstance(err, ApiError) else ApiError(500, str(err))
+                yield mx.sse("error", mx.error_body(e.status, e.message))
+                return
+            for e in message_events({**first.result(), "id": mx.new_message_id(), "model": model}):
+                yield mx.sse(*e)
+        return StreamingResponse(gen(), media_type="text/event-stream", headers=SSE_HEADERS)
 
     return router, mgr
 
@@ -633,20 +700,67 @@ def _collect(content: list[dict[str, Any]], name: str, data: dict[str, Any]) -> 
                 b["input"] = {}
 
 
-def local_reply(body: dict[str, Any], model: str, stream: bool) -> Any:
-    """A connectivity probe (max_tokens ≤ 1, no tools): an empty answer that hit its limit, no model involved."""
+def _note(message: dict[str, Any], name: str, data: dict[str, Any]) -> None:
+    """Carry a stream's usage and stop reason into the equivalent non-streaming message."""
+    if name == "message_start":
+        message["usage"].update(data["message"]["usage"])
+    elif name == "message_delta":
+        message["stop_reason"] = data["delta"]["stop_reason"]
+        message["usage"]["output_tokens"] = data["usage"].get("output_tokens", 0)
+
+
+def request_key(owner: str, body: dict[str, Any]) -> str:
+    """What makes two requests the same request (stream or not, the answer is the same)."""
+    same = {k: body.get(k) for k in ("model", "system", "messages", "tools", "tool_choice", "max_tokens", "thinking")}
+    return hashlib.sha256(f"{owner}\0{json.dumps(same, sort_keys=True, ensure_ascii=False, default=str)}".encode()).hexdigest()
+
+
+def message_events(m: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """A finished Messages object as the stream events that would have produced it."""
+    shell = {**m, "content": [], "stop_reason": None, "usage": {**m.get("usage", {}), "output_tokens": 0}}
+    out: list[tuple[str, dict[str, Any]]] = [("message_start", {"type": "message_start", "message": shell})]
+    for i, b in enumerate(m.get("content") or []):
+        t = b.get("type")
+        if t == "text":
+            out.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}}))
+            if b.get("text"):
+                out.append(("content_block_delta", {"type": "content_block_delta", "index": i, "delta": {"type": "text_delta", "text": b["text"]}}))
+        elif t == "thinking":
+            out.append(("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": {"type": "thinking", "thinking": "", "signature": ""}}))
+            if b.get("thinking"):
+                out.append(("content_block_delta", {"type": "content_block_delta", "index": i, "delta": {"type": "thinking_delta", "thinking": b["thinking"]}}))
+            if b.get("signature"):
+                out.append(("content_block_delta", {"type": "content_block_delta", "index": i, "delta": {"type": "signature_delta", "signature": b["signature"]}}))
+        elif t == "tool_use":
+            out.append(("content_block_start", {"type": "content_block_start", "index": i,
+                                                "content_block": {"type": "tool_use", "id": b.get("id"), "name": b.get("name"), "input": {}}}))
+            out.append(("content_block_delta", {"type": "content_block_delta", "index": i,
+                                                "delta": {"type": "input_json_delta", "partial_json": json.dumps(b.get("input") or {}, ensure_ascii=False)}}))
+        else:
+            out.append(("content_block_start", {"type": "content_block_start", "index": i, "content_block": b}))
+        out.append(("content_block_stop", {"type": "content_block_stop", "index": i}))
+    out.append(("message_delta", {"type": "message_delta", "delta": {"stop_reason": m.get("stop_reason") or "end_turn", "stop_sequence": None},
+                                  "usage": {"output_tokens": (m.get("usage") or {}).get("output_tokens", 0)}}))
+    out.append(("message_stop", {"type": "message_stop"}))
+    return out
+
+
+def local_reply(body: dict[str, Any], model: str, stream: bool, stop: str = "max_tokens") -> Any:
+    """Answered without the model: a connectivity probe (max_tokens ≤ 1, no tools: empty, hit its limit), or a
+    request that wants nothing back (`stop` = end_turn: an empty answer)."""
     msg_id = mx.new_message_id()
     usage = {"input_tokens": mx.estimate_tokens(body), "output_tokens": 0}
     if not stream:
         m = mx.message_shell(msg_id, model, usage)
         m["content"] = [{"type": "text", "text": ""}]
-        m["stop_reason"] = "max_tokens"
+        m["stop_reason"] = stop
         return m
     events = [
         ("message_start", {"type": "message_start", "message": mx.message_shell(msg_id, model, usage)}),
         ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "max_tokens", "stop_sequence": None}, "usage": {"output_tokens": 0}}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"output_tokens": 0}}),
         ("message_stop", {"type": "message_stop"}),
     ]
 

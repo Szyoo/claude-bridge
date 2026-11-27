@@ -26,8 +26,13 @@
     .au-tabs { margin-bottom: var(--sp-3); }
     .au-chat { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 12px; align-items: start; }
     .au-threads { max-height: calc(100vh - 250px); overflow: auto; padding: var(--sp-2); }
-    .au-group { font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); padding: var(--sp-3) var(--sp-2) var(--sp-1); }
-    .au-group:first-child { padding-top: 2px; }
+    .au-group { font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); padding: var(--sp-3) var(--sp-2) var(--sp-1);
+      cursor: pointer; list-style: none; display: flex; align-items: center; gap: var(--sp-1); }
+    .au-group::-webkit-details-marker { display: none; }
+    .au-group::before { content: '▸'; transition: transform .15s; }
+    details[open] > .au-group::before { transform: rotate(90deg); }
+    .au-group .n { font-weight: 400; }
+    details:first-child > .au-group { padding-top: 2px; }
     .au-threads .list-row { width: 100%; text-align: left; }
     .au-view { min-width: 0; overflow: hidden; }
     .au-view-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line-soft); }
@@ -121,10 +126,11 @@
         groups.get(key).push(t);
       }
       const label = (k) => k === '' ? 'Chat' : k.startsWith('code:') ? `Code · ${k.slice(5)}` : k;
+      // each kind of conversation folds on its own; the API's (one per request, often hundreds) starts folded
       const html = [...groups].filter(([, ts]) => ts.length).map(([k, ts]) =>
-        `<div class="au-group">${esc(label(k))}</div>` + ts.map(t =>
+        `<details${k === 'api' ? '' : ' open'}><summary class="au-group">${esc(label(k))}<span class="n">${ts.length}</span></summary>` + ts.map(t =>
           `<button type="button" class="list-row" data-id="${esc(t.id)}"><span class="row-main"><span class="row-title">${esc(t.title || '新对话')}</span>`
-          + `<span class="row-sub">${t.n} 条 · ${esc(fmtSeen(t.updated_at))}</span></span></button>`).join('')).join('');
+          + `<span class="row-sub">${t.n} 条 · ${esc(fmtSeen(t.updated_at))}</span></span></button>`).join('') + '</details>').join('');
       $('#threads').innerHTML = html || '<p class="muted small">还没有对话。</p>';
     }
 

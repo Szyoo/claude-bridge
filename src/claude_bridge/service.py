@@ -22,6 +22,7 @@ from claude_bridge.backends import BackendLedger, currency_of, price_for, split_
 from claude_bridge.broker import Broker
 from claude_bridge.calibration import estimate_capacity
 from claude_bridge.errors import BadRequest, ChatBusy, NotFound
+from claude_bridge.heat import HeatWatch
 from claude_bridge.models import AgentChatIn, ClientTool, JobEventsIn, JobFinishIn, TurnOptions
 from claude_bridge.pricing import has_tokens, token_cost, usage_cost
 from claude_bridge.principal import ANONYMOUS, Principal
@@ -124,6 +125,19 @@ class BridgeConfig:
     check_quota: Callable[[Principal], None] | None = None
     # an admin-set "100% of window ≈ $X" (window name → USD or None); without one the calibrated estimate is used
     cap_override: Callable[[str], float | None] | None = None
+    # owner → None (admin: sees the whole account) or their own view: {five_hour/seven_day: rate_limit-shaped and
+    # scaled so 1.0 = what they were given, "blocked": why they must stop now, "week_open_pct": weekly allowance}
+    quota_view: Callable[[str], dict[str, Any] | None] | None = None
+    # owner → why their running turn must stop now (None = carry on); checked while a Claude turn streams
+    quota_block: Callable[[str], str | None] | None = None
+    # owner → their 5h allowance in list-price USD for the spend-rate watch (None: an admin, never watched)
+    quota_allowance: Callable[[str], float | None] | None = None
+    notify: Callable[[str, str], None] | None = None  # (title, body) → the admin's phone
+    owner_name: Callable[[str], str] | None = None  # owner → a name for notifications
+    # a deployment's own extension (see plugins.py): may adjust a turn's settings and how events are presented
+    plugin: Any = None
+    # owner → whether their jobs run confined to their own sandboxed space on the worker (sandbox.py)
+    sandboxed: Callable[[str], bool] | None = None
     projects: bool = False  # Code-mode projects (GET/POST/DELETE /projects); needs a worker that handles "project" jobs
     client_tools_enabled: bool = False
 
@@ -136,10 +150,102 @@ class BridgeService:
         self.store.init_client_tools()
         self.backend_ledger = BackendLedger(store)
         self.reprice_ledger()
+        self._quota_checked: dict[int, float] = {}
+        self._quota_stopped: dict[int, str] = {}  # job → why it was stopped for quota (becomes the job's error)
+        cfg = self.config
+        self.heat = HeatWatch(store, allowance=lambda o: cfg.quota_allowance(o) if cfg.quota_allowance else None,
+                              notify=lambda t, b: cfg.notify(t, b) if cfg.notify else None,
+                              name_of=lambda o: cfg.owner_name(o) if cfg.owner_name else o)
         self.backfill_util_samples()
         self._capacity_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 
     # ---------------- publish ----------------
+
+    QUOTA_RECHECK = 15  # seconds between quota checks of one running turn
+
+    def _owner_view(self, owner: str) -> dict[str, Any] | None:
+        return self.config.quota_view(owner) if self.config.quota_view and owner else None
+
+    def _rate_data(self, view: dict[str, Any] | None, data: Any) -> Any:
+        """A rate_limit event as this owner may see it: the account's raw windows, or their own scaled ones."""
+        if view is None:
+            return data
+        return {name: view[name] for name in LIMIT_WINDOWS if name in view}
+
+    def _hook(self, name: str) -> Callable[..., Any] | None:
+        fn = getattr(self.config.plugin, name, None)
+        return fn if callable(fn) else None
+
+    def view_events(self, owner: str, msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Events as their owner receives them (rate_limit windows per `quota_view`; the plugin's `event_view`)."""
+        view = self._owner_view(owner)
+        hook = self._hook("event_view")
+        for m in msgs:
+            for ev in m.get("events") or []:
+                if ev.get("type") == "rate_limit" and view is not None:
+                    ev["data"] = self._rate_data(view, ev.get("data"))
+                elif hook:
+                    ev["data"] = hook(owner, m.get("id"), ev.get("type") or "", ev.get("data"))
+        return msgs
+
+    def _sandboxed(self, owner: str) -> bool:
+        return bool(owner and self.config.sandboxed and self.config.sandboxed(owner))
+
+    def is_hot(self, owner: str) -> bool:
+        """Whether the spend-rate watch currently flags this owner (re-evaluated now)."""
+        if not owner:
+            return False
+        self.heat.check(owner, self.store.running_count(owner), force=True)
+        return self.heat.is_hot(owner)
+
+    # ---------------- emergency stop ----------------
+
+    def emergency(self) -> bool:
+        return self.store.get_meta("quota_emergency") == "1"
+
+    def set_emergency(self, on: bool) -> dict[str, Any]:
+        """The admin's emergency stop: every ordinary user is held ("额度已满") and their turns stop now."""
+        self.store.set_meta("quota_emergency", "1" if on else None)
+        stopped = 0
+        if on and self.config.quota_block:
+            for job in self.store.open_jobs("chat"):
+                owner = str(job["payload"].get("owner") or "")
+                if split_backend(job["payload"].get("scope") or "")[1] or not owner:
+                    continue
+                reason = self.config.quota_block(owner)
+                if reason and self._stop_for_quota(job, owner, reason):
+                    stopped += 1
+        return {"emergency": on, "stopped": stopped}
+
+    def _stop_for_quota(self, job: dict[str, Any], owner: str, reason: str) -> bool:
+        msg = self.store.message_by_job(job["id"])
+        if not msg or msg["status"] not in INFLIGHT:
+            return False
+        self._quota_stopped[job["id"]] = reason
+        outcome = self.cancel(msg["id"], (self.store.get_thread(msg["thread"]) or {}).get("owner") or "")
+        if outcome.get("status") in ("cancelled", "cancelling"):
+            rev = self.store.append_content(msg["id"], f"\n\n> ⛔ {reason}")
+            self._pub(msg["thread"], "delta", {"message_id": msg["id"], "text": f"\n\n> ⛔ {reason}", "rev": rev})
+            if outcome["status"] == "cancelled":
+                self._quota_stopped.pop(job["id"], None)
+            return True
+        return False
+
+    def _quota_stop(self, job: dict[str, Any], owner: str) -> str | None:
+        """While an ordinary user's Claude turn runs: the reason to stop it now that their allowance is used up."""
+        if not self.config.quota_block or not owner or job["kind"] != "chat" \
+                or split_backend(job["payload"].get("scope") or "")[1]:
+            return None
+        now = time.monotonic()
+        if now - self._quota_checked.get(job["id"], 0.0) < self.QUOTA_RECHECK:
+            return None
+        if len(self._quota_checked) > 500:
+            self._quota_checked.clear()
+        self._quota_checked[job["id"]] = now
+        reason = self.config.quota_block(owner)
+        if reason:
+            self.heat.alert(f"stop:{owner}", "已停止任务", f"{self.heat.name_of(owner)} 正在跑的一轮因「{reason}」已停止。")
+        return reason
 
     def _pub(self, thread: str, type: str, data: dict[str, Any], id: int | None = None) -> None:
         self.broker.publish(thread, {"type": type, "data": data, "id": id})
@@ -151,6 +257,15 @@ class BridgeService:
         j = None
         if job:
             j = {k: job.get(k) for k in ("id", "status", "result", "error")}
+            hook = self._hook("event_view")
+            if hook and j.get("result"):
+                try:
+                    r = json.loads(j["result"])
+                except json.JSONDecodeError:
+                    r = None
+                if isinstance(r, dict):
+                    owner = (self.store.get_thread(thread) or {}).get("owner") or ""
+                    j["result"] = json.dumps(hook(owner, msg_id, "result", r), ensure_ascii=False)
         self._pub(thread, "done", {"message_id": msg_id, "status": status, "job": j})
 
     # ---------------- threads ----------------
@@ -263,9 +378,11 @@ class BridgeService:
         if not raw:
             return None
         try:
-            return json.loads(raw)
+            ctx = json.loads(raw)
         except json.JSONDecodeError:
             return None
+        hook = self._hook("context_view")
+        return hook(thread_id, ctx) if hook and isinstance(ctx, dict) else ctx
 
     def _save_context(self, thread_id: str, report: dict[str, Any]) -> None:
         data = {**report, "at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
@@ -291,7 +408,8 @@ class BridgeService:
             self.config.check_quota(principal)
         payload = {"thread": thread_id, "session_id": th["session_id"],
                    "settings": self.settings(principal.owner, th.get("scope") or ""),
-                   "scope": th.get("scope") or "", "owner": principal.owner}
+                   "scope": th.get("scope") or "", "owner": principal.owner,
+                   **({"sandbox": True} if self._sandboxed(principal.owner) else {})}
         jid = self.store.enqueue_job(kind, payload)
         job = self.store.get_job(jid) or {"id": jid, "kind": kind, "status": "queued"}
         self._pub(thread_id, "job", job_frame(job))
@@ -420,6 +538,9 @@ class BridgeService:
             all_files += user_msg["files"]
             user_msgs.append(user_msg)
         asst_msg = self.store.add_message(tid, "assistant", "", status="pending")
+        hook = self._hook("turn_settings")
+        if hook and owner and not split_backend(th.get("scope") or "")[1]:
+            turn_settings = hook(owner, {**th, "id": tid}, dict(turn_settings), asst_msg["id"]) or turn_settings
         payload: dict[str, Any] = {
             "thread": tid,
             "message_id": asst_msg["id"],
@@ -428,6 +549,7 @@ class BridgeService:
             "session_id": th.get("session_id"),
             "scope": th.get("scope") or "",
             "owner": owner,
+            **({"sandbox": True} if self._sandboxed(owner) else {}),
             **({"files": all_files} if all_files else {}),
             **({'client_tools':[tool.model_dump() for tool in client_tools],
                 'client_environment':client_environment or {}} if client_tools else {}),
@@ -626,7 +748,7 @@ class BridgeService:
         th["context"] = self.thread_context(thread_id)
         cursor = self.store.last_event_id()
         limit = self.config.messages_page if after == 0 else self.config.messages_limit
-        msgs = self.store.messages(thread_id, after_id=after, limit=limit, tail=after == 0)
+        msgs = self.view_events(th.get("owner") or "", self.store.messages(thread_id, after_id=after, limit=limit, tail=after == 0))
         inflight = self.store.inflight(thread_id)
         if inflight and last_event_id:
             for m in msgs:
@@ -968,6 +1090,22 @@ class BridgeService:
         events = [(e.type, e.data) for e in (body.events or [])]
         if body.append:
             deltas.append(body.append)
+        if not stop and (reason := self._quota_stop(job, owner)):
+            # the allowance ran out mid-turn: say so in the answer and have the worker stop (as a cancel)
+            self.store.request_cancel(job_id)
+            self._quota_stopped[job_id] = reason
+            deltas.append(f"\n\n> ⛔ {reason}")
+            stop = True
+        claude_turn = job["kind"] == "chat" and not split_backend(job["payload"].get("scope") or "")[1]
+        live = [d for t, d in events if t == "live_usage"]
+        events = [(t, d) for t, d in events if t != "live_usage"]  # bookkeeping only, never stored or shown
+        if live and claude_turn and owner:
+            parts = [m for m in (live[-1].get("by_model") or []) if isinstance(m, dict) and has_tokens(m)]
+            self.heat.live_total(owner, job_id, sum(usage_cost(m.get("model"), m) for m in parts))
+            if self._owner_view(owner) is not None:
+                self.heat.check(owner, self.store.running_count(owner), force=True)  # once a minute per turn anyway
+        view = self._owner_view(owner) if any(t == "rate_limit" for t, _ in events) else None
+        hook = self._hook("event_view")
         if body.trace_append:
             events.append(("status", {"phase": "legacy_trace", "text": body.trace_append}))
 
@@ -994,6 +1132,10 @@ class BridgeService:
                         continue
                     consumed = True
                 ev = self.store.add_event(mid, etype, data)
+                if etype == "rate_limit" and view is not None:
+                    ev = {**ev, "data": self._rate_data(view, ev.get("data"))}
+                elif hook:
+                    ev = {**ev, "data": hook(owner, mid, etype, ev.get("data"))}
                 frames.append(("event", ev, ev["id"]))
                 if etype in USAGE_EVENTS:
                     self._record_usage(owner, data, thread=thread, message_id=mid, job_id=job_id, kind=job["kind"],
@@ -1014,8 +1156,9 @@ class BridgeService:
         status = "cancelled" if body.cancelled else ("done" if body.ok else "failed")
         frames: list[tuple[str, dict[str, Any], int | None]] = []
         msg_status = None
+        quota = self._quota_stopped.pop(job_id, None)  # API callers get it as the error (→ 429)
         with self.store.transaction():
-            self.store.finish_job(job_id, status, body.result, body.error)
+            self.store.finish_job(job_id, status, body.result, quota if status == "cancelled" and quota else body.error)
             job = self.store.get_job(job_id) or job
             if job["kind"] == PROJECT_JOB_KIND:
                 self._finish_project_job(job, status, body)
@@ -1221,6 +1364,7 @@ class BridgeService:
         parts = [m for m in data.get("by_model") or [] if isinstance(m, dict) and has_tokens(m)]
         cost = sum(usage_cost(m.get("model"), m) for m in parts) if parts else usage_cost(data.get("model"), data)
         self.store.add_usage(owner, cost_usd=cost, model=data.get("model"), **self._ledger_tokens(data), **kw)
+        self.heat.booked(owner, kw.get("job_id"), cost)
 
     @staticmethod
     def _compact_cost(meta: dict[str, Any]) -> tuple[float, dict[str, Any]]:
@@ -1300,6 +1444,7 @@ class BridgeService:
                 cur[name] = {"utilization": float(w["utilization"]), "resets_at": w.get("resets_at"), "at": now, "source": "turn"}
                 self._sample(name, cur[name])
         self.store.set_meta("account_limits", json.dumps(cur))
+        self._watch_account(cur)
 
     def save_usage_probe(self, report: dict[str, Any]) -> dict[str, Any]:
         """The worker's periodic zero-cost `claude /usage` (whole percent; also counts use outside the bridge)."""
@@ -1316,7 +1461,13 @@ class BridgeService:
             cur[name] = {"utilization": float(pct) / 100, "resets_at": resets, "at": now, "source": "probe"}
             self._sample(name, cur[name])
         self.store.set_meta("account_limits", json.dumps(cur))
+        self._watch_account(cur)
         return self.account_limits()
+
+    def _watch_account(self, cur: dict[str, Any]) -> None:
+        w = cur.get("five_hour") or {}
+        if isinstance(w.get("utilization"), int | float):
+            self.heat.account_rise(self.store.util_samples("five_hour", time.time() - 900), float(w["utilization"]))
 
     def backfill_util_samples(self) -> int:
         """Once per database: turn the rate_limit events already stored into utilization samples."""
@@ -1382,7 +1533,13 @@ class BridgeService:
         cap = self.effective_cap("seven_day")
         if not cap:
             return {}
-        return {t: round(c / cap * 100, 2) for t, c in self.store.usage_by_thread(owner).items()}
+        view = self._owner_view(owner)
+        scale = 1.0
+        if view is not None:  # an ordinary user: % of their own weekly allowance, or nothing when unlimited
+            if not view.get("week_open_pct"):
+                return {}
+            scale = 100 / view["week_open_pct"]
+        return {t: round(c / cap * 100 * scale, 2) for t, c in self.store.usage_by_thread(owner).items()}
 
     def machine_usage_in_window(self, name: str) -> dict[str, float]:
         """{bridge, local}: the worker machine's use since the window started, from its transcripts."""

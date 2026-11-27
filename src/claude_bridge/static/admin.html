@@ -33,6 +33,15 @@
     </header>
 
     <main class="app-main bp-wrap">
+      <section class="glass panel" id="guard">
+        <div class="panel-head">
+          <h2 class="panel-title">用量监控</h2>
+          <button type="button" class="btn btn-small danger" id="g-stop">紧急停止</button>
+        </div>
+        <div id="g-state"></div>
+        <p class="hint">普通用户 10 分钟内用掉 5 小时额度的 20%，或同时运行 5 个以上任务，会出现在这里并推送通知；30 分钟内不再触发就自动移出。紧急停止会立刻停掉所有普通用户正在跑和排队的任务，并暂停他们使用，直到你恢复；你自己不受影响。</p>
+      </section>
+
       <form class="glass panel" id="quota">
         <h2 class="panel-title">订阅额度</h2>
         <p class="muted small bp-lead">账户用量是整个 Claude 订阅 / 席位的百分比，由 helper 本机的 <code>claude</code> 报告（每轮对话结束时，外加每 10 分钟一次零费用的 <code>/usage</code>），你在别处用的也算在内。
@@ -279,7 +288,41 @@
       } catch (err) { $('.err-text', form).textContent = err.message; }
     });
 
+    // ---------- spend watch: emergency stop and fast spenders ----------
+    let guard = null;
+    function renderGuard() {
+      const g = guard, stop = $('#g-stop');
+      stop.textContent = g.emergency ? '恢复使用' : '紧急停止';
+      stop.classList.toggle('danger', !g.emergency);
+      const rows = g.hot.map(h => `<div class="list-row"><span class="row-main"><span class="row-title">${esc(h.name)}</span>`
+        + `<span class="row-sub">${esc(h.reason)} · ${esc(ago(h.since))}起 · 10 分钟 $${Number(h.recent_usd).toFixed(2)}`
+        + `${h.allowance_usd ? ` / 额度 $${Number(h.allowance_usd).toFixed(0)}` : ''}</span></span>`
+        + `<button type="button" class="btn-ghost btn-small" data-cool="${esc(String(h.uid))}">移出</button></div>`).join('');
+      $('#g-state').innerHTML = (g.emergency ? '<div class="callout err bp-gap">紧急停止中：所有普通用户已暂停。</div>' : '')
+        + (rows || '<p class="muted small">目前没有高用量用户。</p>')
+        + (g.notify ? '' : '<p class="hint">没有配置推送（CLAUDE_BRIDGE_BARK_URL），只能在这里查看。</p>');
+      for (const b of document.querySelectorAll('[data-cool]')) b.addEventListener('click', async () => {
+        try { guard = await api('DELETE', `/api/admin/guard/hot/${b.dataset.cool}`); renderGuard(); toast('已移出'); }
+        catch (err) { toast(err.message, true); }
+      });
+    }
+    $('#g-stop').addEventListener('click', async () => {
+      const on = !guard?.emergency;
+      if (on) {
+        const ok = await confirm({ title: '紧急停止', message: '立刻停掉所有普通用户正在跑和排队的任务，并暂停他们使用，直到你点「恢复使用」。', danger: true, confirmLabel: '停止' });
+        if (!ok) return;
+      }
+      try {
+        const r = await api('PUT', '/api/admin/emergency', { on });
+        guard = r; renderGuard();
+        toast(on ? `已紧急停止${r.stopped ? `，停掉 ${r.stopped} 个任务` : ''}` : '已恢复');
+        load().catch(() => {});
+      } catch (err) { toast(err.message, true); }
+    });
+    async function loadGuard() { guard = await api('GET', '/api/admin/guard'); renderGuard(); }
+
     async function load() {
+      loadGuard().catch(() => {});
       data = await api('GET', '/api/admin/users');
       renderUsers();
       if (!document.activeElement?.closest('#quota')) renderWindows();

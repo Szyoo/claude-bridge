@@ -228,12 +228,15 @@ def test_usage_ledger_share_limit_and_guard(app, agent):
     assert five["estimate_cap_usd"] is None and five["cap_source"] is None  # no machine-wide use reported yet
 
     boss.put("/api/admin/quota", json={"cap_5h_usd": 10, "cap_7d_usd": 100})
-    me = alice.get("/api/me").json()["usage"]
-    assert me["five_hour"]["used_pct"] == pytest.approx(11.0) and me["five_hour"]["limit_pct"] == 10
-    assert me["seven_day"]["used_pct"] == pytest.approx(1.1)
-    assert "你的 5 小时份额已用完（11% / 10%）" in me["blocked"]
+    d = alice.get("/api/me").json()
+    me = d["usage"]
+    # an ordinary user sees their own allowance as 100%: 11% of the account against a 10% share = full
+    assert me["five_hour"]["used_pct"] == 100.0 and me["five_hour"]["limit_pct"] is None and me["five_hour"]["open"]
+    assert me["seven_day"]["used_pct"] == pytest.approx(2.2)  # 1.1% of the account / a 50% share
+    assert "account_pct" not in me["five_hour"] and "limit_5h_pct" not in d["user"]
+    assert me["blocked"].startswith("5 小时额度已满")
     r = alice.post("/api/send", json={"text": "blocked"})
-    assert r.status_code == 429 and "份额已用完" in r.json()["detail"]
+    assert r.status_code == 429 and r.json()["detail"].startswith("5 小时额度已满")
     assert bob.post("/api/send", json={"text": "bob is fine"}).status_code == 201  # no limit for bob
     job = agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"]
     finish_turn(agent, job["id"], 0.01, rate_limit=rl(0.85, 0.30))
@@ -241,13 +244,37 @@ def test_usage_ledger_share_limit_and_guard(app, agent):
     # the account guard: at 85% of the 5h window everyone but admins stops
     boss.put("/api/admin/quota", json={"guard_5h_pct": 80})
     r = bob.post("/api/send", json={"text": "guarded"})
-    assert r.status_code == 429 and "整个账户的 5 小时额度已用 85%" in r.json()["detail"]
+    assert r.status_code == 429 and r.json()["detail"].startswith("5 小时额度已满")
+    assert "85" not in r.json()["detail"]  # stated relative to the user's allowance
     assert boss.post("/api/send", json={"text": "admin never limited"}).status_code == 201
 
     # deleting threads does not give the quota back
     for t in alice.get("/api/threads").json()["items"]:
         alice.delete(f"/api/threads/{t['id']}")
-    assert alice.get("/api/me").json()["usage"]["five_hour"]["used_pct"] == pytest.approx(11.0)
+    assert alice.get("/api/me").json()["usage"]["five_hour"]["used_pct"] == 100.0
+    assert boss.get("/api/admin/users").json()["items"][[u["username"] for u in boss.get("/api/admin/users").json()["items"]].index("alice")]["usage"]["five_hour"]["used_pct"] == pytest.approx(11.0)
+
+
+def test_guard_stops_a_running_turn_and_scales_rate_limits(app, agent):
+    boss, bob = login(app, "boss"), login(app, "bob")
+    boss.put("/api/admin/quota", json={"guard_5h_pct": 50, "cap_5h_usd": 10, "cap_7d_usd": 100})
+    tid = bob.post("/api/send", json={"text": "long job"}).json()["thread"]
+    job = agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"]
+    # a turn under the guard carries on; bob's rate_limit is his own window scaled to the 50% guard
+    r = agent.post(f"/api/agent/jobs/{job['id']}/events", json={"events": [{"type": "rate_limit", "data": rl(0.2, 0.1)}]})
+    assert r.json()["cancel"] is False
+    snap = bob.get(f"/api/threads/{tid}").json()
+    ev = [e for m in snap["messages"] for e in m.get("events", []) if e["type"] == "rate_limit"][-1]
+    assert ev["data"]["five_hour"]["utilization"] == pytest.approx(0.4) and ev["data"]["five_hour"]["mine"]
+    # the account crosses the guard mid-turn: the next report (after the recheck interval) stops it
+    agent.post("/api/agent/limits", json={"five_hour_pct": 60, "seven_day_pct": 20})
+    svc = app.state.bridge.service
+    svc._quota_checked.clear()
+    r = agent.post(f"/api/agent/jobs/{job['id']}/events", json={"deltas": ["…"]})
+    assert r.json()["cancel"] is True
+    agent.post(f"/api/agent/jobs/{job['id']}/finish", json={"ok": False, "cancelled": True})
+    msg = bob.get(f"/api/threads/{tid}").json()["messages"][-1]
+    assert msg["status"] == "cancelled" and "⛔ 5 小时额度已满" in msg["content"] and "60" not in msg["content"]
 
 
 def test_window_rollover_and_usage_probe(app, agent):
@@ -274,7 +301,7 @@ def test_compact_cost_is_booked(app, agent):
     result = {"compact": {"pre_tokens": 1000, "post_tokens": 100, "model": "claude-sonnet-5-5",
                           "usage": {"output_tokens": 30_000}, "cost_usd": 9.9}}
     agent.post(f"/api/agent/jobs/{job['id']}/finish", json={"ok": True, "result": json.dumps(result)})
-    assert alice.get("/api/me").json()["usage"]["five_hour"]["cost_usd"] == pytest.approx(0.5)
+    assert raw_usage(app, "alice")["five_hour"]["cost_usd"] == pytest.approx(0.5)
 
 
 def test_parse_usage_report():
@@ -620,3 +647,9 @@ def test_admin_sets_worker_concurrency(app, agent):
     assert agent.post("/api/agent/config", json=sync).json() == {"concurrency": 3}
     assert boss.put("/api/admin/worker", json={"concurrency": None}).json()["worker"]["concurrency"] is None
     assert TestClient(app).post("/api/agent/config", json=sync).status_code == 401  # agent token only
+
+
+def raw_usage(app, username):
+    """A user's unscaled standing (what the admin page shows); /api/me scales it for ordinary users."""
+    acc = app.state.accounts
+    return acc.usage_for(next(u for u in acc.users() if u["username"] == username))

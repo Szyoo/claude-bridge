@@ -123,6 +123,11 @@ export function meterHtml({ label, used, limit, sub = '', right = null }) {
 
 /** One window of a user's usage (from /api/me or /api/admin/users). */
 export function userMeter(w, label) {
+  // an ordinary user's own view (/api/me): 100% = what they were given, `open` false = no limit
+  if ('open' in w) {
+    if (!w.open) return meterHtml({ label, used: null, right: '不限', sub: esc(`${w.turns} 次`) });
+    return meterHtml({ label, used: w.used_pct, limit: 100, right: fmtPct(w.used_pct), sub: esc(`${w.turns} 次`) });
+  }
   const bits = [];
   if (w.used_pct == null) bits.push('额度尚未标定');
   bits.push(`${w.turns} 次`);

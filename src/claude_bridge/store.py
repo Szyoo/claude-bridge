@@ -812,6 +812,33 @@ class BridgeStore:
                              name=f"compact-{message_id}").start()
         return int(row["rev"]) if row else 0
 
+    def open_jobs(self, kind: str = "chat") -> list[dict[str, Any]]:
+        """Queued and running jobs of one kind (oldest first)."""
+        return [_job(r) for r in self._q(
+            "SELECT * FROM bridge_jobs WHERE status IN ('queued','running') AND kind=? ORDER BY id", (kind,))]
+
+    def running_count(self, owner: str, kind: str = "chat") -> int:
+        row = self._one("SELECT COUNT(*) AS n FROM bridge_jobs WHERE status='running' AND kind=? "
+                        "AND json_extract(payload, '$.owner')=?", (kind, owner))
+        return int(row["n"]) if row else 0
+
+    def latest_model_like(self, family: str) -> str | None:
+        """The full id the CLI last reported for a model alias (opus → claude-opus-5-5), from any turn."""
+        row = self._one("SELECT json_extract(data, '$.model') AS m FROM bridge_events WHERE type='init' "
+                        "AND json_extract(data, '$.model') LIKE ? ORDER BY id DESC LIMIT 1", (f"%{family}%",))
+        return row["m"] if row and row["m"] else None
+
+    def last_model(self, thread: str) -> str | None:
+        """The model the thread's latest turn reported (its init event)."""
+        row = self._one("SELECT e.data FROM bridge_events e JOIN bridge_messages m ON m.id=e.message_id "
+                        "WHERE m.thread=? AND e.type='init' ORDER BY e.id DESC LIMIT 1", (thread,))
+        if not row:
+            return None
+        try:
+            return (json.loads(row["data"]) or {}).get("model") or None
+        except (json.JSONDecodeError, AttributeError):
+            return None
+
     def message_by_job(self, job_id: int) -> dict[str, Any] | None:
         return self._one("SELECT * FROM bridge_messages WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,))
 

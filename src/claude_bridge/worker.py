@@ -28,6 +28,7 @@ from typing import Any
 
 import requests
 
+from claude_bridge import sandbox
 from claude_bridge._version import __version__
 from claude_bridge.backends import NAME_RE as BACKEND_NAME_RE
 from claude_bridge.backends import split_backend
@@ -306,6 +307,7 @@ class WorkerConfig:
     flush_interval: float = 0.15
     flush_chars: int = 400
     cancel_poll_interval: float = 2.0
+    live_usage_interval: float = 60.0  # a running turn's spend so far (its transcript + subagents'), for the server's rate watch
     # keep claude's stdin open (stream-json) so messages sent mid-turn reach it at its next step
     accept_input: bool = True
     argv_limit: int = 200_000
@@ -339,6 +341,9 @@ class WorkerConfig:
     backends: dict[str, Backend] = field(default_factory=dict)
     drop_env: tuple[str, ...] = ()  # removed from claude's environment (set for backend turns)
     backend_report_interval: float = 600  # backends + their balances to the server
+    # jobs the server marks `sandbox` run in a per-owner space here (sandbox.py); default: <cwd>/.tenants
+    tenants_root: str | Path | None = None
+    tenant: Any = None  # set per job by config_for: the sandbox.Tenant the run is confined to
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
     settings: dict[str, Any] | str | None = None
@@ -615,7 +620,8 @@ class Worker:
                 session = self.client.open_client_tools(job['id'])
                 runner.cfg = replace(runner.cfg,strict_mcp=True,allowed_tools=[*runner.cfg.allowed_tools,
                     *[f"mcp__bridge_client__{tool['name']}" for tool in job['payload']['client_tools']]])
-                with tempfile.TemporaryDirectory(prefix='claude-bridge-client-') as folder:
+                with tempfile.TemporaryDirectory(prefix='claude-bridge-client-',
+                                                 dir=str(runner.cfg.tenant.tmp) if runner.cfg.tenant else None) as folder:
                     path = Path(folder)/'mcp.json'
                     mcp = {'mcpServers':{'bridge_client':{'command':sys.executable,
                         'args':['-I','-m','claude_bridge.client_tool_mcp'],'alwaysLoad':True,'env':{
@@ -672,7 +678,49 @@ class Worker:
                 raise RuntimeError(f"后端 {backend.label} 还没有 API key")
             cfg = replace(cfg, extra_env={**cfg.extra_env, **env},
                           drop_env=tuple(k for k in CLAUDE_CREDENTIAL_ENV if k not in env))
+        if payload.get("sandbox"):
+            cfg = self._confine(cfg, payload, scope)
         return cfg
+
+    def tenants_root(self) -> Path:
+        if self.config.tenants_root:
+            return Path(self.config.tenants_root).expanduser()
+        return (Path(self.config.cwd).expanduser() if self.config.cwd else Path.home() / "claude-bridge-work") / ".tenants"
+
+    def _confine(self, cfg: WorkerConfig, payload: dict[str, Any], scope: str) -> WorkerConfig:
+        """An ordinary user's job: their own space, cwd and Claude config, run under the sandbox profile."""
+        if not sandbox.available():
+            raise RuntimeError("这台 helper 不支持隔离运行（没有 sandbox-exec），已拒绝执行")
+        t = sandbox.tenant(self.tenants_root(), payload.get("owner"), local_ports=self._local_server_ports())
+        cwd = t.cwd_for(scope)
+        cwd.mkdir(parents=True, exist_ok=True)
+        return replace(cfg, tenant=t, cwd=cwd, local_usage_root=t.projects, add_dirs=[],
+                       permission_mode=cfg.permission_mode or "bypassPermissions")
+
+    def _local_server_ports(self) -> list[int]:
+        """The bridge server's port when it runs on this machine (client tools reach it from inside the sandbox)."""
+        from urllib.parse import urlparse
+        u = urlparse(getattr(self.client, "base_url", "") or "")
+        if u.hostname in ("localhost", "127.0.0.1", "::1"):
+            return [u.port or (443 if u.scheme == "https" else 80)]
+        return []
+
+    def launch(self, cfg: WorkerConfig, cmd: list[str], env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+        """The command and environment a claude run actually starts with (sandboxed for a tenant's job)."""
+        t = cfg.tenant
+        if t is None:
+            return cmd, env
+        return t.wrap(cmd), t.env(env)
+
+    def adopt(self, cfg: WorkerConfig, session_id: str | None) -> None:
+        """Before resuming a tenant's session that ran unconfined: bring its transcript into their space."""
+        if cfg.tenant is None or not session_id:
+            return
+        try:
+            if sandbox.adopt_session(cfg.tenant, session_id, Path(cfg.cwd), Path.home() / ".claude" / "projects"):
+                log.info("adopted session %s into %s", session_id, cfg.tenant.root)
+        except OSError:
+            log.exception("adopting session %s failed", session_id)
 
     def backend_report(self) -> dict[str, Any]:
         """The backends (without their env) and each one's account balance, for the server."""
@@ -902,6 +950,7 @@ class Worker:
     def bridge_roots(self) -> list[str]:
         """Directories the bridge runs claude in: the worker cwd and each profile's cwd up to its first placeholder."""
         roots = [str(self.config.cwd)] if self.config.cwd else []
+        roots.append(str(self.tenants_root()))
         for prof in self.config.profiles.values():
             if prof.cwd:
                 roots.append(prof.cwd.split("{", 1)[0])
@@ -911,6 +960,7 @@ class Worker:
         if self._scanner is None:
             root = self.config.local_usage_root
             self._scanner = TranscriptScanner(bridge_roots=self.bridge_roots(),
+                                              extra_roots=[str(self.tenants_root() / "*" / "home" / ".claude" / "projects")],
                                               **({"root": Path(root).expanduser()} if root else {}))
         rows = self._scanner.scan()
         for i in range(0, len(rows), 500):
@@ -985,9 +1035,11 @@ class Worker:
         cmd = [cfg.claude_bin, "-p", "/context", "--output-format", "json", "--resume", session_id]
         if model:
             cmd += ["--model", model]
+        self.adopt(cfg, session_id)
+        cmd, env = self.launch(cfg, cmd, self._session_env(cfg))
         try:
             proc = subprocess.run(
-                cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(cfg), capture_output=True, text=True,
+                cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=env, capture_output=True, text=True,
                 timeout=60, stdin=subprocess.DEVNULL,
             )
             envelope = next((ev for ev in reversed(list(iter_stream(iter(proc.stdout.splitlines())))) if ev.get("type") == "result"), None)
@@ -1014,8 +1066,10 @@ class Worker:
         cmd = [cfg.claude_bin, "-p", "/compact", "--output-format", "stream-json", "--verbose", "--resume", session_id]
         if model:
             cmd += ["--model", model]
+        self.adopt(cfg, session_id)
+        cmd, env = self.launch(cfg, cmd, self._session_env(cfg))
         proc = subprocess.Popen(
-            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=self._session_env(cfg), stdout=subprocess.PIPE,
+            cmd, cwd=str(cfg.cwd) if cfg.cwd else None, env=env, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
         )
         out: dict[str, str] = {}
@@ -1304,6 +1358,10 @@ class ChatRunner:
         system_prompt = '' if replace_system else (self.worker.hooks.system_prompt(p) or self.cfg.system_prompt)
         if settings.get('instructions'):
             system_prompt = '\n\n'.join(part for part in (system_prompt,settings['instructions']) if part)
+        if self.cfg.tenant is not None:  # say where the tools run, so the model does not act as if on the user's machine
+            note = sandbox.environment_note(self.cfg.tenant, Path(self.cfg.cwd), client_tools=bool(p.get('client_tools')),
+                                            client_environment=p.get('client_environment'))
+            system_prompt = '\n\n'.join(part for part in (system_prompt, note) if part)
         if p.get('client_tools') and not replace_system:
             system_prompt += ('\nTools on the bridge_client MCP server execute in the requesting application. '
                 'Its execution environment is '+json.dumps(p.get('client_environment',{}),ensure_ascii=False)+
@@ -1317,7 +1375,8 @@ class ChatRunner:
                                                       f"{self.backend.model_name(swap)} 回答", "at": 0})
         system_file = None
         if replace_system:
-            fd, system_file = tempfile.mkstemp(prefix='claude-bridge-system-', suffix='.md')
+            fd, system_file = tempfile.mkstemp(prefix='claude-bridge-system-', suffix='.md',
+                                               dir=str(self.cfg.tenant.tmp) if self.cfg.tenant else None)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(replace_system)
             self._cleanup.append(system_file)
@@ -1340,6 +1399,8 @@ class ChatRunner:
             env['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = str(settings['max_output_tokens'])
         if settings.get('effort'):
             env['CLAUDE_CODE_EFFORT_LEVEL'] = settings['effort']
+        if settings.get('subagent_model'):
+            env['CLAUDE_CODE_SUBAGENT_MODEL'] = str(settings['subagent_model'])
         if settings.get('compact_window'):  # the user's own auto-compact window beats the backend's env
             env['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = str(int(settings['compact_window']))
         if settings.get('thinking') is not None:
@@ -1358,6 +1419,8 @@ class ChatRunner:
             {"phase": "started", "text": f"$ claude -p … ({len(prompt)} chars{f', +{len(images)} 张图' if images else ''}, {label}{', with context' if prompt is not text else ''})"},
         )
 
+        self.worker.adopt(self.cfg, session_id)
+        cmd, env = self.worker.launch(self.cfg, cmd, env)
         start = self.started_at = self.last_activity = time.time()
         self.proc = subprocess.Popen(
             cmd,
@@ -1501,10 +1564,36 @@ class ChatRunner:
                                                  "reason": self.kill_reason or "error"})
         self.emitter.final_flush()
 
+    def _read_live_usage(self, session_id: str) -> None:
+        try:
+            root = self.cfg.local_usage_root
+            models = session_usage(session_id, self.started_at - 1, Path(root).expanduser() if root else None)
+            if models:
+                self._live_usage = models
+        except Exception:
+            log.debug("job #%s: live usage read failed", self.job["id"], exc_info=True)
+
+    def _report_live_usage(self, now: float) -> None:
+        """Every live_usage_interval: the turn's spend so far, read off its transcripts in the background (the
+        server only learns a turn's cost at its end otherwise; one turn with many subagents can run for an hour)."""
+        models, self._live_usage = getattr(self, "_live_usage", None), None
+        if models:
+            self.emitter.add_event("live_usage", {"by_model": models})
+        reader = getattr(self, "_live_reader", None)
+        sid = self.state.session_id if self.state else None
+        if not sid or self.cfg.live_usage_interval <= 0 or (reader and reader.is_alive()) \
+                or now - getattr(self, "_live_at", self.started_at) < self.cfg.live_usage_interval:
+            return
+        self._live_at = now
+        self._live_reader = threading.Thread(target=self._read_live_usage, args=(sid,), daemon=True)
+        self._live_reader.start()
+
     def _supervise(self, start: float) -> None:
         last_poll = time.time()
         while not self._done.wait(0.1):
             now = time.time()
+            if self.job.get("kind") == "chat":
+                self._report_live_usage(now)
             if self.emitter.due(now):
                 self.emitter.flush()
             if self.worker.stopping:

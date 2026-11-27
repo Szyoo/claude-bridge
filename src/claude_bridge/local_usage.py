@@ -9,6 +9,7 @@ use 1% of each window is. Only aggregates leave the machine: token counts and li
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -56,6 +57,7 @@ class TranscriptScanner:
 
     bridge_roots: list[str] = field(default_factory=list)  # cwd prefixes of the bridge's own sessions
     root: Path = field(default_factory=lambda: Path.home() / ".claude" / "projects")
+    extra_roots: list[str] = field(default_factory=list)  # glob patterns of more projects folders (sandboxed users')
     horizon_days: float = 8.0  # the weekly window plus a day
     _offsets: dict[str, tuple[int, int]] = field(default_factory=dict)  # path → (inode, bytes consumed)
     _seen: dict[str, _Seen] = field(default_factory=dict)  # message id → what was booked for it
@@ -75,15 +77,15 @@ class TranscriptScanner:
         """Read what's new and return the buckets that changed (absolute totals)."""
         now = time.time() if now is None else now
         cutoff = now - self.horizon_days * 86400
-        if self.root.is_dir():
-            for path in self.root.rglob("*.jsonl"):
-                try:
-                    st = path.stat()
-                except OSError:
-                    continue
-                if st.st_mtime < cutoff:
-                    continue
-                self._read(path, st, cutoff)
+        roots = [self.root, *(Path(p) for pat in self.extra_roots for p in sorted(glob.glob(pat)))]
+        for path in (p for r in roots if r.is_dir() for p in r.rglob("*.jsonl")):
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            if st.st_mtime < cutoff:
+                continue
+            self._read(path, st, cutoff)
         self._prune(cutoff)
         return self.take_dirty()
 

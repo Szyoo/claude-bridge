@@ -211,8 +211,8 @@ def create_bridge(
         p: Principal = Depends(who),
     ):
         _svc(service.own_thread, thread_id, p.owner)
-        items = store.messages(thread_id, after_id=after, limit=limit, with_events=bool(events), tail=after == 0,
-                               before_id=before)
+        items = service.view_events(p.owner, store.messages(thread_id, after_id=after, limit=limit,
+                                                            with_events=bool(events), tail=after == 0, before_id=before))
         inflight = store.inflight(thread_id)
         return {"items": items, "inflight": inflight["id"] if inflight else None,
                 "has_more": bool(items) and store.has_older(thread_id, items[0]["id"])}

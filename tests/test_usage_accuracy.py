@@ -619,7 +619,7 @@ def test_auto_calibration_and_manual_override(app, agent):
     assert acc["local_pct"] == pytest.approx(9.2 / cap * 100, abs=0.06)
     assert acc["external_pct"] == pytest.approx(30 - acc["bridge_pct"] - acc["local_pct"], abs=0.11)
 
-    me = alice.get("/api/me").json()["usage"]["five_hour"]
+    me = raw_usage(app, "alice")["five_hour"]
     assert me["cost_usd"] == pytest.approx(2.0) and me["used_pct"] == pytest.approx(2.0 / cap * 100, abs=0.06)
 
     # the admin's own number wins over the estimate
@@ -630,7 +630,7 @@ def test_auto_calibration_and_manual_override(app, agent):
     assert acc["estimate_cap_usd"] is not None  # still shown for comparison
     assert acc["bridge_pct"] == pytest.approx(2.0) and acc["local_pct"] == pytest.approx(9.2, abs=0.01)
     assert acc["external_pct"] == pytest.approx(30 - 2.0 - 9.2, abs=0.11)
-    assert alice.get("/api/me").json()["usage"]["five_hour"]["used_pct"] == pytest.approx(2.0)
+    assert raw_usage(app, "alice")["five_hour"]["used_pct"] == pytest.approx(2.0)
 
     # a tiny cap: the shares exceed the reported utilization, external never goes negative
     boss.put("/api/admin/quota", json={"cap_5h_usd": 1})
@@ -649,7 +649,7 @@ def test_no_cap_means_no_shares(app, agent):
     acc = five_hour(app)
     assert acc["cap_source"] is None and acc["effective_cap_usd"] is None
     assert acc["bridge_pct"] is None and acc["local_pct"] is None and acc["external_pct"] is None
-    assert alice.get("/api/me").json()["usage"]["five_hour"]["used_pct"] is None
+    assert raw_usage(app, "alice")["five_hour"]["used_pct"] is None
 
 
 def test_capacity_is_cached_until_new_local_usage(app, agent):
@@ -741,8 +741,10 @@ def test_worker_bridge_roots(tmp_path):
         "inherit": WorkerProfile(),
     })
     roots = Worker(UsageClient(), cfg).bridge_roots()
-    assert roots == [str(tmp_path / "w"), f"{tmp_path}/chat/", f"{tmp_path}/code/", str(tmp_path / "plain")]
-    assert Worker(UsageClient(), WorkerConfig()).bridge_roots() == []
+    # the sandboxed users' spaces (<cwd>/.tenants) count as the bridge's own use too
+    assert roots == [str(tmp_path / "w"), str(tmp_path / "w" / ".tenants"), f"{tmp_path}/chat/", f"{tmp_path}/code/",
+                     str(tmp_path / "plain")]
+    assert Worker(UsageClient(), WorkerConfig()).bridge_roots() == [str(Path.home() / "claude-bridge-work" / ".tenants")]
 
 
 def test_users_see_their_own_share_apart_from_everyone_else(app, agent):
@@ -753,14 +755,17 @@ def test_users_see_their_own_share_apart_from_everyone_else(app, agent):
     run_turn(bob, agent, 1.0)
     boss.put("/api/admin/quota", json={"cap_5h_usd": 100, "cap_7d_usd": 200})
 
-    me = alice.get("/api/me").json()["usage"]["five_hour"]
+    me = raw_usage(app, "alice")["five_hour"]
     assert me["used_pct"] == pytest.approx(2.0) and me["others_pct"] == pytest.approx(1.0)
     assert me["account_pct"] == 30.0 and me["outside_pct"] == pytest.approx(27.0)  # the admin's own clients etc.
 
     # each conversation's share of the weekly window, in the thread list
+    # ordinary users: no allowance set = nothing shown; with one, % of their own weekly allowance
+    assert [t["quota_pct"] for t in alice.get("/api/threads").json()["items"]] == [None]
+    boss.put("/api/admin/quota", json={"guard_7d_pct": 50})
     items = alice.get("/api/threads").json()["items"]
-    assert [t["quota_pct"] for t in items] == [pytest.approx(1.0)]  # $2 of a $200 week
-    assert bob.get("/api/threads").json()["items"][0]["quota_pct"] == pytest.approx(0.5)
+    assert [t["quota_pct"] for t in items] == [pytest.approx(2.0)]  # $2 of a $200 week = 1% of the account, 50% opened
+    assert bob.get("/api/threads").json()["items"][0]["quota_pct"] == pytest.approx(1.0)
 
 
 def test_thread_quota_pct_is_none_until_calibrated(app, agent):
@@ -795,11 +800,17 @@ def test_interrupted_turns_are_booked_per_model_even_after_the_thread_is_gone(ap
     job = agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"]
     agent.post(f"/api/agent/jobs/{job['id']}/events", json={"events": [{"type": "partial_usage", "data": data}]})
     agent.post(f"/api/agent/jobs/{job['id']}/finish", json={"ok": False, "cancelled": True})
-    assert alice.get("/api/me").json()["usage"]["five_hour"]["cost_usd"] == pytest.approx(expected)
+    assert raw_usage(app, "alice")["five_hour"]["cost_usd"] == pytest.approx(expected)
 
     # a one-off call whose thread the caller deleted mid-turn: still the caller's
     r = alice.post("/api/send", json={"text": "y", "new_thread": True})
     job = agent.post("/api/agent/jobs/next", json={"kinds": ["chat"], "wait": 0}).json()["job"]
     assert alice.delete(f"/api/threads/{r.json()['thread']}").status_code == 200
     agent.post(f"/api/agent/jobs/{job['id']}/events", json={"events": [{"type": "partial_usage", "data": data}]})
-    assert alice.get("/api/me").json()["usage"]["five_hour"]["cost_usd"] == pytest.approx(2 * expected)
+    assert raw_usage(app, "alice")["five_hour"]["cost_usd"] == pytest.approx(2 * expected)
+
+
+def raw_usage(app, username):
+    """A user's unscaled standing (what the admin page shows); /api/me scales it for ordinary users."""
+    acc = app.state.accounts
+    return acc.usage_for(next(u for u in acc.users() if u["username"] == username))

@@ -24,7 +24,8 @@ def test_compact_message_stream_keeps_what_the_page_renders(tmp_path):
     dropped = s.compact_message_stream(mid)
     assert dropped > 100
     after = s.messages("t")[0]["events"]
-    strip = lambda evs: [(e["type"], json.dumps(e["data"], sort_keys=True)) for e in evs]
+    def strip(evs):
+        return [(e["type"], json.dumps(e["data"], sort_keys=True)) for e in evs]
     assert strip(after) == strip(before)
     assert s.compact_message_stream(mid) == 0  # idempotent
 

@@ -189,10 +189,12 @@ export function sessionSummary(messages, { contextWindows = CONTEXT_WINDOWS, con
   const win = (w, name) => {
     if (w?.utilization == null) return;
     const p = Math.round(w.utilization * 100);
-    parts.push({ key: name, label: `${name} 已用 ${p}%`, bar: p, title: `订阅的${name}滚动窗口已用 ${p}%，${fmtReset(w.resets_at)} 重置（来自 claude 命令行自己报告的限额）` });
+    const title = w.mine ? `你的${name}已用 ${p}%，${fmtReset(w.resets_at)} 重置`  // an ordinary user's own allowance
+      : `订阅的${name}滚动窗口已用 ${p}%，${fmtReset(w.resets_at)} 重置（来自 claude 命令行自己报告的限额）`;
+    parts.push({ key: name, label: `${name} 已用 ${p}%`, bar: p, title });
   };
   win(rate?.five_hour, '5 小时额度');
-  win(rate?.seven_day, '7 天额度');
+  win(rate?.seven_day, rate?.seven_day?.mine ? '本周额度' : '7 天额度');
   return { model, usage, rate, context, parts, pct };
 }
 
